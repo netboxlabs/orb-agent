@@ -169,14 +169,14 @@ func redactMap(val reflect.Value) any {
 		return nil
 	}
 
-	result := make(map[string]any, val.Len())
+	keys := newMaskedKeys(val.Len())
 	for _, entry := range sortedEntries(val) {
 		keyStr := mapKey(entry.key)
 		// Redact the value, passing the field name for sensitive field detection
-		putKey(result, keyStr, redactValue(entry.value, keyStr))
+		keys.put(keyStr, redactValue(entry.value, keyStr))
 	}
 
-	return result
+	return keys.result
 }
 
 // mapEntry is a key of a map and its value.
@@ -185,9 +185,8 @@ type mapEntry struct{ key, value reflect.Value }
 // sortedEntries returns the entries of the map val, in the order of their
 // keys' strings, then of their keys' types, then of their values' types and
 // Go syntax, nested types included, for keys written the same. It takes each
-// value as it ranges the
-// map: a key not equal to itself, as a NaN, finds no value when looked up
-// again.
+// value as it ranges the map: a key not equal to itself, as a NaN, finds no
+// value when looked up again.
 func sortedEntries(val reflect.Value) []mapEntry {
 	entries := make([]mapEntry, 0, val.Len())
 	iter := val.MapRange()
@@ -222,19 +221,36 @@ func keyValue(key reflect.Value) any {
 	return nil
 }
 
-// putKey sets v in result under key, a URL used as a key masked as URL masks
-// one in a value. A key another one was masked into already gets " (2)",
-// " (3)"... after it, so no entry of the map is lost.
-func putKey(result map[string]any, key string, v any) {
+// maskedKeys puts values in a map under keys masked as URL masks one in a
+// value. A key another one was masked into already gets " (2)", " (3)"...
+// after it, so no entry of the map is lost. The next number of each masked
+// key is kept, so that many keys masked into one cost no more than others.
+type maskedKeys struct {
+	result map[string]any
+	next   map[string]int
+}
+
+// newMaskedKeys returns a maskedKeys for a map of n entries.
+func newMaskedKeys(n int) *maskedKeys {
+	return &maskedKeys{result: make(map[string]any, n), next: map[string]int{}}
+}
+
+// put sets v under key, masked.
+func (m *maskedKeys) put(key string, v any) {
 	masked := URL(key)
 	k := masked
-	for n := 2; ; n++ {
-		if _, taken := result[k]; !taken {
-			result[k] = v
-			return
+	if _, taken := m.result[k]; taken {
+		n := max(m.next[masked], 2)
+		for {
+			k = fmt.Sprintf("%s (%d)", masked, n)
+			n++
+			if _, taken := m.result[k]; !taken {
+				break
+			}
 		}
-		k = fmt.Sprintf("%s (%d)", masked, n)
+		m.next[masked] = n
 	}
+	m.result[k] = v
 }
 
 // mapKey returns a map key as a string, as written: its field name.
@@ -615,18 +631,18 @@ func redactContainer(val reflect.Value, keep []string) any {
 		return nil
 	}
 
-	result := make(map[string]any, val.Len())
+	keys := newMaskedKeys(val.Len())
 	for _, entry := range sortedEntries(val) {
 		keyStr := mapKey(entry.key)
 		// A login reads a field under its exact name, and as a string.
 		if slices.Contains(keep, keyStr) && isString(entry.value) {
-			putKey(result, keyStr, redactValue(entry.value, keyStr))
+			keys.put(keyStr, redactValue(entry.value, keyStr))
 		} else {
-			putKey(result, keyStr, maskLeaves(entry.value))
+			keys.put(keyStr, maskLeaves(entry.value))
 		}
 	}
 
-	return result
+	return keys.result
 }
 
 // maskLeaves masks every string and number in val, nested or listed, and
@@ -653,11 +669,11 @@ func maskLeaves(val reflect.Value) any {
 		if val.IsNil() {
 			return nil
 		}
-		result := make(map[string]any, val.Len())
+		keys := newMaskedKeys(val.Len())
 		for _, entry := range sortedEntries(val) {
-			putKey(result, mapKey(entry.key), maskLeaves(entry.value))
+			keys.put(mapKey(entry.key), maskLeaves(entry.value))
 		}
-		return result
+		return keys.result
 	case reflect.Slice, reflect.Array:
 		if val.Kind() == reflect.Slice && val.IsNil() {
 			return nil

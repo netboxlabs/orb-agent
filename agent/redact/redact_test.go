@@ -740,6 +740,23 @@ func TestSensitiveData_KeepsTheValueOfAKeyNotEqualToItself(t *testing.T) {
 	}
 }
 
+// TestSensitiveData_NumbersManyKeysMaskedIntoOneInLineWithTheirCount numbers
+// 10,000 keys masked into one in about the time 10,000 other keys take.
+func TestSensitiveData_NumbersManyKeysMaskedIntoOneInLineWithTheirCount(t *testing.T) {
+	keys := map[string]any{}
+	for i := range 10000 {
+		keys[fmt.Sprintf("https://u%05d:p@h", i)] = i
+	}
+	start := time.Now()
+	redacted := SensitiveData(keys).(map[string]any)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("Masking 10,000 keys masked into one took %v", took)
+	}
+	if len(redacted) != 10000 || redacted["https://********@h"] != int64(0) || redacted["https://********@h (10000)"] != int64(9999) {
+		t.Errorf("Expected 10,000 entries numbered in the order of the keys, got %d", len(redacted))
+	}
+}
+
 // TestSensitiveData_MasksAURLUsedAsAKeyInAuthArgs masks a key of a Vault
 // login's auth_args, and of a map under it, as a key anywhere else.
 func TestSensitiveData_MasksAURLUsedAsAKeyInAuthArgs(t *testing.T) {
