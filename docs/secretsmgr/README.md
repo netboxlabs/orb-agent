@@ -69,8 +69,9 @@ address written alone, as `ops@example.com`, a secret reference, whatever
 its path or field holds but a `}`, and a URL with a `/` before the `:` of its
 user and password, which git reads as a local path. A `${vault://...}` whose
 body holds a URL with a user info, one with a `:` or an `@` between its `://`
-and its first `/`, or a `user:password@` word, as one that no `}` closes
-before a URL takes in, is no reference, and is masked as the rest of the text
+and its first `/`, or an `@` after a `:` that no `/` follows, as in
+`user:password@host`, as one that no `}` closes before a URL takes in, is no
+reference, and is masked as the rest of the text
 is. Another `://` is kept, as in CyberArk's
 `${cyberark://AppID://Safe/Object}`, but for a Safe that holds an `@` or a
 `:`: such a reference is shown masked where the configuration is reported or

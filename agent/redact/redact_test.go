@@ -577,6 +577,14 @@ func TestURL_ShowsNoCredentialNearWhatLooksLikeAReferenceOrADigest(t *testing.T)
 		// A password with an unescaped / or ? before the @.
 		"${vault://kv/a/https://u:S3cret/x@host}",
 		"${vault://kv/a/https://u:S3cret?x@host}",
+		// A user info holding what a list separates with, which a URL's
+		// user info can hold.
+		"${vault://kv/a,https://S3cret=x@host}",
+		"${vault://kv/a,https://S3cret;x@host}",
+		"${vault://kv/a,https://S3cret,x@host}",
+		"${vault://kv/a,https://S3cret&x@host}",
+		"${vault://kv/a,tok:S3cret=y@h}",
+		"${vault://kv/a tok:S3cret;y@h}",
 		"S3cret@" + testDigest,
 	} {
 		if got := URL(in); strings.Contains(got, "S3cret") {

@@ -439,15 +439,16 @@ func references(s string) [][]int {
 
 // holdsCredential reports whether body, a reference's, holds a URL with a
 // user info: a URL whose authority, what follows its :// up to its first
-// / ? # or separator, holds an @, or a : as a user and a password do, even
-// one whose password holds a / that ends the authority early; or a word
-// written without // that holds a user and a password before its @. A
-// reference can hold a :// otherwise, as CyberArk's AppID//Safe/Object does
-// for an AppID that ends with a :, whose Safe holds neither.
+// / ? # or byte no URL holds, holds an @, or a : as a user and a password do,
+// even one whose password holds a / that ends the authority early; or an @
+// after a : that no / follows, as user:password@host. A user info can hold
+// what a list separates with, as , ; = or &. A reference can hold a ://
+// otherwise, as CyberArk's AppID//Safe/Object does for an AppID that ends
+// with a :, whose Safe holds neither.
 func holdsCredential(body string) bool {
 	for i := strings.Index(body, "://"); i >= 0; {
 		j := i + len("://")
-		for j < len(body) && strings.IndexByte("/?#", body[j]) < 0 && strings.IndexByte(urlSeparators, body[j]) < 0 && !strings.HasPrefix(body[j:], "://") {
+		for j < len(body) && strings.IndexByte("/?#"+urlBoundaries, body[j]) < 0 && !strings.HasPrefix(body[j:], "://") {
 			if body[j] == '@' || body[j] == ':' {
 				return true
 			}
@@ -459,20 +460,25 @@ func holdsCredential(body string) bool {
 		}
 		i = j + next
 	}
-	word := 0
-	for i := 0; i <= len(body); i++ {
-		if i < len(body) && strings.IndexByte(urlSeparators, body[i]) < 0 {
-			continue
+	from := 0
+	for at := strings.IndexByte(body, '@'); at >= 0; {
+		head := body[from:at]
+		head = head[strings.LastIndexAny(head, urlBoundaries)+1:]
+		if strings.IndexByte(head[strings.LastIndexByte(head, '/')+1:], ':') >= 0 {
+			return true
 		}
-		if w := body[word:i]; !strings.Contains(w, "//") {
-			if at := strings.LastIndexByte(w, '@'); at >= 0 && holdsUserInfo(w[:at]) {
-				return true
-			}
+		from = at + 1
+		next := strings.IndexByte(body[from:], '@')
+		if next < 0 {
+			break
 		}
-		word = i + 1
+		at = from + next
 	}
 	return false
 }
+
+// urlBoundaries are the bytes no URL holds unescaped, which end one.
+const urlBoundaries = " \t\r\n\"'`<>(){}[]|\\^"
 
 // withoutReferences returns spans with the secret references refs, in order,
 // taken out of them: a reference is not its value, and is kept as written.
