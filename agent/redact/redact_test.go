@@ -612,6 +612,10 @@ func TestURL_MasksAURLInsideAnotherOnesQuery(t *testing.T) {
 		// A URL written without // after another's ? or #.
 		"https://u1:p1@a?u2:p2@b": "https://********@a?********@b",
 		"https://u1:p1@a#u2:p2@b": "https://********@a#********@b",
+		// A URL written from its // in another's path or query.
+		"https://u1:p1@a/x//u2:p2@b":  "https://********@a/x//********@b",
+		"https://u1:p1@a/x?r=//u2@b":  "https://********@a/x?r=//********@b",
+		"https://u1:p1@a/x///u2:p2@b": "https://********@a/x///********@b",
 	} {
 		if got := URL(in); got != want {
 			t.Errorf("URL(%q) = %q, want %q", in, got, want)

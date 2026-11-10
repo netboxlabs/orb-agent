@@ -297,20 +297,33 @@ func spansOf(t string) []span {
 		}
 		word = i + 1
 	}
-	for i := strings.Index(t, "://"); i >= 0; {
-		start := i
-		for start > 0 && isSchemeByte(t[start-1]) {
-			start--
+	for i := strings.Index(t, "//"); i >= 0; {
+		if i+len("//") < len(t) && t[i+len("//")] == '/' {
+			// An empty authority, as dns:/// writes, or a third /: the URL is
+			// read from the next //.
+			i++
+			continue
 		}
-		end := i + len("://")
-		for end < len(t) && strings.IndexByte(urlSeparators, t[end]) < 0 && !strings.HasPrefix(t[end:], "://") {
+		// From its scheme and :, or from its // when it is written without.
+		start := i
+		if i > 0 && t[i-1] == ':' {
+			start = i - 1
+			for start > 0 && isSchemeByte(t[start-1]) {
+				start--
+			}
+		}
+		end := i + len("//")
+		for end < len(t) && strings.IndexByte(urlSeparators, t[end]) < 0 && !strings.HasPrefix(t[end:], "//") {
 			end++
 		}
 		next := -1
-		if strings.HasPrefix(t[end:], "://") {
+		if strings.HasPrefix(t[end:], "//") {
 			next = end
-			for end > i+len("://") && isSchemeByte(t[end-1]) {
+			if end > i+len("//") && t[end-1] == ':' {
 				end--
+				for end > i+len("//") && isSchemeByte(t[end-1]) {
+					end--
+				}
 			}
 		}
 		if start > 0 {
@@ -318,7 +331,7 @@ func spansOf(t string) []span {
 		}
 		i = next
 		if next < 0 {
-			if j := strings.Index(t[end:], "://"); j >= 0 {
+			if j := strings.Index(t[end:], "//"); j >= 0 {
 				i = end + j
 			}
 		}

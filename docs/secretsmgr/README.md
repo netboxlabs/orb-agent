@@ -53,7 +53,8 @@ name, role and service account file, are masked as `********` wherever the
 agent reports or logs its configuration, as are the user and the password of
 a URL in it, such as a Vault address's, together. So are those of each URL of
 a list, as `https://u:p@a.example,https://u:p@b.example`, of a URL in another
-one's query or fragment, as after its `?`, `&` or `#`, and of a URL used as a
+one's path, query or fragment, with its scheme or from its `//`, as after a
+`/`, `?`, `&` or `#`, and of a URL used as a
 key. Two keys masked into the same one are both kept: in the order of
 the keys as written, each one after the first gets ` (2)`, ` (3)` and so on
 after it. A URL written without `//` whose part before its last `@` holds a
