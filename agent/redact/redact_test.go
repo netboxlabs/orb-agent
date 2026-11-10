@@ -431,10 +431,11 @@ func TestSensitiveData_MasksAURLsUserInfo(t *testing.T) {
 		"ghp_T0ken:x-oauth-basic@github.com:org/r.git": "********@github.com:org/r.git",
 		"T0ken123:x-oauth-basic@github.com:org/r.git":  "********@github.com:org/r.git",
 		"glpat-T0ken:x@gitlab.com:org/r.git":           "********@gitlab.com:org/r.git",
-		// An e-mail address, with no : before its @, is not one, nor is a
-		// path with a / before its first :.
-		"ops@example.com": "ops@example.com",
-		"a/b:c@d":         "a/b:c@d",
+		// An e-mail address, with no : before its @, is not one. After a /,
+		// a user and a password before an @ are masked from the /.
+		"ops@example.com":                    "ops@example.com",
+		"a/b:c@d":                            "a/********@d",
+		"ab/cd:x-oauth-basic@github.com:o/r": "ab/********@github.com:o/r",
 		// git's scp-like address, user@host:path, which no parser reads: what
 		// is before its last @ is masked, whether a token or git's own user.
 		"ghp_T0ken@github.com:org/repo.git": "********@github.com:org/repo.git",
@@ -508,13 +509,15 @@ func TestURL_MasksEveryURLAStringHolds(t *testing.T) {
 		// them, as after a flag's =.
 		"-Dhttp.proxy=u:p@proxy:3128":    "-Dhttp.proxy=********@proxy:3128",
 		"ghp_T0ken:abc==@github.com:o/r": "********@github.com:o/r",
-		// An image's name before its digest can't be told from a user and a
-		// password, or git's user, before a host named sha256: it is masked as
-		// one, but where a / comes before its first :.
+		// An image's name and tag before its digest can't be told from a user
+		// and a password, or git's user, before a host named sha256: they are
+		// masked as one, from the image's last /. A name with a / before its
+		// first : and no tag is kept.
 		"localhost:5000/img:tag@" + testDigest:      "********@" + testDigest,
 		"nginx:1.25@" + testDigest:                  "********@" + testDigest,
 		"img@" + testDigest:                         "********@" + testDigest,
-		"ghcr.io/o/i:v1@" + testDigest:              "ghcr.io/o/i:v1@" + testDigest,
+		"ghcr.io/o/i:v1@" + testDigest:              "ghcr.io/o/********@" + testDigest,
+		"ghcr.io/o/i@" + testDigest:                 "ghcr.io/o/i@" + testDigest,
 		"https://u:p@reg.example/img@" + testDigest: "https://********@reg.example/img@" + testDigest,
 	} {
 		if got := URL(in); got != want {
@@ -616,6 +619,9 @@ func TestURL_MasksAURLInsideAnotherOnesQuery(t *testing.T) {
 		"https://u1:p1@a/x//u2:p2@b":  "https://********@a/x//********@b",
 		"https://u1:p1@a/x?r=//u2@b":  "https://********@a/x?r=//********@b",
 		"https://u1:p1@a/x///u2:p2@b": "https://********@a/x///********@b",
+		// A URL written without // in another's path.
+		"https://u1:p1@a/x/https:u2:p2@b": "https://********@a/x/********@b",
+		"https://u1:p1@a/x/u2:p2@b":       "https://********@a/x/********@b",
 	} {
 		if got := URL(in); got != want {
 			t.Errorf("URL(%q) = %q, want %q", in, got, want)

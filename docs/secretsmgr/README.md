@@ -61,23 +61,25 @@ after it. A URL written without `//` whose part before its last `@` holds a
 `:` and no space, as `user:password@host` or git's
 `<token>:x-oauth-basic@host:path`, has all of that part masked from the start
 of its word, a scheme written before it too, as `mailto:`: `********@host`.
-Where the agent can't tell where a user and password end, as for an `@` in a
+So is a user and a password right before an `@` after a `/`, as a URL written
+without `//` in another's path holds them: `ab/cd:token@host` becomes
+`ab/********@host`. Where the agent can't tell where a user and password end, as for an `@` in a
 URL's path, a password holding a space, a `,` or a `//`, or URLs that a space
 or a line break separates, it masks from the `//`, the first `:` or the start
 of the text to the last `@`, hiding what lies between, hosts included. Before
 a password with a space, the user is kept. Kept as written are an e-mail
 address written alone, as `ops@example.com`, a secret reference whose body
 holds no `@`, whatever else it holds, as CyberArk's
-`${cyberark://AppID://Safe/Object}`, and a URL with a `/` before the `:` of
-its user and password, which git reads as a local path. A reference whose
+`${cyberark://AppID://Safe/Object}`. A reference whose
 body holds an `@`, as a Vault field or a CyberArk Safe can, or that an `@`
 follows in its word, as a user or a password before a host, is masked as the
 rest of the text is: nothing tells it from what a `${` that no `}` closes takes
 in before a URL with a user and a password. It is masked only where the
-configuration is reported or logged, and still resolves as written. An image with a digest, as
-`img:tag@sha256:...`, is masked before its `@` as a user would be, since
-nothing tells it from git's `user@host:path`, unless a `/` comes before its
-first `:`, as in `ghcr.io/org/img:tag@sha256:...`. The configuration the agent reports is the one as
+configuration is reported or logged, and still resolves as written. An image
+with a tag and a digest, as `img:tag@sha256:...`, has its name and tag after
+its last `/` masked as a user and a password would be, since nothing tells
+them apart: `ghcr.io/org/********@sha256:...`. One with no tag after a `/`, as
+`ghcr.io/org/img@sha256:...`, is kept. The configuration the agent reports is the one as
 written: a secret reference in it, such as one in `backends`, is reported as
 the reference, never as the value it resolves to.
 

@@ -338,6 +338,21 @@ func spansOf(t string) []span {
 			}
 		}
 	}
+	// A user and a password right before an @, from the /, separator or @
+	// before them, as a URL written without // in another's path holds them.
+	from := 0
+	for at := strings.IndexByte(t, '@'); at >= 0; {
+		begin := from + strings.LastIndexAny(t[from:at], "/@"+urlSeparators) + 1
+		if strings.IndexByte(t[begin:at], ':') >= 0 {
+			spans = append(spans, span{begin, at})
+		}
+		from = at + 1
+		next := strings.IndexByte(t[from:], '@')
+		if next < 0 {
+			break
+		}
+		at = from + next
+	}
 	return spans
 }
 
