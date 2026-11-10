@@ -267,13 +267,12 @@ func URL(s string) string {
 		return s
 	}
 	spans := userInfoSpans(s, 0, false)
-	// s is read again with each reference as a run of x, so that its :// and
-	// braces read as nothing a URL holds.
-	refs := references(s)
+	// s is read again with what looks like a reference as a run of x, so that
+	// its :// and braces read as nothing a URL holds.
 	t := s
-	if len(refs) > 0 {
+	if looks := referencePattern.FindAllStringIndex(s, -1); len(looks) > 0 {
 		b := []byte(s)
-		for _, ref := range refs {
+		for _, ref := range looks {
 			for i := ref[0]; i < ref[1]; i++ {
 				b[i] = 'x'
 			}
@@ -281,7 +280,7 @@ func URL(s string) string {
 		t = string(b)
 	}
 	spans = append(spans, spansOf(t)...)
-	return maskSpans(s, withoutReferences(refs, spans))
+	return maskSpans(s, withoutReferences(references(s), spans))
 }
 
 // spansOf returns where the user infos of t are: t read as one URL, each of
@@ -422,63 +421,26 @@ func userInfoAt(t string) int {
 var referencePattern = regexp.MustCompile(`\$\{(?:vault|fleet|doppler|delinea|cyberark|dsv)://([^}]*)\}`)
 
 // references returns where the secret references of s are, in order: those
-// referencePattern matches but those whose body holds a credential, as
-// holdsCredential tells. Such a body is what a ${ that no } closed before a
-// URL takes in, up to a } further on, as in
-// ${vault://kv/a/b,https://user:password@host}, and is masked as the rest of
-// s is.
+// referencePattern matches with no @ in their body nor in the word their }
+// ends. A body with an @ can be what a ${ that no } closed before a URL took
+// in, up to a } further on, as in ${vault://kv/a/b,https://user:password@host},
+// and nothing tells that from a name holding an @, as a Vault field or a
+// CyberArk Safe can; an @ after the } can end a password that holds the }. Such
+// a reference is masked as the rest of s is. That is only where s is reported
+// or logged; the reference still resolves as written.
 func references(s string) [][]int {
 	var refs [][]int
 	for _, ref := range referencePattern.FindAllStringSubmatchIndex(s, -1) {
-		if !holdsCredential(s[ref[2]:ref[3]]) {
+		after := s[ref[1]:]
+		if end := strings.IndexAny(after, urlSeparators); end >= 0 {
+			after = after[:end]
+		}
+		if !strings.Contains(s[ref[2]:ref[3]], "@") && !strings.Contains(after, "@") {
 			refs = append(refs, ref[:2])
 		}
 	}
 	return refs
 }
-
-// holdsCredential reports whether body, a reference's, holds a URL with a
-// user info: a URL whose authority, what follows its :// up to its first
-// / ? # or byte no URL holds, holds an @, or a : as a user and a password do,
-// even one whose password holds a / that ends the authority early; or an @
-// after a : that no / follows, as user:password@host. A user info can hold
-// what a list separates with, as , ; = or &. A reference can hold a ://
-// otherwise, as CyberArk's AppID//Safe/Object does for an AppID that ends
-// with a :, whose Safe holds neither.
-func holdsCredential(body string) bool {
-	for i := strings.Index(body, "://"); i >= 0; {
-		j := i + len("://")
-		for j < len(body) && strings.IndexByte("/?#"+urlBoundaries, body[j]) < 0 && !strings.HasPrefix(body[j:], "://") {
-			if body[j] == '@' || body[j] == ':' {
-				return true
-			}
-			j++
-		}
-		next := strings.Index(body[j:], "://")
-		if next < 0 {
-			break
-		}
-		i = j + next
-	}
-	from := 0
-	for at := strings.IndexByte(body, '@'); at >= 0; {
-		head := body[from:at]
-		head = head[strings.LastIndexAny(head, urlBoundaries)+1:]
-		if strings.IndexByte(head[strings.LastIndexByte(head, '/')+1:], ':') >= 0 {
-			return true
-		}
-		from = at + 1
-		next := strings.IndexByte(body[from:], '@')
-		if next < 0 {
-			break
-		}
-		at = from + next
-	}
-	return false
-}
-
-// urlBoundaries are the bytes no URL holds unescaped, which end one.
-const urlBoundaries = " \t\r\n\"'`<>(){}[]|\\^"
 
 // withoutReferences returns spans with the secret references refs, in order,
 // taken out of them: a reference is not its value, and is kept as written.

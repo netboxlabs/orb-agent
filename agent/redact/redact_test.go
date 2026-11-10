@@ -493,19 +493,21 @@ func TestURL_MasksEveryURLAStringHolds(t *testing.T) {
 		// A secret reference is kept as written, whatever is masked around it.
 		"https://u:p@h/x ${vault://kv//a/b}": "https://********@h/x ${vault://kv//a/b}",
 		"${vault://kv//a/b},https://u:p@h":   "${vault://kv//a/b}********@h",
-		"${vault://m/p/k}tok@":               "${vault://m/p/k}********@",
+		"${vault://secret/data/git/token}":   "${vault://secret/data/git/token}",
+		// But for one an @ follows in its word, as a user or a password: it is
+		// masked with the user info.
+		"${vault://m/p/k}tok@":                 "${vault://********@",
+		"${vault://kv//db/user}@db:5432":       "********@db:5432",
+		"https://user:${vault://kv/p/k}@h":     "https://********@h",
+		"tok:${vault://kv/p/k}@github.com:o/r": "********@github.com:o/r",
 		// ${...} with a scheme no secrets manager resolves is no reference.
 		"${https://u:p@h}": "${https://********@h}",
 		// git's scp-like address with nothing after its :, read as one URL.
 		"tok@:": "********@:",
 		// In a text, a user and a password start after the separator before
 		// them, as after a flag's =.
-		"-Dhttp.proxy=u:p@proxy:3128":          "-Dhttp.proxy=********@proxy:3128",
-		"ghp_T0ken:abc==@github.com:o/r":       "********@github.com:o/r",
-		"${vault://kv//db/user}@db:5432":       "${vault://kv//db/user}@db:5432",
-		"https://user:${vault://kv/p/k}@h":     "https://********${vault://kv/p/k}@h",
-		"${vault://secret/data/git/token}":     "${vault://secret/data/git/token}",
-		"tok:${vault://kv/p/k}@github.com:o/r": "********${vault://kv/p/k}@github.com:o/r",
+		"-Dhttp.proxy=u:p@proxy:3128":    "-Dhttp.proxy=********@proxy:3128",
+		"ghp_T0ken:abc==@github.com:o/r": "********@github.com:o/r",
 		// An image's name before its digest can't be told from a user and a
 		// password, or git's user, before a host named sha256: it is masked as
 		// one, but where a / comes before its first :.
@@ -585,6 +587,11 @@ func TestURL_ShowsNoCredentialNearWhatLooksLikeAReferenceOrADigest(t *testing.T)
 		"${vault://kv/a,https://S3cret&x@host}",
 		"${vault://kv/a,tok:S3cret=y@h}",
 		"${vault://kv/a tok:S3cret;y@h}",
+		// A URL written from its //, or with a ' or ( in its user info.
+		"${vault://kv/a //S3cret@host}",
+		"${vault://kv/a,https://S3cret'x@host}",
+		"${vault://kv/a,https://S3cret(x@host}",
+		"${vault://kv/a,https://S3cret!x@host}",
 		"S3cret@" + testDigest,
 	} {
 		if got := URL(in); strings.Contains(got, "S3cret") {
@@ -612,31 +619,34 @@ func TestURL_MasksAURLInsideAnotherOnesQuery(t *testing.T) {
 	}
 }
 
-// TestURL_KeepsAReferenceWithAnAtSignAsWritten keeps a secret reference whose
-// path or field holds an @, which a Vault path can.
-func TestURL_KeepsAReferenceWithAnAtSignAsWritten(t *testing.T) {
+// TestURL_KeepsAReferenceWithNoAtSignAsWritten keeps a secret reference whose
+// body holds no @, whatever else it holds, and masks one whose body holds an
+// @ as the rest of the text: such a body can be a URL with a user info that a
+// ${ no } closed took in, which nothing tells from a name holding an @.
+func TestURL_KeepsAReferenceWithNoAtSignAsWritten(t *testing.T) {
 	for in, want := range map[string]string{
-		// A field can hold anything but a }, as the resolver reads it.
-		"${vault://secret/path/field,@name}": "${vault://secret/path/field,@name}",
-		// CyberArk's qualified form, whose AppID can hold a :, as Other:.
-		"${cyberark://Other://Safe/Object@Field}": "${cyberark://Other://Safe/Object@Field}",
-		// Its Safe, Object and Field can hold a separator.
-		"${cyberark://Other://Safe/DB Account@Field}": "${cyberark://Other://Safe/DB Account@Field}",
-		"${cyberark://Other://Safe/a,b;c@Field}":      "${cyberark://Other://Safe/a,b;c@Field}",
-		"${vault://secret/path/a b@c}":                "${vault://secret/path/a b@c}",
+		"${vault://kv//a/b}":                    "${vault://kv//a/b}",
+		"${vault://secret/path/a b,c;d}":        "${vault://secret/path/a b,c;d}",
+		"${cyberark://Other://Safe/Object}":     "${cyberark://Other://Safe/Object}",
+		"${cyberark://Other://Safe/DB Account}": "${cyberark://Other://Safe/DB Account}",
+		"https://u:p@h ${vault://kv//a/b}":      "https://********@h ${vault://kv//a/b}",
+		"https://u:${vault://kv/p/k}@h":         "https://********@h",
 		// Read as one URL, as before, from the reference's :// to the last @:
 		// what follows the reference is masked up to that @.
-		"${vault://kv/f;x@y} https://u:p@h": "${vault://kv/f;x@y}********@h",
-		`${vault://kv/"q"@y}`:               `${vault://kv/"q"@y}`,
-		"${vault://secret/path/field@name}": "${vault://secret/path/field@name}",
-		"${vault://kv/path@v2/key}":         "${vault://kv/path@v2/key}",
-		// Read as one URL, as before, its user info runs to the reference's
-		// @: the host before the reference is masked with it.
-		"https://u:p@h ${vault://kv/a@b/c}":  "https://********${vault://kv/a@b/c}",
-		"https://u:${vault://kv/a@b/c}@host": "https://********${vault://kv/a@b/c}@host",
+		"${cyberark://App//Safe/Object},u:p@h/x/y": "${cyberark://App//Safe/Object}********@h/x/y",
 	} {
 		if got := URL(in); got != want {
 			t.Errorf("URL(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for _, in := range []string{
+		"${vault://secret/path/field@name}",
+		"${vault://kv/path@v2/key}",
+		"${cyberark://Other://Safe/Object@Field}",
+		"${cyberark://Other://Safe@Prod/Object}",
+	} {
+		if got := URL(in); got == in || !strings.Contains(got, MaskedSecret) {
+			t.Errorf("URL(%q) = %q, want it masked as text", in, got)
 		}
 	}
 }

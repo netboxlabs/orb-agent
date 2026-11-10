@@ -65,17 +65,15 @@ URL's path, a password holding a space, a `,` or a `//`, or URLs that a space
 or a line break separates, it masks from the `//`, the first `:` or the start
 of the text to the last `@`, hiding what lies between, hosts included. Before
 a password with a space, the user is kept. Kept as written are an e-mail
-address written alone, as `ops@example.com`, a secret reference, whatever
-its path or field holds but a `}`, and a URL with a `/` before the `:` of its
-user and password, which git reads as a local path. A `${vault://...}` whose
-body holds a URL with a user info, one with a `:` or an `@` between its `://`
-and its first `/`, or an `@` after a `:` that no `/` follows, as in
-`user:password@host`, as one that no `}` closes before a URL takes in, is no
-reference, and is masked as the rest of the text
-is. Another `://` is kept, as in CyberArk's
-`${cyberark://AppID://Safe/Object}`, but for a Safe that holds an `@` or a
-`:`: such a reference is shown masked where the configuration is reported or
-logged, and still resolves as written. An image with a digest, as
+address written alone, as `ops@example.com`, a secret reference whose body
+holds no `@`, whatever else it holds, as CyberArk's
+`${cyberark://AppID://Safe/Object}`, and a URL with a `/` before the `:` of
+its user and password, which git reads as a local path. A reference whose
+body holds an `@`, as a Vault field or a CyberArk Safe can, or that an `@`
+follows in its word, as a user or a password before a host, is masked as the
+rest of the text is: nothing tells it from what a `${` that no `}` closes takes
+in before a URL with a user and a password. It is masked only where the
+configuration is reported or logged, and still resolves as written. An image with a digest, as
 `img:tag@sha256:...`, is masked before its `@` as a user would be, since
 nothing tells it from git's `user@host:path`, unless a `/` comes before its
 first `:`, as in `ghcr.io/org/img:tag@sha256:...`. The configuration the agent reports is the one as
