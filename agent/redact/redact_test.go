@@ -416,6 +416,15 @@ func TestSensitiveData_MasksAURLsUserInfo(t *testing.T) {
 		"https:u:s3cret@vault.example.com":   "https:********@vault.example.com",
 		"u:s3cret@vault.example.com:8200":    "u:********@vault.example.com:8200",
 		"https:u:s3cret@vault.example.com?x": "https:********@vault.example.com?x",
+		// git's scp-like address, user@host:path, which no parser reads: what
+		// is before its last @ is masked, whether a token or git's own user.
+		"ghp_T0ken@github.com:org/repo.git": "********@github.com:org/repo.git",
+		"git@github.com:org/repo.git":       "********@github.com:org/repo.git",
+		// A path with a / before its first : is not one, nor is a text with
+		// a space there, nor one with nothing before its @.
+		"./a@b:c":                        "./a@b:c",
+		"Contact ops@example.com: today": "Contact ops@example.com: today",
+		"@scope:value":                   "@scope:value",
 		// So is an @ in a path, at the cost of the host it hides.
 		"https://registry.example.com/@scope/pkg": "https://********@scope/pkg",
 		// A URL written without a scheme, from its //, which a parser reads

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -24,6 +25,7 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
 const (
@@ -82,6 +84,7 @@ type githubAppAuth struct {
 	logger *slog.Logger
 
 	// Immutable after construction; read without the mutex.
+	repoURL        string // with its user info masked, for the lines SetAuth logs
 	clientID       string
 	installationID string
 	privateKey     *rsa.PrivateKey
@@ -103,9 +106,10 @@ type githubAppAuth struct {
 // Without SetAuth, go-git returns the opaque transport.ErrInvalidAuthMethod.
 var _ githttp.AuthMethod = (*githubAppAuth)(nil)
 
-// newGitHubAppAuth validates the configuration and loads the private key. It
-// performs no network I/O; call token() to mint eagerly.
-func newGitHubAppAuth(logger *slog.Logger, cfg config.GitHubAppAuth, skipTLS bool) (*githubAppAuth, error) {
+// newGitHubAppAuth validates the configuration and loads the private key for
+// the repository at repoURL. It performs no network I/O; call token() to mint
+// eagerly.
+func newGitHubAppAuth(logger *slog.Logger, repoURL string, cfg config.GitHubAppAuth, skipTLS bool) (*githubAppAuth, error) {
 	clientID, err := config.ResolveEnv(cfg.ClientID)
 	if err != nil {
 		return nil, fmt.Errorf("github_app: client_id: %w", err)
@@ -144,6 +148,7 @@ func newGitHubAppAuth(logger *slog.Logger, cfg config.GitHubAppAuth, skipTLS boo
 
 	return &githubAppAuth{
 		logger:         logger,
+		repoURL:        redact.URL(repoURL),
 		clientID:       clientID,
 		installationID: installationID,
 		privateKey:     key,
@@ -230,12 +235,12 @@ func (a *githubAppAuth) SetAuth(r *http.Request) {
 	case tok == "":
 		a.logger.Error("github_app: no installation access token available; sending the git request "+
 			"unauthenticated, which will fail with HTTP 401",
-			"url", r.URL.Redacted(), "error", lastErr)
+			"url", a.repoURL, "error", lastErr)
 		return
 	case lastErr != nil:
 		a.logger.Warn("github_app: token refresh failed; retrying the git request with the previously "+
 			"minted token, which may already have expired",
-			"url", r.URL.Redacted(), "error", lastErr)
+			"url", a.repoURL, "error", lastErr)
 	}
 
 	// GitHub accepts installation tokens on the git HTTPS endpoints as basic auth
@@ -399,9 +404,26 @@ func loadGitHubAppKey(ref string) (*rsa.PrivateKey, error) {
 	}
 	data, err := os.ReadFile(ref)
 	if err != nil {
+		// A value that names nothing on disk may be key material without its
+		// -----BEGIN line, which the error must not quote: only the cause is.
+		// One that ends in .pem or .key is a path: base64 has no dot.
+		var pathErr *fs.PathError
+		_, statErr := os.Lstat(ref)
+		if statErr != nil && !namesKeyFile(ref) && errors.As(err, &pathErr) {
+			return nil, fmt.Errorf("github_app: failed to read private_key: it has no -----BEGIN line, so it was "+
+				"read as the path of a file (%v); give the whole PEM document, with its -----BEGIN line, or the "+
+				"path of the app's .pem file", pathErr.Err)
+		}
 		return nil, fmt.Errorf("github_app: failed to read private_key: %w", err)
 	}
 	return parseGitHubAppKey(data, ref)
+}
+
+// namesKeyFile reports whether ref is a one-line value that ends as a key
+// file's name does.
+func namesKeyFile(ref string) bool {
+	lower := strings.ToLower(ref)
+	return !strings.ContainsAny(ref, "\r\n") && (strings.HasSuffix(lower, ".pem") || strings.HasSuffix(lower, ".key"))
 }
 
 // parseGitHubAppKey accepts the PKCS#1 ("RSA PRIVATE KEY") PEM that GitHub
@@ -465,7 +487,7 @@ func requireGitHubHTTPSURL(rawURL string) error {
 		// scp-style remotes such as git@github.com:org/repo.git land here:
 		// url.Parse rejects them with "first path segment cannot contain colon".
 		return fmt.Errorf("github_app: url %q must be an https://github.com/... URL "+
-			"(scp-style and ssh URLs cannot use installation tokens)", rawURL)
+			"(scp-style and ssh URLs cannot use installation tokens)", redact.URL(rawURL))
 	}
 	if !strings.EqualFold(u.Scheme, "https") {
 		return fmt.Errorf("github_app: url uses scheme %q; github_app auth requires https", u.Scheme)

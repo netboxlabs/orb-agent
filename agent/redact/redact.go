@@ -231,16 +231,32 @@ func URL(s string) string {
 
 // opaqueURL masks, in a URL written without //, which a parser reads as a
 // scheme and an opaque part, as in https:user:password@host or
-// user:password@host, everything between its scheme and its last @.
+// user:password@host, everything between its scheme and its last @; and, in
+// git's scp-like user@host:path, which no parser reads, its user.
 func opaqueURL(s string) string {
 	if !strings.Contains(s, "@") {
 		return s
 	}
-	u, err := url.Parse(s)
-	if err != nil || u.Scheme == "" || !strings.Contains(u.Opaque, "@") {
-		return s
+	if u, err := url.Parse(s); err == nil && u.Scheme != "" && strings.Contains(u.Opaque, "@") {
+		return s[:strings.Index(s, ":")+1] + MaskedSecret + s[strings.LastIndex(s, "@"):]
 	}
-	return s[:strings.Index(s, ":")+1] + MaskedSecret + s[strings.LastIndex(s, "@"):]
+	if user, ok := scpUser(s); ok {
+		return MaskedSecret + s[len(user):]
+	}
+	return s
+}
+
+// scpUser returns the user of s when git reads s as scp-like user@host:path:
+// what comes before the last @ before its first :, when no / does and it is
+// not empty. A space there makes s a text, which SensitiveData keeps, rather
+// than an address.
+func scpUser(s string) (string, bool) {
+	head, _, ok := strings.Cut(s, ":")
+	at := strings.LastIndex(head, "@")
+	if !ok || at <= 0 || strings.ContainsAny(head, "/ \t\r\n") {
+		return "", false
+	}
+	return head[:at], true
 }
 
 // isString reports whether val holds a string, through any pointer or

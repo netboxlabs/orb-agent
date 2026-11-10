@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
 // testAppKey is shared across the package: RSA key generation costs ~100ms and
@@ -82,7 +84,13 @@ func (c *fakeClock) Advance(d time.Duration) {
 // clock and API base swapped out.
 func newTestGitHubApp(t *testing.T, apiBase string, clock *fakeClock) *githubAppAuth {
 	t.Helper()
-	auth, err := newGitHubAppAuth(testLogger(), config.GitHubAppAuth{
+	return newTestGitHubAppFor(t, "https://github.com/org/repo.git", apiBase, clock)
+}
+
+// newTestGitHubAppFor is newTestGitHubApp for the repository at repoURL.
+func newTestGitHubAppFor(t *testing.T, repoURL, apiBase string, clock *fakeClock) *githubAppAuth {
+	t.Helper()
+	auth, err := newGitHubAppAuth(testLogger(), repoURL, config.GitHubAppAuth{
 		ClientID:       "Iv23liTestClientID",
 		InstallationID: "78901234",
 		PrivateKey:     string(pkcs1PEM(t, testAppKey())),
@@ -203,10 +211,55 @@ func TestLoadGitHubAppKey(t *testing.T) {
 	})
 
 	t.Run("missing file", func(t *testing.T) {
-		_, err := loadGitHubAppKey(filepath.Join(t.TempDir(), "absent.pem"))
+		path := filepath.Join(t.TempDir(), "absent.pem")
+		_, err := loadGitHubAppKey(path)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to read private_key")
+		assert.Contains(t, err.Error(), path, "a path to a .pem file is quoted: no key material ends with .pem")
 	})
+
+	t.Run("missing file named as a key in capitals", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "ABSENT.PEM")
+		_, err := loadGitHubAppKey(path)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), path)
+	})
+
+	t.Run("missing file not named as a key", func(t *testing.T) {
+		_, err := loadGitHubAppKey(filepath.Join(t.TempDir(), "absent"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "read as the path of a file")
+		assert.Contains(t, err.Error(), "no such file or directory")
+	})
+
+	t.Run("a path to something that is not a file", func(t *testing.T) {
+		dir := t.TempDir()
+		_, err := loadGitHubAppKey(dir)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to read private_key")
+		assert.Contains(t, err.Error(), dir, "a path that names something is quoted")
+	})
+}
+
+// TestLoadGitHubAppKeyQuotesNoKeyWithoutItsArmour pins that key material put
+// in private_key without its -----BEGIN line, which is then read as a path, is
+// not quoted in the error that path gives.
+func TestLoadGitHubAppKeyQuotesNoKeyWithoutItsArmour(t *testing.T) {
+	lines := strings.Split(strings.TrimSpace(string(pkcs1PEM(t, testAppKey()))), "\n")
+	body := lines[1 : len(lines)-1]
+
+	for name, ref := range map[string]string{
+		"on several lines": strings.Join(body, "\n"),
+		"on one line":      strings.Join(body, ""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := loadGitHubAppKey(ref)
+			require.ErrorContains(t, err, "-----BEGIN")
+			for _, line := range body {
+				assert.NotContains(t, err.Error(), line[:10])
+			}
+		})
+	}
 }
 
 func TestGitHubAppJWT(t *testing.T) {
@@ -456,6 +509,56 @@ func TestSetAuthWithNoTokenSendsNothing(t *testing.T) {
 	require.Error(t, auth.lastError())
 }
 
+// TestSetAuthLogsTheRepositoryURLWithoutItsCredential pins that both lines
+// SetAuth logs about a request name the repository URL with its user info
+// masked, and nothing of the request, whose URL go-git takes from it.
+func TestSetAuthLogsTheRepositoryURLWithoutItsCredential(t *testing.T) {
+	for name, tc := range userInfos {
+		repoURL := "https://" + tc.userInfo + "@github.com/org/repo.git"
+		newRequest := func(t *testing.T) *http.Request {
+			r, err := http.NewRequest(http.MethodGet, repoURL+"/info/refs?service=git-upload-pack", nil)
+			require.NoError(t, err)
+			return r
+		}
+		requireLoggedURL := func(t *testing.T, h *recordingHandler, level slog.Level, msg string) {
+			t.Helper()
+			records := h.matching(level, msg)
+			require.Len(t, records, 1, "%s: %s", level, msg)
+			assert.Equal(t, "https://"+redact.MaskedSecret+"@github.com/org/repo.git", records[0].attrs["url"])
+			assertNoCredential(t, h.logged(), tc.credential)
+		}
+
+		t.Run(name+", with no token", func(t *testing.T) {
+			clock := newFakeClock()
+			srv := newTokenServer(t, clock)
+			srv.status.Store(http.StatusUnauthorized)
+			auth := newTestGitHubAppFor(t, repoURL, srv.URL, clock)
+			h := &recordingHandler{}
+			auth.logger = slog.New(h)
+
+			auth.SetAuth(newRequest(t))
+
+			requireLoggedURL(t, h, slog.LevelError, "github_app: no installation access token available")
+		})
+
+		t.Run(name+", with a stale token", func(t *testing.T) {
+			clock := newFakeClock()
+			srv := newTokenServer(t, clock)
+			auth := newTestGitHubAppFor(t, repoURL, srv.URL, clock)
+			_, err := auth.token(context.Background())
+			require.NoError(t, err)
+			srv.status.Store(http.StatusInternalServerError)
+			clock.Advance(time.Hour - 4*time.Minute)
+			h := &recordingHandler{}
+			auth.logger = slog.New(h)
+
+			auth.SetAuth(newRequest(t))
+
+			requireLoggedURL(t, h, slog.LevelWarn, "github_app: token refresh failed")
+		})
+	}
+}
+
 func TestGitHubAppNameAndStringDoNotLeak(t *testing.T) {
 	clock := newFakeClock()
 	srv := newTokenServer(t, clock)
@@ -537,7 +640,7 @@ func TestNewGitHubAppAuthValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			auth, err := newGitHubAppAuth(testLogger(), tt.cfg, false)
+			auth, err := newGitHubAppAuth(testLogger(), "https://github.com/org/repo", tt.cfg, false)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
@@ -578,6 +681,20 @@ func TestRequireGitHubHTTPSURL(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 			assert.Contains(t, err.Error(), "github_app: ")
+		})
+	}
+}
+
+func TestRequireGitHubHTTPSURLQuotesNoCredential(t *testing.T) {
+	for name, tc := range map[string]struct{ url, credential string }{
+		// An unescaped space is not allowed in a URL's user info.
+		"a URL no parser reads":                    {"https://" + urlUser + ":canary pass@github.com/org/repo.git", "canary pass"},
+		"an scp-like URL with a token as its user": {urlToken + "@github.com:org/repo.git", urlToken},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := requireGitHubHTTPSURL(tc.url)
+			require.ErrorContains(t, err, "must be an https://github.com/... URL")
+			assertNoCredential(t, err.Error(), tc.credential)
 		})
 	}
 }
