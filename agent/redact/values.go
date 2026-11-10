@@ -43,13 +43,14 @@ func Values(s string, values []string) string {
 }
 
 // CutValues is Values for s cut from a longer text that goes on with after: a
-// value, or a line of one, the cut runs through is masked too, however few of
-// its first bytes s ends with. A value runs through the cut when after goes
-// on with it to a head of longRun bytes, or to the whole of a shorter value
-// that is a word of its own; a line when after goes on with the rest of it.
-// First bytes of a value that after does not go on with are the text's own,
-// as the type that ends a YAML error's line. With after empty, it masks as
-// Values does.
+// value, a tail of one or a line of one the cut runs through is masked too,
+// however few of its first bytes s ends with. A value runs through the cut
+// when after goes on with it to a head of longRun bytes, or to the whole of a
+// shorter value that is a word of its own; a tail of longRun bytes or more,
+// as a backend that truncates a value quotes its last bytes, and a line, when
+// after goes on with the rest of it. First bytes of a value that after does
+// not go on with are the text's own, as the type that ends a YAML error's
+// line. With after empty, it masks as Values does.
 func CutValues(s, after string, values []string) string {
 	return NewMasker(values).MaskCut(s, after)
 }
@@ -214,11 +215,11 @@ func (m *Masker) mask(s string, cut bool, after string) string {
 // mask masks and that ends at that byte begins, or len(s) when none ends
 // there: the whole of a form, as long as longRun or a word of its own outside
 // the error's wording; a head or tail of one as long as longRun; the whole of
-// a line; and, in a text cut before after, the first bytes of a head of a form
-// as long as longRun, or of a line, that runs through the cut, and of a
-// shorter form whole there (see cutHead and cutLineHead). None of them is all
-// the error's own wording (see wording), across the cut too. It returns nil
-// when no run is masked.
+// a line; and, in a text cut before after, the first bytes of a head or a
+// tail of a form as long as longRun, or of a line, that runs through the cut,
+// and of a shorter form whole there (see cutHead and cutLineHead). None of
+// them is all the error's own wording (see wording), across the cut too. It
+// returns nil when no run is masked.
 func (m *Masker) runStarts(s string, cut bool, after string) []int {
 	if len(m.forms) == 0 && len(m.lines) == 0 || s == "" {
 		return nil
@@ -236,22 +237,26 @@ func (m *Masker) runStarts(s string, cut bool, after string) []int {
 		text = s + pastCut(after)
 	}
 	textWording := newWording(text)
-	// In a cut text, the heads are read past the cut too, as far as a form
-	// reaches, for those that run through it.
+	// In a cut text, the heads and tails are read past the cut too, as far as
+	// a form reaches, for those that run through it.
 	reach := s
-	if cut {
-		reach = s + after[:min(len(after), m.longest)]
+	if past := min(len(after), m.longest); cut && past <= maxCutReach {
+		reach = text[:len(s)+past]
+	} else if cut {
+		reach = s + after[:past]
 	}
 	heads := make([]int, len(reach))
 	if len(m.forms) > 0 {
 		// Each scan takes time in proportion to s, so a long value in a long
 		// text costs no more than reading both; the scans of every form fill
-		// the same runs.
-		tails, rs := make([]int, len(s)), reversed(s)
+		// the same runs. Each form is read past the cut only as far as it
+		// reaches.
+		tails, rs := make([]int, len(reach)), reversed(reach)
 		for i := range m.forms {
 			f := &m.forms[i]
-			f.headRuns(heads, reach)
-			f.tailRuns(tails, rs)
+			end := len(s) + min(len(reach)-len(s), len(f.v))
+			f.headRuns(heads[:end], reach[:end])
+			f.tailRuns(tails[:end], rs[len(reach)-end:])
 			for i := range len(s) {
 				// A tail as long as v is the whole of v. The longest head or
 				// tail ending at s[i] is the one to mask when any is: one that
@@ -279,11 +284,15 @@ func (m *Masker) runStarts(s string, cut bool, after string) []int {
 					found = true
 				}
 			}
-			// A head that runs through the cut is masked from its first byte,
-			// however few of them s ends with, unless all of it, past the cut
-			// too, is the error's own wording.
-			for i := len(s); i < len(reach); i++ {
-				if n := heads[i]; n >= longRun && i-n+1 < len(s) && !textWording.all(i-n+1, i) {
+			// A head or a tail that runs through the cut is masked from its
+			// first byte, however few of them s ends with, unless all of it,
+			// past the cut too, is the error's own wording. What s ends with
+			// of a tail is a run from the middle of the value, which is not
+			// masked on its own, as a backend that truncates a value quotes
+			// its last bytes.
+			for i := len(s); i < end; i++ {
+				n := max(heads[i], tails[i])
+				if n >= longRun && i-n+1 < len(s) && !textWording.all(i-n+1, i) {
 					start[len(s)-1] = min(start[len(s)-1], i-n+1)
 					found = true
 				}

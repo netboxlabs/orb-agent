@@ -625,6 +625,8 @@ func TestCutValues(t *testing.T) {
 		{"a cut after the value's first 6 bytes", "refused: k3Y-9x", "Qz", nil, "refused: ********"},
 		{"a cut inside a head the error shortens", "input_value='k3Y", "-9xQ...'", nil, "input_value='********"},
 		{"a value whole before the cut", "refused: k3Y-9xQz, then", "", nil, "refused: ********, then"},
+		{"a truncated value's tail the cut runs through", "input_value='Pl41n-r3sol...ential", "-7f3a'", []string{"Pl41n-r3solved-credential-7f3a"}, "input_value='********...********"},
+		{"a run from the middle of a value at the cut, the text going on otherwise", "unknown option r3solved-cred", "ential and more", []string{"Pl41n-r3solved-credential-7f3a"}, "unknown option r3solved-cred"},
 		{"no value at the cut", "refused: xx", "x", nil, "refused: xx"},
 		{"a short head before the cut", "refused: k3 then xx", "x", nil, "refused: k3 then xx"},
 		{"the value's first byte, the text going on otherwise", "into int", "\n  line 5", nil, "into int"},
@@ -794,13 +796,19 @@ func TestRunStartsFollowTheirDefinition(t *testing.T) {
 			}
 			b.WriteString(v[from:to])
 		}
-		s, m := b.String(), NewMasker(values)
-		forms, lines := formValues(m), lineValues(m)
-		// The text past a cut goes on with a value, or with anything.
+		// The text past a cut goes on with a value, or with anything; when
+		// with a value, the text before can end inside it, so the cut runs
+		// through a head of it, a run from its middle or the whole of it.
 		after := word(alphabet, r.Intn(8))
 		if v := values[r.Intn(len(values))]; r.Intn(2) == 0 {
-			after = v[r.Intn(len(v)+1):] + after
+			k := r.Intn(len(v) + 1)
+			if r.Intn(2) == 0 {
+				b.WriteString(v[r.Intn(k+1):k])
+			}
+			after = v[k:] + after
 		}
+		s, m := b.String(), NewMasker(values)
+		forms, lines := formValues(m), lineValues(m)
 		if got, want := m.runStarts(s, false, ""), runStartsByDefinition(s, forms, lines, false, ""); !slices.Equal(got, want) {
 			t.Fatalf("runStarts(%q, %q, %q)\n got %v\nwant %v", s, forms, lines, got, want)
 		}
@@ -838,7 +846,7 @@ func runStartsByDefinition(s string, forms, lines []string, cut bool, after stri
 				long := len(run) >= longRun && !allWording(wording, from, i)
 				whole := run == v && (long ||
 					len(run) < longRun && standsAlone(text, from, i, v) && !slices.Contains(wording[from:i+1], true))
-				tail := long && strings.HasSuffix(v, run)
+				tail := long && strings.HasSuffix(v, run) || cut && i == len(s)-1 && tailRunsThrough(s, after, from, v)
 				head := strings.HasPrefix(v, run) && (long || cut && i == len(s)-1 && runsThrough(s, after, from, v))
 				if whole || tail || head {
 					start[i] = min(start[i], from)
@@ -863,6 +871,20 @@ func runStartsByDefinition(s string, forms, lines []string, cut bool, after stri
 		return nil
 	}
 	return start
+}
+
+// tailRunsThrough reports whether s[from:] is the first bytes of a tail of v,
+// longRun bytes or more and not all the error's wording, that runs through
+// the cut between s and after: in the text they make, it ends past the cut.
+func tailRunsThrough(s, after string, from int, v string) bool {
+	text := s + after
+	wording := errorWording(text)
+	for n := len(s) - from + 1; n <= len(v) && from+n <= len(text); n++ {
+		if n >= longRun && text[from:from+n] == v[len(v)-n:] && !allWording(wording, from, from+n-1) {
+			return true
+		}
+	}
+	return false
 }
 
 // runsThrough reports whether the head of v at s[from:] runs through the cut
@@ -988,4 +1010,119 @@ func lineValues(m *Masker) []string {
 		vs = append(vs, f.v)
 	}
 	return vs
+}
+
+// TestCutMasksWhatTheWholeTextMasks cuts texts that quote values whole,
+// truncated as pydantic and yaml.v3 quote them, by a tail alone, run into
+// another value or into the error's wording, at every kind of place: every
+// byte before the cut that masking the whole text masks, MaskCut masks too.
+// Values are also drawn from the wording, so a run of it meets the cut.
+func TestCutMasksWhatTheWholeTextMasks(t *testing.T) {
+	r := rand.New(rand.NewSource(909))
+	wording := []string{
+		"yaml: unmarshal errors:\n  ", "line 4: cannot unmarshal !!str `", "` into int\n", "yaml: line 4: ",
+		"map[error:Input should be a valid boolean field:p.a type:bool_type]",
+		"[map[error:Field required field:policies.p1.scope.0.hostname type:missing] ",
+	}
+	alphabets := []string{"abcdefghijklmnopqrstuvwxyz0123456789-", "ab", "aab-", "ab密é", "aab\n ", "int marshal"}
+	lengths := []int{3, 6, 7, 8, 24, 25, 49, 50, 300}
+	value := func(alphabet string, n int) string {
+		var b strings.Builder
+		rs := []rune(alphabet)
+		for b.Len() < n {
+			b.WriteRune(rs[r.Intn(len(rs))])
+		}
+		return b.String()
+	}
+	for range 4000 {
+		alphabet := alphabets[r.Intn(len(alphabets))]
+		var values []string
+		for range 1 + r.Intn(3) {
+			if r.Intn(3) == 0 {
+				w := wording[r.Intn(len(wording))]
+				from := r.Intn(len(w))
+				if v := w[from:from+r.Intn(len(w)-from+1)] + value(alphabet, r.Intn(2)*r.Intn(10)); v != "" {
+					values = append(values, v)
+				}
+				continue
+			}
+			values = append(values, value(alphabet, lengths[r.Intn(len(lengths))]))
+		}
+		if len(values) == 0 {
+			continue
+		}
+		var b strings.Builder
+		for range 1 + r.Intn(5) {
+			if r.Intn(2) == 0 {
+				b.WriteString(wording[r.Intn(len(wording))])
+			} else {
+				b.WriteString(value("xyz _.'\n", r.Intn(10)))
+			}
+			v := values[r.Intn(len(values))]
+			switch r.Intn(5) {
+			case 0:
+				if len(v) > 50 {
+					b.WriteString("input_value='" + v[:25] + "..." + v[len(v)-24:] + "'")
+				} else {
+					b.WriteString("`" + v + "`")
+				}
+			case 1:
+				b.WriteString(v)
+			case 2:
+				b.WriteString(v[r.Intn(len(v)):])
+			case 3:
+				b.WriteString(v[:r.Intn(len(v)+1)])
+			case 4:
+				w := values[r.Intn(len(values))]
+				b.WriteString(v[r.Intn(len(v)):] + w[:1+r.Intn(len(w))])
+			}
+		}
+		text, m := b.String(), NewMasker(values)
+		if text == "" {
+			continue
+		}
+		whole := maskedBytes(m, text, false, "")
+		for range 10 {
+			c := 1 + r.Intn(len(text))
+			for c < len(text) && !utf8.RuneStart(text[c]) {
+				c--
+			}
+			if c <= 0 || c >= len(text) {
+				continue
+			}
+			cut := maskedBytes(m, text[:c], true, text[c:])
+			for i := range c {
+				if whole[i] && !cut[i] {
+					t.Fatalf("byte %d is masked in the whole text, not cut at %d: %q, values %q\nwhole: %q\n  cut: %q",
+						i, c, text, values, m.Mask(text), m.MaskCut(text[:c], text[c:]))
+				}
+			}
+		}
+	}
+}
+
+// maskedBytes returns which bytes of s, cut before after when cut is set,
+// m masks.
+func maskedBytes(m *Masker, s string, cut bool, after string) []bool {
+	masked := make([]bool, len(s))
+	start := m.runStarts(s, cut, after)
+	if start == nil {
+		return masked
+	}
+	earliest := len(s)
+	for i := len(s) - 1; i >= 0; i-- {
+		earliest = min(earliest, start[i])
+		masked[i] = earliest <= i
+	}
+	for i := 1; i < len(s); i++ {
+		if masked[i-1] && !utf8.RuneStart(s[i]) {
+			masked[i] = true
+		}
+	}
+	for i := len(s) - 2; i >= 0; i-- {
+		if masked[i+1] && !utf8.RuneStart(s[i+1]) {
+			masked[i] = true
+		}
+	}
+	return masked
 }
