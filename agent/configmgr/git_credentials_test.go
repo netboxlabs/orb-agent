@@ -227,9 +227,12 @@ func TestGitStartRefusesAURLWhoseUserInfoIsNotReadAsOne(t *testing.T) {
 		"a # in a token":     {"http://canaryTOKEN#rest@127.0.0.1:1/repo.git", "canaryTOKEN"},
 		"a bad % in a token": {"http://canaryTOKEN%zzrest@127.0.0.1:1/repo.git", "canaryTOKEN"},
 		// go-git reads these as scp-like, with the token as the host.
-		"no scheme":                  {"canaryTOKEN:x-oauth-basic@127.0.0.1/org/repo.git", "canaryTOKEN"},
-		"no scheme, with a password": {"https:canaryTOKEN:rest@127.0.0.1/org/repo.git", "canaryTOKEN"},
-		"no scheme, written from //": {"//canaryTOKEN:rest@127.0.0.1:1/repo.git", "canaryTOKEN"},
+		"no scheme":                           {"canaryTOKEN:x-oauth-basic@127.0.0.1/org/repo.git", "canaryTOKEN"},
+		"no scheme, with a password":          {"https:canaryTOKEN:rest@127.0.0.1/org/repo.git", "canaryTOKEN"},
+		"no scheme, written from //":          {"//canaryTOKEN:rest@127.0.0.1:1/repo.git", "canaryTOKEN"},
+		"no scheme, scp-like with a password": {"canaryTOKEN:rest@127.0.0.1:org/repo.git", "canaryTOKEN"},
+		// Not scp-like either: git and go-git read it as a local path.
+		"no scheme, and no : after its @": {"canaryTOKEN@dev.azure.com/org/proj/_git/repo", "canaryTOKEN"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, h, err := startGit(t, tc.repoURL)
@@ -238,6 +241,16 @@ func TestGitStartRefusesAURLWhoseUserInfoIsNotReadAsOne(t *testing.T) {
 			assertNoCredential(t, h.logged(), tc.credential)
 		})
 	}
+}
+
+// TestGitStartRefusesAURLItCannotTellFromSpilledUserInfo pins that a URL
+// whose text reads as user info cut at a / is refused without saying that it
+// holds a credential: an @ in the path of a URL with a bad port reads like a
+// / in a password, whose head Go would quote as the bad port.
+func TestGitStartRefusesAURLItCannotTellFromSpilledUserInfo(t *testing.T) {
+	_, _, err := startGit(t, "http://127.0.0.1:bad/org/a@b.git")
+	require.ErrorContains(t, err, "what comes before its last @ is not read as user info")
+	assert.NotContains(t, err.Error(), "credential")
 }
 
 // TestGitStartTakesAURLWithAnAtInItsPath pins that a URL is not refused for

@@ -686,10 +686,17 @@ func TestRequireGitHubHTTPSURL(t *testing.T) {
 }
 
 func TestRequireGitHubHTTPSURLQuotesNoCredential(t *testing.T) {
-	// An unescaped space is not allowed in a URL's user info.
-	err := requireGitHubHTTPSURL("https://" + urlUser + ":canary pass@github.com/org/repo.git")
-	require.ErrorContains(t, err, "must be an https://github.com/... URL")
-	assertNoCredential(t, err.Error(), "canary pass")
+	for name, tc := range map[string]struct{ url, credential string }{
+		// An unescaped space is not allowed in a URL's user info.
+		"a URL no parser reads":                    {"https://" + urlUser + ":canary pass@github.com/org/repo.git", "canary pass"},
+		"an scp-like URL with a token as its user": {urlToken + "@github.com:org/repo.git", urlToken},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := requireGitHubHTTPSURL(tc.url)
+			require.ErrorContains(t, err, "must be an https://github.com/... URL")
+			assertNoCredential(t, err.Error(), tc.credential)
+		})
+	}
 }
 
 // TestGitStartGitHubAppValidation checks that every github_app misconfiguration

@@ -40,7 +40,7 @@ orb:
         password: ${GIT_TOKEN}
         skip_tls: false  # optional; set true for self-signed certificates
 ```
-A password or token can also be written in the URL itself, as in `https://git-user:<token>@host/repo.git`, `https://<token>:x-oauth-basic@github.com/org/repo.git` or `https://<token>@host/repo.git`. The agent masks the URL's user and password together, as `https://********@host/repo.git`, wherever it logs the URL or an error that quotes it. A `/`, `?`, `#` or `%` in the user or the password must be percent-encoded (`%2F`, `%3F`, `%23`, `%25`), and a URL that carries a user or password needs its scheme, as in `https://`. Without that, the credential is read as the host or the port, so the agent refuses the URL at startup, with an error that quotes it masked. `${GIT_TOKEN}` is expanded only as the whole value of `url`, not inside it. A URL with an `@` in its path is logged with everything between its `//` and that `@` masked: the agent cannot tell that `@` from one that ends a token holding a `/`. `auth: basic` with `password: ${GIT_TOKEN}` keeps the token out of the URL.
+A password or token can also be written in the URL itself, as in `https://git-user:<token>@host/repo.git`, `https://<token>:x-oauth-basic@github.com/org/repo.git` or `https://<token>@host/repo.git`. The agent masks the URL's user and password together, as `https://********@host/repo.git`, wherever it logs the URL or an error that quotes it. A `/`, `?`, `#` or `%` in the user or the password must be percent-encoded (`%2F`, `%3F`, `%23`, `%25`), and a URL that carries a user or password needs its scheme, as in `https://`. Without that, the credential is read as the host, the port or the path, and the URL cannot reach the repository. The agent refuses such a URL at startup, with an error that quotes it masked, except when a `/` in the credential makes its `@` look like one in a path: that URL is taken, and the part of the credential before the `/` is looked up as the host. `${GIT_TOKEN}` is expanded only as the whole value of `url`, not inside it. A URL with an `@` in its path is logged with everything between its `//` and its last `@` masked: the agent cannot tell that `@` from one that ends a token holding a `/`. `auth: basic` with `password: ${GIT_TOKEN}` keeps the token out of the URL.
 
 **SSH authentication** (private key):
 ```yaml
@@ -56,7 +56,7 @@ orb:
         private_key: /opt/orb/id_ed25519
         password: ${SSH_PASSPHRASE}  # optional; omit if the key is unprotected
 ```
-See [SSH Authentication](#ssh-authentication) below for the required `known_hosts` setup.
+See [SSH Authentication](#ssh-authentication) below for the required `known_hosts` setup. The user of an SSH URL is masked like a token in an https URL, so this one is logged as `********@github.com:myorg/policyrepo.git`.
 
 **GitHub App authentication** (short-lived installation tokens, github.com only):
 ```yaml

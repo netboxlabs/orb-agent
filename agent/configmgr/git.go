@@ -101,15 +101,16 @@ func requireReadableUserInfo(rawURL string) error {
 			return nil
 		}
 	default:
-		// An scp-like URL, user@host:path, has no : before its @.
+		// An scp-like URL, user@host:path, has no : before its @ and one
+		// after it. Without that : git and go-git read it as a local path.
 		head, _, _ := strings.Cut(rawURL, "/")
-		if at := strings.LastIndex(head, "@"); at < 0 || !strings.Contains(head[:at], ":") {
+		if at := strings.LastIndex(head, "@"); at < 0 || !strings.Contains(head[:at], ":") && strings.Contains(head[at:], ":") {
 			return nil
 		}
 	}
 	masked := rawURL[:start] + redact.MaskedSecret + rawURL[strings.LastIndex(rawURL, "@"):]
-	return fmt.Errorf("url %q: its credential is not read as user info; percent-encode each / ? # or %% "+
-		"in its user and password, and give it a scheme, as in https://", masked)
+	return fmt.Errorf("url %q: what comes before its last @ is not read as user info; percent-encode each "+
+		"/ ? # or %% in its user and password, and give it a scheme, as in https://", masked)
 }
 
 // userInfoSpills reports whether the user info of rawURL, a URL with a scheme

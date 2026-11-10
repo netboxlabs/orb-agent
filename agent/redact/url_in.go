@@ -15,8 +15,10 @@ import (
 // net/http's errors write it (with the password replaced by ***), as git
 // writes the user it asks a password for (escaped as git escapes it, or
 // decoded) and as git writes a URL it refuses for its plaintext credentials
-// (with the password replaced by <redacted>). The user and the password are masked together. text is returned
-// as it is when rawURL carries no user info.
+// (with the password replaced by <redacted>). It finds the user of git's
+// scp-like user@host:path also as go-git writes it again, as
+// ssh://user@host/path. The user and the password are masked together. text
+// is returned as it is when rawURL carries no user info.
 func URLIn(text, rawURL string) string {
 	masked := URL(rawURL)
 	if masked == rawURL {
@@ -46,6 +48,15 @@ func URLIn(text, rawURL string) string {
 			for _, form := range []string{info, quoted(info)} {
 				text = strings.ReplaceAll(text, "//"+form+"@", "//"+MaskedSecret+"@")
 			}
+		}
+	} else if user, ok := scpUser(rawURL); ok {
+		// ssh writes user@host when it is refused, and go-git writes an
+		// scp-like URL again as ssh://user@host/path, with the user
+		// path-escaped.
+		head, _, _ := strings.Cut(rawURL, ":")
+		host := head[len(user):]
+		for _, form := range []string{user, url.PathEscape(user)} {
+			text = strings.ReplaceAll(text, form+host, MaskedSecret+host)
 		}
 	}
 	// A URL no parser reads, or one written without //, which a parser reads

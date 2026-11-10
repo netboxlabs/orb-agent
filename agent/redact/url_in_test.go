@@ -68,6 +68,26 @@ func TestURLIn(t *testing.T) {
 			rawURL: "https://to%2fken:pass@host/repo.git",
 			want:   "fatal: URL 'https://********@host/repo.git' uses plaintext credentials",
 		},
+		"scp-like, as it is written": {
+			text:   "cloning canaryTOKEN@github.com:org/repo.git failed",
+			rawURL: "canaryTOKEN@github.com:org/repo.git",
+			want:   "cloning ********@github.com:org/repo.git failed",
+		},
+		"scp-like, as go-git writes it again as an ssh URL": {
+			text:   "reading ssh://canaryTOKEN@github.com/org/repo.git failed",
+			rawURL: "canaryTOKEN@github.com:org/repo.git",
+			want:   "reading ssh://********@github.com/org/repo.git failed",
+		},
+		"scp-like, as go-git writes it again with its user path-escaped": {
+			text:   "reading ssh://canary%2CTOKEN@github.com/org/repo.git failed",
+			rawURL: "canary,TOKEN@github.com:org/repo.git",
+			want:   "reading ssh://********@github.com/org/repo.git failed",
+		},
+		"scp-like, as ssh writes the user it logs in as, not escaped": {
+			text:   "canary,TOKEN@ssh.dev.azure.com: Permission denied (password,publickey).",
+			rawURL: "canary,TOKEN@ssh.dev.azure.com:v3/org/proj/repo",
+			want:   "********@ssh.dev.azure.com: Permission denied (password,publickey).",
+		},
 		"a URL with no user info": {
 			text:   "cloning https://host/repo.git failed",
 			rawURL: "https://host/repo.git",
