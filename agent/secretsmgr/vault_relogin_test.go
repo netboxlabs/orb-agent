@@ -3,6 +3,7 @@ package secretsmgr
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	vaultapi "github.com/hashicorp/vault/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -223,35 +225,387 @@ func TestVaultManager_AWatcherWaitsTheIntervalAfterALoginThatFailed(t *testing.T
 	assert.Equal(t, 2, vault.loginAttempts(), "the watcher waits out the interval")
 }
 
-// TestVaultManager_ATokenThatMayNotLookItselfUpLogsInAtMostOnceAnInterval has a
-// token whose policy does not let it look itself up, as a role with
-// token_no_default_policy gives, read a path it may not read. Vault refuses
-// the lookup as it does for a token that ended, so the agent cannot tell the
-// two apart: it logs in again at most once an interval for such reads, not at
-// every one, and the token it replaced is renewed no more.
-func TestVaultManager_ATokenThatMayNotLookItselfUpLogsInAtMostOnceAnInterval(t *testing.T) {
+// TestVaultManager_ATokenThatMayNotLookItselfUpLogsInNoAgainForADeniedPath has
+// a token whose policy does not let it look itself up or revoke itself, as a
+// role with token_no_default_policy gives, read a path it may not read at
+// every poll. Vault refuses the lookup as it does for a token that ended, so
+// the agent cannot tell the two apart: it says so once, at WARN, and logs in
+// again for none of the reads, so no token piles up in Vault.
+func TestVaultManager_ATokenThatMayNotLookItselfUpLogsInNoAgainForADeniedPath(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.withoutDefaultPolicy()
+	vault.deny("snmp")
+	clock := &fakeClock{t: time.Now()}
+	vm, logs := startVaultManager(t, vault, appRole, withClock(clock))
+
+	for range 6 {
+		_, err := vm.fetch(communityRef)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "permission denied")
+		clock.advance(loginInterval)
+	}
+	assert.Equal(t, 1, vault.loginCount(), "the login at start only")
+	assert.Equal(t, 1, vault.validTokens(), "no token piles up in Vault")
+	assert.NotContains(t, logs.String(), "logged in to Vault again")
+	assert.Equal(t, 1, strings.Count(logs.String(), "level=WARN"), logs.String())
+	assert.Contains(t, logs.String(), "auth/token/lookup-self")
+}
+
+// TestVaultManager_ATokenThatMayNotLookItselfUpLogsInAgainPastItsLease has a
+// token that may not look itself up, and that no watcher renews (not
+// renewable, or a batch token), reach the end of its lease. A read Vault
+// refuses before that end logs in no more, and one past it does, at most once
+// an interval: for each token the agent logs in with, until its lease ends.
+// It says once that the token may not look itself up.
+func TestVaultManager_ATokenThatMayNotLookItselfUpLogsInAgainPastItsLease(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.withoutDefaultPolicy()
+	vault.leaseOf(100)
+	clock := &fakeClock{t: time.Now()}
+	vm, logs := startVaultManager(t, vault, appRole, withClock(clock))
+
+	for i, token := range []string{"tok-1", "tok-2", "tok-3"} {
+		vault.expire(token)
+		clock.advance(loginInterval)
+		_, err := vm.fetch(communityRef)
+		require.Error(t, err, "not logged in again for before the end of the lease")
+		require.Equal(t, i+1, vault.loginCount())
+
+		clock.advance(loginInterval + time.Second)
+		value, err := vm.fetch(communityRef)
+		require.NoError(t, err, "logged in again for past the end of the lease")
+		assert.Equal(t, "s3cret-community", value)
+		assert.Equal(t, i+2, vault.loginCount())
+	}
+	assert.Equal(t, 1, strings.Count(logs.String(), "level=WARN"), "said once, not at each login: "+logs.String())
+}
+
+// TestVaultManager_ALoginRefusedAtTheMaxTTLOfATokenThatMayNotLookItselfUpIsTriedAgain
+// has the login the agent tries when a token that may not look itself up
+// reaches its max TTL fail once. Nothing renews the token any more, so a read
+// Vault refuses logs in again an interval later, once logins work.
+func TestVaultManager_ALoginRefusedAtTheMaxTTLOfATokenThatMayNotLookItselfUpIsTriedAgain(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.renewable(2, 3*time.Second)
+	vault.withoutDefaultPolicy()
+	clock := &fakeClock{t: time.Now()}
+	started := time.Now()
+	vm, _ := startVaultManager(t, vault, appRole, withClock(clock))
+	vault.refuseLogins(true)
+
+	require.Eventually(t, func() bool { return vault.loginAttempts() >= 2 }, 15*time.Second, 50*time.Millisecond,
+		"the agent tries to log in at the max TTL")
+	time.Sleep(time.Until(started.Add(3500 * time.Millisecond)))
+	vault.refuseLogins(false)
+	_, err := vm.fetch(communityRef)
+	require.Error(t, err, "not tried again within the interval")
+
+	clock.advance(loginInterval)
+	value, err := vm.fetch(communityRef)
+	require.NoError(t, err, "the agent logs in again once logins work")
+	assert.Equal(t, "s3cret-community", value)
+}
+
+// TestVaultManager_ATokenGrantedLookupSelfLaterIsAskedAboutAtTheNextLogin has
+// the token's policy let it look itself up only after the start, as when an
+// operator grants it on the agent's warning. The agent notices at its next
+// login, here past the end of the token's lease: from then on, a read Vault
+// refuses for a token that ended logs in again, whenever it comes.
+func TestVaultManager_ATokenGrantedLookupSelfLaterIsAskedAboutAtTheNextLogin(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.lookupAnswers(http.StatusForbidden)
+	vault.leaseOf(100)
+	clock := &fakeClock{t: time.Now()}
+	vm, _ := startVaultManager(t, vault, appRole, withClock(clock))
+	vault.lookupAnswers(0)
+
+	vault.expire("tok-1")
+	var err error
+	for range 3 {
+		clock.advance(loginInterval)
+		_, err = vm.fetch(communityRef)
+	}
+	require.NoError(t, err, "logged in again for past the end of the lease")
+	require.Equal(t, 2, vault.loginCount())
+
+	// tok-2 came from a login an interval ago, half a lease before its end.
+	vault.expire("tok-2")
+	value, err := vm.fetch(communityRef)
+	require.NoError(t, err, "the token from the new login may look itself up: its end is told at once")
+	assert.Equal(t, "s3cret-community", value)
+	assert.Equal(t, 3, vault.loginCount())
+}
+
+// TestVaultManager_ARenewalMovesTheEndOfATokenThatMayNotLookItselfUp has the
+// watcher renew a token that may not look itself up: the end the agent knows
+// for it moves with each renewal, so a read Vault refuses past the end of the
+// lease its login gave, but within the renewed one, logs in no more.
+func TestVaultManager_ARenewalMovesTheEndOfATokenThatMayNotLookItselfUp(t *testing.T) {
 	vault := newVaultStandIn(t)
 	vault.renewable(2, time.Hour)
-	vault.lookupAnswers(http.StatusForbidden)
+	vault.withoutDefaultPolicy()
 	vault.deny("snmp")
 	clock := &fakeClock{t: time.Now()}
 	vm, _ := startVaultManager(t, vault, appRole, withClock(clock))
 
-	for range 50 {
+	// The login's lease ends 2s on the agent's clock. A renewal the agent
+	// takes in a second later, usually the watcher's first, moves it to 3s.
+	clock.advance(time.Second)
+	require.Eventually(t, func() bool {
+		vm.loginMu.Lock()
+		defer vm.loginMu.Unlock()
+		return vm.tokenEnd.After(clock.now().Add(1500 * time.Millisecond))
+	}, 10*time.Second, 20*time.Millisecond, "the agent takes a renewal of the token in")
+	clock.advance(1500 * time.Millisecond)
+	_, err := vm.fetch(communityRef)
+	require.Error(t, err)
+	assert.Equal(t, 1, vault.loginCount(), "the token's renewed lease has not ended")
+}
+
+// TestVaultManager_ALateRenewalOfAReplacedTokenMovesNoEnd has the watcher of
+// a token a login replaced report a renewal after the login, as one running
+// when the login stopped it can: the end the agent knows for the new token
+// stays the end of its own lease.
+func TestVaultManager_ALateRenewalOfAReplacedTokenMovesNoEnd(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.withoutDefaultPolicy()
+	vault.leaseOf(100)
+	clock := &fakeClock{t: time.Now()}
+	vm, _ := startVaultManager(t, vault, appRole, withClock(clock))
+	vault.expire("tok-1")
+	clock.advance(101 * time.Second)
+	_, err := vm.fetch(communityRef)
+	require.NoError(t, err)
+	require.Equal(t, 2, vault.loginCount())
+
+	vm.renewed("tok-1", &vaultapi.Secret{Auth: &vaultapi.SecretAuth{ClientToken: "tok-1", LeaseDuration: 1}})
+	vault.deny("snmp")
+	clock.advance(loginInterval)
+	_, err = vm.fetch(communityRef)
+	require.Error(t, err)
+	assert.Equal(t, 2, vault.loginCount(), "tok-2's lease has not ended")
+}
+
+// TestVaultManager_ATokenWithNoLeaseThatMayNotLookItselfUpIsTakenNotToEnd has
+// a login give a token with no lease, which Vault does not end, and whose
+// policy does not let it look itself up: a read Vault refuses is a path it
+// may not read, and logs in no more, however long after the login it comes.
+func TestVaultManager_ATokenWithNoLeaseThatMayNotLookItselfUpIsTakenNotToEnd(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.withoutDefaultPolicy()
+	vault.leaseOf(0)
+	vault.deny("snmp")
+	clock := &fakeClock{t: time.Now()}
+	vm, _ := startVaultManager(t, vault, appRole, withClock(clock))
+
+	for range 3 {
+		clock.advance(24 * time.Hour)
 		_, err := vm.fetch(communityRef)
 		require.Error(t, err)
 	}
-	assert.Equal(t, 2, vault.loginCount(), "one at start, one for the reads of the interval")
-	replacedAt := time.Now()
+	assert.Equal(t, 1, vault.loginCount())
+}
+
+// TestVaultManager_AWatcherThatEndsWithoutALoginEndsTheTokenThatMayNotLookItselfUp
+// has the watcher of a token that may not look itself up end, and its login
+// fail: nothing renews the token any more, so the agent takes it to have
+// ended, and a read Vault refuses an interval later logs in, whatever the end
+// of its lease.
+func TestVaultManager_AWatcherThatEndsWithoutALoginEndsTheTokenThatMayNotLookItselfUp(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.withoutDefaultPolicy()
+	clock := &fakeClock{t: time.Now()}
+	vm, _ := startVaultManager(t, vault, appRole, withClock(clock))
+
+	vault.refuseLogins(true)
+	require.False(t, vm.loginAgain("tok-1"), "the login the watcher tries when it ends fails")
+	vault.refuseLogins(false)
+	vault.expire("tok-1")
 
 	clock.advance(loginInterval)
+	value, err := vm.fetch(communityRef)
+	require.NoError(t, err, "a read logs in again, long before the end of the token's lease")
+	assert.Equal(t, "s3cret-community", value)
+	assert.Equal(t, 2, vault.loginCount())
+}
+
+// TestVaultManager_EveryLoginIsAskedAbout has the token's policy stop letting
+// it look itself up after the start: the agent learns it from the login a read
+// makes once the token ended, and logs in no more for a path the new token may
+// not read.
+func TestVaultManager_EveryLoginIsAskedAbout(t *testing.T) {
+	vault := newVaultStandIn(t)
+	clock := &fakeClock{t: time.Now()}
+	vm, logs := startVaultManager(t, vault, appRole, withClock(clock))
+	vault.withoutDefaultPolicy()
+	vault.expire("tok-1")
+	_, err := vm.fetch(communityRef)
+	require.NoError(t, err)
+	require.Equal(t, 2, vault.loginCount())
+
+	vault.deny("snmp")
+	for range 3 {
+		clock.advance(loginInterval)
+		_, err := vm.fetch(communityRef)
+		require.Error(t, err)
+	}
+	assert.Equal(t, 2, vault.loginCount())
+	assert.Contains(t, logs.String(), "auth/token/lookup-self")
+}
+
+// TestVaultManager_ALookupThatFailsOtherwiseAfterALoginTellsNothing has Vault
+// fail the question the agent asks about its token right after the login
+// with another error than a 403: whether the token may look itself up is
+// unknown, so a read Vault refuses for a token that ended logs in again, as
+// before.
+func TestVaultManager_ALookupThatFailsOtherwiseAfterALoginTellsNothing(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.lookupAnswers(http.StatusServiceUnavailable)
+	vm, logs := startVaultManager(t, vault, appRole)
+	vault.lookupAnswers(0)
+
+	vault.expire("tok-1")
+	value, err := vm.fetch(communityRef)
+	require.NoError(t, err)
+	assert.Equal(t, "s3cret-community", value)
+	assert.Equal(t, 2, vault.loginCount())
+	assert.NotContains(t, logs.String(), "level=WARN")
+}
+
+// TestVaultManager_ALookupVaultDoesNotAnswerAfterALoginHoldsUpNoStart has
+// Vault not answer the question the agent asks about its token right after
+// the login: the agent starts after a short wait, not the client's timeout,
+// and the token is treated as before.
+func TestVaultManager_ALookupVaultDoesNotAnswerAfterALoginHoldsUpNoStart(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.hangOn("/v1/auth/token/lookup-self")
+	began := time.Now()
+	_, logs := startVaultManager(t, vault, appRole)
+	assert.Less(t, time.Since(began), lookupTimeout+3*time.Second, "the agent's start waits on the lookup no longer than its own timeout")
+	assert.NotContains(t, logs.String(), "level=WARN")
+}
+
+// TestVaultManager_ALoginRevokesTheTokenItReplaces has the agent log in again
+// in place of a token Vault still accepts: here its policy stops letting it
+// look itself up after the start, so a path it may not read looks like the
+// token's end. The token replaced is revoked, so it does not stay valid in
+// Vault until its own TTL.
+func TestVaultManager_ALoginRevokesTheTokenItReplaces(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.deny("snmp")
+	vm, _ := startVaultManager(t, vault, appRole)
+	vault.lookupAnswers(http.StatusForbidden)
+
 	_, err := vm.fetch(communityRef)
 	require.Error(t, err)
-	assert.Equal(t, 3, vault.loginCount())
+	require.Equal(t, 2, vault.loginCount())
+	require.Eventually(t, func() bool { return vault.revokedToken("tok-1") }, 5*time.Second, 20*time.Millisecond,
+		"the token replaced is revoked")
+	assert.Equal(t, 1, vault.validTokens())
+}
+
+// TestVaultManager_ATokenALoginReplacedIsRenewedNoMore has the agent log in
+// again in place of a token Vault still accepts, and refuses to let revoke
+// itself: the token replaced is renewed no more, so it ends at its TTL.
+func TestVaultManager_ATokenALoginReplacedIsRenewedNoMore(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.renewable(2, time.Hour)
+	vault.deny("snmp")
+	vm, _ := startVaultManager(t, vault, appRole)
+	vault.withoutDefaultPolicy()
+
+	_, err := vm.fetch(communityRef)
+	require.Error(t, err)
+	require.Equal(t, 2, vault.loginCount())
+	replacedAt := time.Now()
 
 	time.Sleep(3 * time.Second)
+	assert.False(t, vault.revokedToken("tok-1"), "Vault refused the revoke")
 	assert.False(t, vault.renewedSince("tok-1", replacedAt), "the token replaced is renewed no more")
-	assert.False(t, vault.renewedSince("tok-2", replacedAt.Add(500*time.Millisecond)), "nor the one replaced after it")
+	assert.True(t, vault.renewedSince("tok-2", replacedAt), "the token from the new login is")
+}
+
+// TestVaultManager_ARevokeThatFailsOrHangsHoldsUpNoRead has Vault refuse the
+// revoke of the token a login replaced, as it does for a token that ended, or
+// not answer it: the read that logged in again returns the secret at once,
+// and a refused revoke is logged at DEBUG only.
+func TestVaultManager_ARevokeThatFailsOrHangsHoldsUpNoRead(t *testing.T) {
+	for name, hang := range map[string]bool{"refused": false, "hangs": true} {
+		t.Run(name, func(t *testing.T) {
+			vault := newVaultStandIn(t)
+			vm, logs := startVaultManager(t, vault, appRole)
+			vault.expire("tok-1")
+			if hang {
+				vault.hangOn("/v1/auth/token/revoke-self")
+			}
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := vm.fetch(communityRef)
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("the read waits on the revoke of the token it replaced")
+			}
+			if !hang {
+				require.Eventually(t, func() bool { return strings.Contains(logs.String(), "was not revoked") },
+					5*time.Second, 20*time.Millisecond, "a revoke Vault refuses is logged")
+				assert.Contains(t, logs.String(), "level=DEBUG msg=\"the Vault token a login replaced was not revoked\"")
+			}
+			assert.NotContains(t, logs.String(), "level=ERROR")
+			assert.NotContains(t, logs.String(), "level=WARN")
+		})
+	}
+}
+
+// TestVaultManager_ARevokeCarriesTheNamespaceAndTheProxysLogin has the agent
+// reach Vault in a namespace, through a proxy that asks for basic auth: the
+// revoke of the token a login replaced is sent with both, as every other
+// request is.
+func TestVaultManager_ARevokeCarriesTheNamespaceAndTheProxysLogin(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.deny("snmp")
+	vm, _ := startVaultManager(t, vault, appRole, func(vm *vaultManager) {
+		vm.config.Namespace = "team-a"
+		vm.config.Address = strings.Replace(vault.url, "//", "//proxyuser:Pr0xy-pa55word@", 1)
+	})
+	vault.lookupAnswers(http.StatusForbidden)
+
+	_, err := vm.fetch(communityRef)
+	require.Error(t, err)
+	require.Eventually(t, func() bool { return vault.revokedToken("tok-1") }, 5*time.Second, 20*time.Millisecond,
+		"the token replaced is revoked")
+	headers := vault.revokeHeaders()
+	assert.Equal(t, "team-a", headers.Get("X-Vault-Namespace"))
+	assert.Equal(t, "Basic "+base64.StdEncoding.EncodeToString([]byte("proxyuser:Pr0xy-pa55word")), headers.Get("Authorization"))
+}
+
+// TestVaultManager_StoppingCutsARevokeShort stops the agent while Vault does
+// not answer the revoke of the token a login replaced: the revoke ends as the
+// agent stops, not when the client's request times out.
+func TestVaultManager_StoppingCutsARevokeShort(t *testing.T) {
+	vault := newVaultStandIn(t)
+	logs := &syncBuffer{}
+	vm := &vaultManager{
+		preLogger: slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		config:    config.VaultManager{Address: vault.url, Auth: "approle", AuthArgs: map[string]any{"role_id": "role", "secret_id": "secret"}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	require.NoError(t, vm.Start(ctx))
+	vault.expire("tok-1")
+	vault.hangOn("/v1/auth/token/revoke-self")
+
+	_, err := vm.fetch(communityRef)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { held, _ := vault.hangsOn("/v1/auth/token/revoke-self"); return held == 1 },
+		5*time.Second, 20*time.Millisecond, "the agent asks Vault to revoke the token replaced")
+	cancel()
+	require.Eventually(t, func() bool { _, givenUp := vault.hangsOn("/v1/auth/token/revoke-self"); return givenUp == 1 },
+		3*time.Second, 20*time.Millisecond, "the revoke ends as the agent stops")
 }
 
 // TestVaultManager_StoppingCutsALookupOrALoginShortQuietly stops the agent
@@ -399,7 +753,7 @@ func startVaultManager(t *testing.T, vault *vaultStandIn, login func(*vaultStand
 }
 
 // vaultStandIn answers the Vault API calls the agent makes: AppRole logins,
-// token renewals and lookups, and KV v2 reads of one secret.
+// token renewals, lookups and revokes, and KV v2 reads of one secret.
 type vaultStandIn struct {
 	url string
 
@@ -412,10 +766,15 @@ type vaultStandIn struct {
 	renew     bool
 	maxTTL    time.Duration
 	lookup    int
+	noDefault bool
 	hang      map[string]bool
+	hangs     map[string]int
+	hangEnds  map[string]int
+	revokeHdr http.Header
 	issued    map[string]time.Time
 	renewed   map[string]time.Time
 	ended     map[string]bool
+	revoked   map[string]bool
 	denied    map[string]bool
 	refusedRd int
 }
@@ -423,12 +782,15 @@ type vaultStandIn struct {
 func newVaultStandIn(t *testing.T) *vaultStandIn {
 	t.Helper()
 	s := &vaultStandIn{
-		lease:   3600,
-		issued:  map[string]time.Time{"static-tok": time.Now()},
-		renewed: map[string]time.Time{},
-		hang:    map[string]bool{},
-		ended:   map[string]bool{},
-		denied:  map[string]bool{},
+		lease:    3600,
+		issued:   map[string]time.Time{"static-tok": time.Now()},
+		renewed:  map[string]time.Time{},
+		hang:     map[string]bool{},
+		hangs:    map[string]int{},
+		hangEnds: map[string]int{},
+		ended:    map[string]bool{},
+		revoked:  map[string]bool{},
+		denied:   map[string]bool{},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(srv.Close)
@@ -454,11 +816,63 @@ func (s *vaultStandIn) hangOn(path string) {
 	s.hang[path] = true
 }
 
-// lookupAnswers has Vault answer every token lookup with status.
+// hangsOn counts the requests to path Vault holds, and those of them the
+// agent gave up on.
+func (s *vaultStandIn) hangsOn(path string) (held, givenUp int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hangs[path], s.hangEnds[path]
+}
+
+// revokeHeaders returns the headers of the last revoke Vault was asked for.
+func (s *vaultStandIn) revokeHeaders() http.Header {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.revokeHdr
+}
+
+// leaseOf has the tokens it issues last seconds, and not be renewable.
+func (s *vaultStandIn) leaseOf(seconds int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lease = seconds
+}
+
+// lookupAnswers has Vault answer every token lookup with status, 0 for its
+// own answer.
 func (s *vaultStandIn) lookupAnswers(status int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lookup = status
+}
+
+// withoutDefaultPolicy has the tokens Vault issues lack the default policy,
+// as a role with token_no_default_policy gives: Vault refuses them a lookup
+// or a revoke of themselves.
+func (s *vaultStandIn) withoutDefaultPolicy() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noDefault = true
+}
+
+// revokedToken reports whether the token was revoked.
+func (s *vaultStandIn) revokedToken(token string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.revoked[token]
+}
+
+// validTokens counts the tokens from logins that Vault still accepts.
+func (s *vaultStandIn) validTokens() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for token := range s.issued {
+		if strings.HasPrefix(token, "tok-") && s.validLocked(token) {
+			n++
+		}
+	}
+	return n
 }
 func (s *vaultStandIn) refusedReads() int { s.mu.Lock(); defer s.mu.Unlock(); return s.refusedRd }
 func (s *vaultStandIn) expire(token string) {
@@ -498,11 +912,18 @@ func (s *vaultStandIn) validLocked(token string) bool {
 
 func (s *vaultStandIn) serve(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
+	if r.URL.Path == "/v1/auth/token/revoke-self" {
+		s.revokeHdr = r.Header.Clone()
+	}
 	if s.hang[r.URL.Path] {
+		s.hangs[r.URL.Path]++
 		s.mu.Unlock()
 		// The server notices the agent hang up only once the body is read.
 		_, _ = io.Copy(io.Discard, r.Body)
 		<-r.Context().Done()
+		s.mu.Lock()
+		s.hangEnds[r.URL.Path]++
+		s.mu.Unlock()
 		return
 	}
 	defer s.mu.Unlock()
@@ -551,11 +972,19 @@ func (s *vaultStandIn) serve(w http.ResponseWriter, r *http.Request) {
 			write(s.lookup, denied)
 			return
 		}
-		if !s.validLocked(token) {
+		if !s.validLocked(token) || s.noDefault {
 			write(http.StatusForbidden, denied)
 			return
 		}
 		write(http.StatusOK, map[string]any{"data": map[string]any{"id": token, "ttl": s.lease}})
+	case r.URL.Path == "/v1/auth/token/revoke-self":
+		if !s.validLocked(token) || s.noDefault {
+			write(http.StatusForbidden, denied)
+			return
+		}
+		s.ended[token] = true
+		s.revoked[token] = true
+		w.WriteHeader(http.StatusNoContent)
 	case strings.HasPrefix(r.URL.Path, "/v1/secrets/data/"):
 		if !s.validLocked(token) || s.denied[strings.TrimPrefix(r.URL.Path, "/v1/secrets/data/")] {
 			s.refusedRd++
