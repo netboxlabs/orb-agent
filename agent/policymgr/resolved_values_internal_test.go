@@ -149,6 +149,15 @@ func TestBackendRefusal(t *testing.T) {
 		assert.Equal(t, text, logged)
 	})
 
+	t.Run("masks a long value that is a run of the YAML error's words only where the error quotes it", func(t *testing.T) {
+		// snmp-discovery's error for retries: "marshal", decoded as int.
+		logged, reason := backendRefusal("400 ", "yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `marshal` into int", []resolvedValue{{path: "config.retries", value: "marshal"}})
+		want := "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int" +
+			" (the error quotes the value of the secret reference at config.retries, masked as ********)"
+		assert.Equal(t, want, reason)
+		assert.Equal(t, want, logged)
+	})
+
 	t.Run("names no field for a short value that is only a word of a YAML error quoting a value with a new line", func(t *testing.T) {
 		// yaml.v3's error for retries: "a\nb" and timeout: "x", decoded as int.
 		text := "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `a\nb` into int\n  line 2: cannot unmarshal !!str `x` into int"

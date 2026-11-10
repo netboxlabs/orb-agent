@@ -23,13 +23,15 @@ const longRun = 7
 
 // Values returns s with values masked: every occurrence of one of them, or of
 // one escaped as Go, JSON or Python quote it, is replaced by MaskedSecret, and
-// so is every head or tail of one longRun bytes or longer. A value shorter
-// than longRun is masked only where it is a word of its own, so a short value
-// such as "0" leaves the digits of the error's numbers alone, and not in the
-// error's own wording (see errorWording): a short value that is one of its
-// words, such as "int", is masked only where the error quotes it, so the
-// error stays readable and does not show which word the value is. A quoted
-// value is always a word of its own: no quote is a word byte. A value of
+// so is every head or tail of one longRun bytes or longer. Nothing that is
+// all the error's own wording (see errorWording) is masked, whatever the
+// value's length: a value that is one of its words, such as "int", or a run
+// of them, such as "marshal", is masked only where the error quotes it, so
+// the error stays readable and does not show which of its words the value
+// is. A value shorter than longRun is masked only where it is a word of its
+// own and none of its bytes is the error's wording, so a short value such as
+// "0" leaves the digits of the error's numbers alone. A quoted value is
+// always a word of its own: no quote is a word byte. A value of
 // several lines, a private key say, is also masked line by line, as a
 // backend that prints it line by line quotes it: each of its lines of
 // longRun bytes or more, trimmed of the spaces around it, wherever it occurs
@@ -212,9 +214,11 @@ func (m *Masker) mask(s string, cut bool, after string) string {
 // mask masks and that ends at that byte begins, or len(s) when none ends
 // there: the whole of a form, as long as longRun or a word of its own outside
 // the error's wording; a head or tail of one as long as longRun; the whole of
-// a line; and, in a text cut before after, a head at its end of a form or a
-// line that runs through the cut (see cutHead and cutLineHead). It returns
-// nil when no run is masked.
+// a line; and, in a text cut before after, the first bytes of a head of a form
+// as long as longRun, or of a line, that runs through the cut, and of a
+// shorter form whole there (see cutHead and cutLineHead). None of them is all
+// the error's own wording (see wording), across the cut too. It returns nil
+// when no run is masked.
 func (m *Masker) runStarts(s string, cut bool, after string) []int {
 	if len(m.forms) == 0 && len(m.lines) == 0 || s == "" {
 		return nil
@@ -231,8 +235,14 @@ func (m *Masker) runStarts(s string, cut bool, after string) []int {
 	if cut {
 		text = s + pastCut(after)
 	}
-	textWording := errorWording(text)
-	heads := make([]int, len(s))
+	textWording := newWording(text)
+	// In a cut text, the heads are read past the cut too, as far as a form
+	// reaches, for those that run through it.
+	reach := s
+	if cut {
+		reach = s + after[:min(len(after), m.longest)]
+	}
+	heads := make([]int, len(reach))
 	if len(m.forms) > 0 {
 		// Each scan takes time in proportion to s, so a long value in a long
 		// text costs no more than reading both; the scans of every form fill
@@ -240,7 +250,7 @@ func (m *Masker) runStarts(s string, cut bool, after string) []int {
 		tails, rs := make([]int, len(s)), reversed(s)
 		for i := range m.forms {
 			f := &m.forms[i]
-			f.headRuns(heads, s)
+			f.headRuns(heads, reach)
 			f.tailRuns(tails, rs)
 			for i := range len(s) {
 				// A tail as long as v is the whole of v. The longest head or
@@ -253,14 +263,28 @@ func (m *Masker) runStarts(s string, cut bool, after string) []int {
 				if n := heads[i]; n >= longRun {
 					longest = max(longest, n)
 				}
+				// A run of the error's own wording is not a value, nor is any
+				// shorter one ending here: it is part of it.
+				if longest >= longRun && textWording.all(i-longest+1, i) {
+					longest = 0
+				}
 				if longest > 0 {
 					start[i] = min(start[i], i-longest+1)
 					found = true
 				}
 			}
-			if cut {
+			if cut && len(f.v) < longRun {
 				if n := cutHead(s, after, f.v, text, textWording); n > 0 {
 					start[len(s)-1] = min(start[len(s)-1], len(s)-n)
+					found = true
+				}
+			}
+			// A head that runs through the cut is masked from its first byte,
+			// however few of them s ends with, unless all of it, past the cut
+			// too, is the error's own wording.
+			for i := len(s); i < len(reach); i++ {
+				if n := heads[i]; n >= longRun && i-n+1 < len(s) && !textWording.all(i-n+1, i) {
+					start[len(s)-1] = min(start[len(s)-1], i-n+1)
 					found = true
 				}
 			}
@@ -275,13 +299,15 @@ func (m *Masker) runStarts(s string, cut bool, after string) []int {
 			}
 			at := from + k
 			end := at + len(f.v) - 1
-			start[end] = min(start[end], at)
-			found = true
+			if !textWording.all(at, end) {
+				start[end] = min(start[end], at)
+				found = true
+			}
 			from = at + 1
 		}
 		if cut {
 			f.headRuns(heads, s)
-			if n := f.cutLineHead(heads[len(s)-1], after); n > 0 {
+			if n := f.cutLineHead(heads[len(s)-1], after); n > 0 && !textWording.all(len(s)-n, len(s)-n+len(f.v)-1) {
 				start[len(s)-1] = min(start[len(s)-1], len(s)-n)
 				found = true
 			}
@@ -295,9 +321,9 @@ func (m *Masker) runStarts(s string, cut bool, after string) []int {
 
 // shortMasked reports whether s[from:to+1], an occurrence of v shorter than
 // longRun, is masked: where it is a word of its own that no byte of the
-// error's wording (wording, from errorWording) is part of.
-func shortMasked(s string, from, to int, v string, wording []bool) bool {
-	return standsAlone(s, from, to, v) && !slices.Contains(wording[from:to+1], true)
+// error's wording w in s is part of.
+func shortMasked(s string, from, to int, v string, w wording) bool {
+	return standsAlone(s, from, to, v) && w.none(from, to)
 }
 
 // errorWordingPatterns match the wording of the errors a refusal can carry
@@ -317,8 +343,9 @@ var errorWordingPatterns = []*regexp.Regexp{
 }
 
 // errorWording returns, for each byte of s, whether it is part of the
-// error's own wording, where a short value that is a word of its own is not
-// masked: those words are the error's, not the policy's.
+// error's own wording, where nothing that is all wording is masked, nor a
+// short value with a byte in it: those words are the error's, not the
+// policy's.
 func errorWording(s string) []bool {
 	wording := make([]bool, len(s))
 	for _, re := range errorWordingPatterns {
@@ -333,6 +360,44 @@ func errorWording(s string) []bool {
 		}
 	}
 	return wording
+}
+
+// wording is the error's own wording in a text (see errorWording), kept so as
+// to tell in constant time whether a run is all of it or holds none of it:
+// reading the run instead would take, at every byte of a text, time in
+// proportion to the longest value.
+type wording struct {
+	// outside[k] counts the bytes of the text's first k that are not wording;
+	// it is nil for a text with no wording, as most are, so masking one costs
+	// no more than before. A refusal masked is far shorter than 2 GiB.
+	outside []int32
+}
+
+func newWording(text string) wording {
+	in := errorWording(text)
+	if !slices.Contains(in, true) {
+		return wording{}
+	}
+	outside := make([]int32, len(in)+1)
+	for i, w := range in {
+		outside[i+1] = outside[i]
+		if !w {
+			outside[i+1]++
+		}
+	}
+	return wording{outside: outside}
+}
+
+// all reports whether every byte from from to to is the error's wording: a
+// run there is the error's own, not a value. A run that reaches past the
+// text is not.
+func (w wording) all(from, to int) bool {
+	return to+1 < len(w.outside) && w.outside[to+1] == w.outside[from]
+}
+
+// none reports whether no byte from from to to is the error's wording.
+func (w wording) none(from, to int) bool {
+	return w.outside == nil || int(w.outside[to+1]-w.outside[from]) == to+1-from
 }
 
 // standsAlone reports whether s[from:to+1], an occurrence of v, is a word of
@@ -359,19 +424,18 @@ func pastCut(after string) string {
 	return after
 }
 
-// cutHead returns the length of the longest head of v shorter than longRun
-// that s ends with and that runs through the cut before after: after goes on
-// with it to a head of v longRun bytes long, or to the whole of a shorter v
-// that is a word of its own there, outside the error's wording. text is s and
-// what pastCut reads of after, and wording is the error's wording in it. It
-// returns 0 for none. A longer head is masked wherever it ends.
-func cutHead(s, after, v, text string, wording []bool) int {
-	need := min(len(v), longRun)
-	for n := min(need-1, len(s)); n > 0; n-- {
-		if !strings.HasSuffix(s, v[:n]) || !strings.HasPrefix(after, v[n:need]) {
+// cutHead returns the length of the longest head of v, a value shorter than
+// longRun, that s ends with and that runs through the cut before after:
+// after goes on with it to the whole of v, a word of its own there, outside
+// the error's wording. text is s and what pastCut reads of after, and w is
+// the error's wording in it. It returns 0 for none. A head of a longer value
+// is masked as the heads read past the cut are (see runStarts).
+func cutHead(s, after, v, text string, w wording) int {
+	for n := min(len(v)-1, len(s)); n > 0; n-- {
+		if !strings.HasSuffix(s, v[:n]) || !strings.HasPrefix(after, v[n:]) {
 			continue
 		}
-		if at := len(s) - n; len(v) < longRun && !shortMasked(text, at, at+len(v)-1, v, wording) {
+		if at := len(s) - n; !shortMasked(text, at, at+len(v)-1, v, w) {
 			continue
 		}
 		return n

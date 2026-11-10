@@ -228,6 +228,26 @@ func TestValues(t *testing.T) {
 			want:   "400 yaml: unmarshal errors:\n  line 7: cannot unmarshal !!map into []string",
 		},
 		{
+			// The value is masked where the error quotes it; inside the
+			// error's words, masking it would show which run of them it is.
+			name:   "a value of longRun bytes that is a run of the YAML error's words is masked only where it is quoted",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `marshal` into int",
+			values: []string{"marshal"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int",
+		},
+		{
+			name:   "a long value's head that is a run of the YAML error's words is left there",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int",
+			values: []string{"unmarshal errors: and more"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int",
+		},
+		{
+			name:   "a long value that runs on past the YAML error's words is masked",
+			text:   "400 yaml: unmarshal errors:x9Qz-tail",
+			values: []string{"errors:x9Qz-tail"},
+			want:   "400 yaml: unmarshal ********",
+		},
+		{
 			name:   "a YAML syntax error's prefix is left",
 			text:   "400 yaml: line 3: did not find expected key",
 			values: []string{"yaml", "line", "3"},
@@ -579,6 +599,10 @@ func TestCutValues(t *testing.T) {
 		{"a short value the cut runs through inside a word", "into int", "0k\n", []string{"t0k"}, "into int"},
 		{"a short value the cut runs through, followed by a word", "refused: t", "0kx", []string{"t0k"}, "refused: t"},
 		{"a short value the cut runs through in the error's wording", "invalid: yaml: li", "ne 3: did not find expected key", []string{"line"}, "invalid: yaml: li"},
+		{"a long value the cut runs through in the error's wording", "400 yaml: unmar", "shal errors:\n  line 4: cannot unmarshal !!str `three` into int", []string{"marshal"}, "400 yaml: unmar"},
+		// Before the cut, the head is all the error's wording; the text past
+		// the cut goes on with the value, as the whole text masks it.
+		{"a long value's head of the error's wording that runs on past the cut", "400 yaml: unmarshal errors:", "x9Qz-tail", []string{"errors:x9Qz-tail"}, "400 yaml: unmarshal ********"},
 		{"a short value the cut runs through where a type error quotes it", "  line 4: cannot unmarshal !!str `li", "ne` into int\n", []string{"line"}, "  line 4: cannot unmarshal !!str `********"},
 		{"a short value with new lines the cut runs through", "x a\nb", "\nc rest", []string{"a\nb\nc"}, "x ********"},
 		{"a short value whole at the cut that the text goes on with as a word", "refused: t0k", "t0k more", []string{"t0k"}, "refused: t0k"},
@@ -612,6 +636,12 @@ func TestCutValues(t *testing.T) {
 	// A line is masked only whole: past the cut, the text goes on otherwise.
 	if got := CutValues("refused: Zq9xW3rT7y", " and more", []string{multi}); got != "refused: Zq9xW3rT7y" {
 		t.Errorf("CutValues masks the first bytes of a line the text does not go on with: %q", got)
+	}
+	// A line the cut runs through that is the error's own wording is not a
+	// value there.
+	wordingLine := "x9Qz\nyaml: unmarshal errors:\nend"
+	if got := CutValues("400 yaml: unmar", "shal errors:\n  line 4: cannot unmarshal !!str `three` into int", []string{wordingLine}); got != "400 yaml: unmar" {
+		t.Errorf("CutValues masks a line of the error's wording the cut runs through: %q", got)
 	}
 }
 
@@ -658,6 +688,26 @@ func TestValuesWorkGrowsWithTheTextAndTheValue(t *testing.T) {
 	}
 }
 
+// TestValuesWorkGrowsWithTheTextInTheErrorWording masks a long value made of
+// the error's wording in a long text of it within the same bound: whether a
+// run is all wording is told in constant time, not by reading the run, which
+// at every byte of the text would take time in proportion to the text times
+// the value.
+func TestValuesWorkGrowsWithTheTextInTheErrorWording(t *testing.T) {
+	const w = "yaml: unmarshal errors:"
+	text, v := strings.Repeat(w, 20000), strings.Repeat(w, 4000)
+	done := make(chan string, 1)
+	go func() { done <- Values(text, []string{v}) }()
+	select {
+	case got := <-done:
+		if got != text {
+			t.Errorf("the error's own wording is masked: %.80q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("masking a 92 KiB value of the error's wording in 460 KiB of it took more than 5 s")
+	}
+}
+
 // TestRunStartsFollowTheirDefinition checks runStarts, which finds the runs to
 // mask in one pass per form, against trying every run of the text. Texts are
 // built from the values' own pieces over small alphabets, so heads, tails and
@@ -678,6 +728,13 @@ func TestRunStartsFollowTheirDefinition(t *testing.T) {
 		alphabet := alphabets[r.Intn(len(alphabets))]
 		var values []string
 		for range 1 + r.Intn(3) {
+			if r.Intn(4) == 0 {
+				// A run of the wording, so a long value meets it too.
+				w := wording[r.Intn(len(wording))]
+				from := r.Intn(len(w))
+				values = append(values, w[from:from+r.Intn(len(w)-from+1)])
+				continue
+			}
 			values = append(values, word(alphabet, r.Intn(14)))
 		}
 		var b strings.Builder
@@ -719,7 +776,8 @@ func TestRunStartsFollowTheirDefinition(t *testing.T) {
 // runStartsByDefinition is runStarts by trying every run of s that ends at
 // each byte, from the longest. A line of a value of several lines is masked
 // only whole, or as a head at the end of a text cut before after that after
-// goes on with to the whole line.
+// goes on with to the whole line. No run that is all the error's wording is
+// masked, nor a line.
 func runStartsByDefinition(s string, forms, lines []string, cut bool, after string) []int {
 	if len(forms) == 0 && len(lines) == 0 || s == "" {
 		return nil
@@ -740,10 +798,11 @@ func runStartsByDefinition(s string, forms, lines []string, cut bool, after stri
 		for i := range len(s) {
 			for from := max(0, i-len(v)+1); from <= i; from++ {
 				run := s[from : i+1]
-				whole := run == v && (len(run) >= longRun ||
-					standsAlone(text, from, i, v) && !slices.Contains(wording[from:i+1], true))
-				tail := len(run) >= longRun && strings.HasSuffix(v, run)
-				head := strings.HasPrefix(v, run) && (len(run) >= longRun || cut && i == len(s)-1 && runsThrough(s, after, from, v))
+				long := len(run) >= longRun && !allWording(wording, from, i)
+				whole := run == v && (long ||
+					len(run) < longRun && standsAlone(text, from, i, v) && !slices.Contains(wording[from:i+1], true))
+				tail := long && strings.HasSuffix(v, run)
+				head := strings.HasPrefix(v, run) && (long || cut && i == len(s)-1 && runsThrough(s, after, from, v))
 				if whole || tail || head {
 					start[i] = min(start[i], from)
 					found = true
@@ -755,7 +814,8 @@ func runStartsByDefinition(s string, forms, lines []string, cut bool, after stri
 		for i := range len(s) {
 			for from := max(0, i-len(v)+1); from <= i; from++ {
 				run := s[from : i+1]
-				if run == v || cut && i == len(s)-1 && strings.HasPrefix(v, run) && strings.HasPrefix(after, v[len(run):]) {
+				line := run == v || cut && i == len(s)-1 && strings.HasPrefix(v, run) && strings.HasPrefix(after, v[len(run):])
+				if line && !allWording(wording, from, from+len(v)-1) {
 					start[i] = min(start[i], from)
 					found = true
 				}
@@ -770,17 +830,30 @@ func runStartsByDefinition(s string, forms, lines []string, cut bool, after stri
 
 // runsThrough reports whether the head of v at s[from:] runs through the cut
 // between s and after: in the text they make, v goes on past the cut to a
-// head of longRun bytes, or to the whole of a shorter v that is a word of its
-// own there, outside the error's wording.
+// head of longRun bytes or more that is not all the error's wording, or to
+// the whole of a shorter v that is a word of its own there, outside the
+// error's wording.
 func runsThrough(s, after string, from int, v string) bool {
-	if len(s)-from >= len(v) {
-		return false // v ends before the cut
-	}
 	text := s + after
-	if !strings.HasPrefix(text[from:], v[:min(len(v), longRun)]) {
-		return false
+	wording := errorWording(text)
+	// n is how far the text goes on with v from there.
+	n := 0
+	for from+n < len(text) && n < len(v) && text[from+n] == v[n] {
+		n++
 	}
-	return len(v) >= longRun || shortMasked(text, from, from+len(v)-1, v, errorWording(text))
+	if from+n <= len(s) {
+		return false // the head ends before the cut
+	}
+	if len(v) < longRun {
+		return n == len(v) && standsAlone(text, from, from+n-1, v) && !slices.Contains(wording[from:from+n], true)
+	}
+	return n >= longRun && !allWording(wording, from, from+n-1)
+}
+
+// allWording reports whether every byte from from to to is the error's
+// wording, read byte by byte; past the text, none is.
+func allWording(wording []bool, from, to int) bool {
+	return to < len(wording) && !slices.Contains(wording[from:to+1], false)
 }
 
 // TestErrorWording marks the error's own wording, byte by byte, apart from

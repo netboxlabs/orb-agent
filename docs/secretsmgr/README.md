@@ -70,8 +70,8 @@ resolved value as `********`:
   bytes or more wherever it occurs whole, trimmed of the spaces around it, as
   a backend that prints the value line by line quotes it.
 
-A value shorter than 7 bytes is masked only where it is a word of its own, and
-not in the error wording the agent recognises:
+Nothing is masked in the error wording the agent recognises, whatever the
+length of the value:
 
 - the status code in front of an HTTP refusal;
 - the wording of a YAML decoding error: the `yaml: unmarshal errors:` heading,
@@ -79,14 +79,17 @@ not in the error wording the agent recognises:
   type error on a line of its own (`line 4: cannot unmarshal !!str ... into
   int`), apart from the value it quotes.
 
-A short value such as `int` or `line` is masked where such an error quotes it
-and left where it is one of those words, so the error stays readable and
-doesn't show which word the value is. Anywhere else the agent can't tell a
-value from the error's own words, so a short value that is one of them is
-masked there too, which shows which word it is. That includes the rest of a
-YAML syntax error, such as `key` in `yaml: line 3: did not find expected key`.
-Any other run from the middle of a value is left alone, since it is more
-likely the error's own words. The agent then names the fields whose values
+A value such as `int`, `line` or `marshal` is masked where such an error
+quotes it and left where it is one of those words or a run of them, so the
+error stays readable and doesn't show which words the value is. A value
+shorter than 7 bytes is also masked only where it is a word of its own, and
+not where it runs into that wording. Anywhere else the agent can't tell a
+value from the error's own words, so a value that is one of them, or a run of
+them 7 bytes or longer, is masked there too, which shows which words it is.
+That includes the rest of a YAML syntax error, such as `key` in
+`yaml: line 3: did not find expected key`. Any other run from the middle of a
+value is left alone, since it is more likely the error's own words. The agent
+then names the fields whose values
 the error quotes, because the backend's error points at a line of the policy
 as the agent sent it, not at a field you wrote:
 
