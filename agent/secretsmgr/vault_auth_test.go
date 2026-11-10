@@ -50,6 +50,78 @@ func TestNewAuthentication(t *testing.T) {
 	}
 }
 
+// TestNewAuthentication_AMistypedValueIsNamedNotQuoted gives a Vault login a
+// value of the wrong type, as a string for AppRole's wrapping_token. yaml.v3's
+// type error quotes the value, whole when it has 10 characters or less, and
+// it can be a credential put in the wrong field: the error names the field
+// and the type it takes instead.
+func TestNewAuthentication_AMistypedValueIsNamedNotQuoted(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		args   map[string]any
+		quoted []string
+		named  []string
+	}{{
+		name:   "a short string for a bool",
+		args:   map[string]any{"wrapping_token": "cnrye55d"},
+		quoted: []string{"cnrye55d"},
+		named:  []string{"auth_args.wrapping_token: expected a bool"},
+	}, {
+		name:   "a long string for a bool",
+		args:   map[string]any{"wrapping_token": "hvs.CAESIcanarylong0123456789abcdef0123456789abcdef"},
+		quoted: []string{"hvs.CAE"},
+		named:  []string{"auth_args.wrapping_token: expected a bool"},
+	}, {
+		name:   "a number for a bool",
+		args:   map[string]any{"wrapping_token": 31415926},
+		quoted: []string{"31415926"},
+		named:  []string{"auth_args.wrapping_token: expected a bool"},
+	}, {
+		name:   "a list for a string",
+		args:   map[string]any{"mount_path": []any{"cnrmlist"}},
+		quoted: []string{"cnrmlist"},
+		named:  []string{"auth_args.mount_path: expected a string"},
+	}, {
+		name:   "two fields",
+		args:   map[string]any{"wrapping_token": "cnrye55d", "mount_path": map[string]any{"k": "cnrmmap"}},
+		quoted: []string{"cnrye55d", "cnrmmap"},
+		named:  []string{"auth_args.wrapping_token: expected a bool", "auth_args.mount_path: expected a string"},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[string]any{"role_id": "r", "secret_id": "s"}
+			for k, v := range tc.args {
+				args[k] = v
+			}
+			auth, err := newAuthentication("approle", args)
+			assert.Nil(t, auth)
+			if !assert.Error(t, err) {
+				return
+			}
+			for _, value := range tc.quoted {
+				assert.NotContains(t, err.Error(), value, "the error quotes no value")
+			}
+			for _, field := range tc.named {
+				assert.Contains(t, err.Error(), field, "the error names the field and its type")
+			}
+		})
+	}
+}
+
+// TestNewAuthentication_ATypeErrorNoFieldExplainsQuotesNoValue gives a Vault
+// login a value of the wrong type under a YAML merge key, which sets a field
+// the agent cannot trace back to one key: the error still quotes no value.
+func TestNewAuthentication_ATypeErrorNoFieldExplainsQuotesNoValue(t *testing.T) {
+	auth, err := newAuthentication("approle", map[string]any{
+		"role_id": "r", "secret_id": "s",
+		"<<": map[string]any{"wrapping_token": "mrgS3cr3t"},
+	})
+	assert.Nil(t, auth)
+	if assert.Error(t, err) {
+		assert.NotContains(t, err.Error(), "mrgS3cr3t", "the error quotes no value")
+		assert.Contains(t, err.Error(), "a value has the wrong type")
+	}
+}
+
 func TestTokenAuth_Authenticate(t *testing.T) {
 	// Use shared test vault server
 	// If setup failed (e.g., Docker port binding), createTestVault will skip via getTestVaultClient

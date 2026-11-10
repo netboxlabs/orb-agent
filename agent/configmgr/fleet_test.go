@@ -417,8 +417,8 @@ func TestFleetConfigManager_configToSafeString_MasksEveryCredential(t *testing.T
 	}, {
 		// A proxy that asks for basic auth in front of Vault.
 		name:        "vault address with a user and password",
-		credentials: []string{"Pr0xy-pa55word"},
-		kept:        []string{"address: https://proxyuser:********@vault.example.com:8200"},
+		credentials: []string{"proxyuser", "Pr0xy-pa55word"},
+		kept:        []string{"address: https://********@vault.example.com:8200"},
 		configure: func(a *config.OrbAgent) {
 			a.SecretsManager.Sources.Vault.Address = "https://proxyuser:Pr0xy-pa55word@vault.example.com:8200"
 			a.SecretsManager.Sources.Vault.Auth = "token"

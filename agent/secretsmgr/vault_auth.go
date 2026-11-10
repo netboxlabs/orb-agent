@@ -2,7 +2,10 @@ package secretsmgr
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
+	"strings"
 
 	vault "github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/api/auth/approle"
@@ -50,10 +53,63 @@ func newAuthentication(auth string, authArgs map[string]any) (authMethod, error)
 
 	// Unmarshal YAML into the auth structure
 	if err := yaml.Unmarshal(yamlData, authObj); err != nil {
+		var typeErr *yaml.TypeError
+		if errors.As(err, &typeErr) {
+			// yaml.v3 quotes a value it cannot decode, which can be a
+			// credential put in the wrong field: name the field and the type
+			// it takes instead.
+			return nil, fmt.Errorf("failed to unmarshal '%s' auth_args: %s", auth, mistypedArgs(authObj, authArgs))
+		}
 		return nil, fmt.Errorf("failed to unmarshal '%s' auth_args: %w", auth, err)
 	}
 
 	return authObj, nil
+}
+
+// mistypedArgs names each value of authArgs that does not decode into the
+// field of authObj it sets, by the field and the type it takes, never by the
+// value.
+func mistypedArgs(authObj authMethod, authArgs map[string]any) string {
+	var mistyped []string
+	t := reflect.TypeOf(authObj).Elem()
+	for i := range t.NumField() {
+		field := t.Field(i)
+		name, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
+		value, ok := authArgs[name]
+		if !ok {
+			continue
+		}
+		data, err := yaml.Marshal(value)
+		if err == nil {
+			err = yaml.Unmarshal(data, reflect.New(field.Type).Interface())
+		}
+		if err != nil {
+			mistyped = append(mistyped, fmt.Sprintf("auth_args.%s: expected %s", name, typeName(field.Type)))
+		}
+	}
+	if len(mistyped) == 0 {
+		return "a value has the wrong type"
+	}
+	return strings.Join(mistyped, "; ")
+}
+
+// typeName names the type a field of an auth method takes.
+func typeName(t reflect.Type) string {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Bool:
+		return "a bool"
+	case reflect.String:
+		return "a string"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return "a number"
+	default:
+		return "a " + t.Kind().String()
+	}
 }
 
 // AuthToken authenticates against Vault with a token.

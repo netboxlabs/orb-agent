@@ -365,11 +365,12 @@ func TestSensitiveData_AuthArgsMasksAllButTheFieldsNamingNoCredential(t *testing
 	}
 }
 
-// TestSensitiveData_MasksAURLsPassword masks the password of a URL under any
-// name, as a Vault address carries one for a proxy that asks for basic auth,
-// or its user when it has no password, and keeps the rest of the URL and a
-// URL without either.
-func TestSensitiveData_MasksAURLsPassword(t *testing.T) {
+// TestSensitiveData_MasksAURLsUserInfo masks the user and password of a URL
+// under any name, as a Vault address carries them for a proxy that asks for
+// basic auth, together, and keeps the rest of the URL and a URL without
+// either. The user is half of the proxy's login, and the whole of it when the
+// password is empty.
+func TestSensitiveData_MasksAURLsUserInfo(t *testing.T) {
 	redacted := SensitiveData(map[string]any{
 		"address": "https://proxyuser:Pr0xy-pa55word@vault.example.com:8200/v1",
 		"url":     "https://git.example.com/repo.git",
@@ -377,8 +378,8 @@ func TestSensitiveData_MasksAURLsPassword(t *testing.T) {
 		"text":    "not a URL: user:pass@host",
 	}).(map[string]any)
 
-	if redacted["address"] != "https://proxyuser:********@vault.example.com:8200/v1" {
-		t.Errorf("Expected the address's password to be masked, got %v", redacted["address"])
+	if redacted["address"] != "https://********@vault.example.com:8200/v1" {
+		t.Errorf("Expected the address's user and password to be masked, got %v", redacted["address"])
 	}
 	if redacted["user"] != "https://********@vault.example.com" {
 		t.Errorf("Expected a user with no password, which can be a token, to be masked, got %v", redacted["user"])
@@ -392,7 +393,9 @@ func TestSensitiveData_MasksAURLsPassword(t *testing.T) {
 		}
 	}
 	for in, want := range map[string]string{
-		"https://u:p@h": "https://u:********@h",
+		"https://u:p@h": "https://********@h",
+		// An empty password, after which the user is the whole login.
+		"https://u:@h": "https://********@h",
 		// A token given as the user, with no password.
 		"https://ghp_T0ken@github.com/org/repo.git": "https://********@github.com/org/repo.git",
 		// A password with a / ? # % or space that is not escaped, which no
@@ -415,6 +418,15 @@ func TestSensitiveData_MasksAURLsPassword(t *testing.T) {
 		"https:u:s3cret@vault.example.com?x": "https:********@vault.example.com?x",
 		// So is an @ in a path, at the cost of the host it hides.
 		"https://registry.example.com/@scope/pkg": "https://********@scope/pkg",
+		// A URL written without a scheme, from its //, which a parser reads
+		// as a user and a host.
+		"//proxyuser:Pr0xy-pa55word@127.0.0.1:1": "//********@127.0.0.1:1",
+		"//T0ken@vault:8200":                     "//********@vault:8200",
+		"//u:pa/ss@vault:8200":                   "//********@vault:8200",
+		// Even when a :// comes later, in its query or fragment.
+		"//u:p@h/?next=https://x":  "//********@h/?next=https://x",
+		"//u:p@h#https://x":        "//********@h#https://x",
+		"//vault.example.com:8200": "//vault.example.com:8200",
 	} {
 		if got := URL(in); got != want {
 			t.Errorf("URL(%q) = %q, want %q", in, got, want)

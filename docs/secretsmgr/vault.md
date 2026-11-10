@@ -36,8 +36,9 @@ orb:
 The `address` can carry a user and password for a proxy that asks for basic
 auth in front of Vault, as in `https://user:password@vault.example.com:8200`.
 The agent sends them as basic auth on every request. Wherever it logs or
-reports the address, and in the errors of its requests to Vault, the password
-is masked as `********` or left out, as is the user when there is no password.
+reports the address, and in the errors of its requests to Vault, the user and
+the password are masked together as `********`, as in
+`https://********@vault.example.com:8200`, or left out.
 A `/`, `?`, `#`, `%` or space in the user or password must be percent-encoded:
 the agent refuses an address no URL parser reads, without quoting it.
 
@@ -52,6 +53,11 @@ and `service_account_file`, which name no credential, and a `true` or `false`
 such as `wrapping_token`. An AppRole's `role_id` is masked too because, for a
 role that binds no `secret_id`, Vault accepts a login with the `role_id` alone.
 The agent itself still asks for a `secret_id`.
+
+A value of the wrong type in `auth_args`, such as a string for
+`wrapping_token`, stops the agent at start. The error names the field and the
+type it takes, as in `auth_args.wrapping_token: expected a bool`, and not the
+value.
 
 ### Token Authentication
 

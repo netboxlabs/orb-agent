@@ -15,13 +15,13 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
 
-// TestVaultManager_AddressPasswordIsSentButNeverQuoted starts the Vault
+// TestVaultManager_AddressCredentialsAreSentButNeverQuoted starts the Vault
 // manager with an address that carries a user and password, as one does for
 // a proxy that asks for basic auth in front of Vault. Every request still
-// carries them, but no log line or error quotes the password: the Vault
-// client quotes the address it was given in the text of every error it
-// returns.
-func TestVaultManager_AddressPasswordIsSentButNeverQuoted(t *testing.T) {
+// carries them, but no log line or error quotes the user or the password:
+// the Vault client quotes the address it was given in the text of every
+// error it returns.
+func TestVaultManager_AddressCredentialsAreSentButNeverQuoted(t *testing.T) {
 	var sawBasicAuth bool
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
@@ -52,7 +52,9 @@ func TestVaultManager_AddressPasswordIsSentButNeverQuoted(t *testing.T) {
 	assert.Contains(t, err.Error(), "permission denied")
 	assert.NotContains(t, err.Error(), "Pr0xy-pa55word", "the error quotes no password")
 	assert.NotContains(t, logs.String(), "Pr0xy-pa55word", "no log line quotes the password")
-	assert.Contains(t, logs.String(), "proxyuser:********@", "the address is logged with its password masked")
+	assert.NotContains(t, err.Error(), "proxyuser", "the error quotes no user")
+	assert.NotContains(t, logs.String(), "proxyuser", "no log line quotes the user")
+	assert.Contains(t, logs.String(), "://********@", "the address is logged with its user and password masked")
 }
 
 // TestVaultManager_AnAddressNoParserReadsIsRefusedWithoutQuotingIt starts
@@ -87,4 +89,28 @@ func TestVaultManager_AnAddressNoParserReadsIsRefusedWithoutQuotingIt(t *testing
 			assert.NotContains(t, logs.String(), part, "no log line quotes a part of the password")
 		}
 	}
+}
+
+// TestVaultManager_AnAddressWithoutASchemeIsLoggedWithoutItsCredentials
+// starts the Vault manager with an address written from its //, with no
+// scheme. A parser reads its user and password, so the agent takes it, and
+// the Vault client then fails on the missing scheme: the start log line
+// quotes neither the user nor the password.
+func TestVaultManager_AnAddressWithoutASchemeIsLoggedWithoutItsCredentials(t *testing.T) {
+	logs := &bytes.Buffer{}
+	vm := &vaultManager{
+		preLogger: slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		config: config.VaultManager{
+			Address:  "//proxyuser:Pr0xy-pa55word@127.0.0.1:1",
+			Auth:     "token",
+			AuthArgs: map[string]any{"token": "t"},
+		},
+	}
+	err := vm.Start(context.Background())
+	require.Error(t, err)
+	for _, part := range []string{"proxyuser", "Pr0xy-pa55word"} {
+		assert.NotContains(t, err.Error(), part, "the error quotes no credential")
+		assert.NotContains(t, logs.String(), part, "no log line quotes a credential")
+	}
+	assert.Contains(t, logs.String(), "//********@127.0.0.1:1", "the address is logged with its credentials masked")
 }
