@@ -183,9 +183,10 @@ func redactMap(val reflect.Value) any {
 type mapEntry struct{ key, value reflect.Value }
 
 // sortedEntries returns the entries of the map val, in the order of their
-// keys' strings, then of their keys' types, then of their values', for keys
-// written the same. It takes each value as it ranges the map: a key not
-// equal to itself, as a NaN, finds no value when looked up again.
+// keys' strings, then of their keys' types, then of their values' types and
+// strings, for keys written the same. It takes each value as it ranges the
+// map: a key not equal to itself, as a NaN, finds no value when looked up
+// again.
 func sortedEntries(val reflect.Value) []mapEntry {
 	entries := make([]mapEntry, 0, val.Len())
 	iter := val.MapRange()
@@ -197,6 +198,9 @@ func sortedEntries(val reflect.Value) []mapEntry {
 			return c
 		}
 		if c := strings.Compare(fmt.Sprintf("%T", keyValue(a.key)), fmt.Sprintf("%T", keyValue(b.key))); c != 0 {
+			return c
+		}
+		if c := strings.Compare(fmt.Sprintf("%T", keyValue(a.value)), fmt.Sprintf("%T", keyValue(b.value))); c != 0 {
 			return c
 		}
 		return strings.Compare(fmt.Sprintf("%v", keyValue(a.value)), fmt.Sprintf("%v", keyValue(b.value)))

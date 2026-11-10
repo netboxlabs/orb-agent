@@ -670,6 +670,18 @@ func TestSensitiveData_KeepsTheValueOfAKeyNotEqualToItself(t *testing.T) {
 	if !reflect.DeepEqual(redacted["auth_args"], want) {
 		t.Errorf("Expected the NaN keys' values masked, got %v", redacted["auth_args"])
 	}
+
+	// Two NaN keys, whose values print the same, are told apart by their
+	// values' types, the same way at every run.
+	twoNaNs := map[any]any{}
+	twoNaNs[math.NaN()] = 1
+	twoNaNs[math.NaN()] = "1"
+	for range 50 {
+		got := SensitiveData(twoNaNs)
+		if want := map[string]any{"NaN": int64(1), "NaN (2)": "1"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("Expected the NaN keys in the order of their values' types, got %#v", got)
+		}
+	}
 }
 
 // TestSensitiveData_MasksAURLUsedAsAKeyInAuthArgs masks a key of a Vault
