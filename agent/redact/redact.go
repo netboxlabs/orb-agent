@@ -229,6 +229,48 @@ func URL(s string) string {
 	return strings.Replace(masked.String(), "//xxxxx@", "//"+MaskedSecret+"@", 1)
 }
 
+// Endpoint returns s, a value its caller knows is a URL or a host address,
+// as a collector's or a secrets manager's is, with the user info it carries
+// masked as ********. Written from its scheme's :// or from its //, it is
+// masked as URL masks it, but for an empty authority, as gRPC's dns:/// and
+// unix:/// write one, whose third / it keeps. Written without //, a parser
+// reads its user as a scheme, which URL keeps, and a user alone as a host:
+// everything before its last @ is masked. URL can't do so for every string
+// SensitiveData masks, where it would mask the name of an e-mail address too.
+func Endpoint(s string) string {
+	if startsWithScheme(s) {
+		if rest := s[strings.Index(s, "://")+len("://"):]; strings.HasPrefix(rest, "/") {
+			return s[:len(s)-len(rest)+1] + Endpoint(rest[1:])
+		}
+		return URL(s)
+	}
+	if strings.HasPrefix(s, "//") {
+		return URL(s)
+	}
+	at := strings.LastIndex(s, "@")
+	if at < 0 {
+		return s
+	}
+	return MaskedSecret + s[at:]
+}
+
+// startsWithScheme reports whether s starts with a scheme and its ://.
+func startsWithScheme(s string) bool {
+	end := strings.Index(s, "://")
+	if end <= 0 {
+		return false
+	}
+	for i, c := range s[:end] {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case i > 0 && (c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // opaqueURL masks, in a URL written without //, which a parser reads as a
 // scheme and an opaque part, as in https:user:password@host or
 // user:password@host, everything between its scheme and its last @; and, in

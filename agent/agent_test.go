@@ -1235,6 +1235,45 @@ func TestStart_FleetConfig_RewritesOTLPForDegenerateCommonBlocks(t *testing.T) {
 	}
 }
 
+func TestHandBackendsOTLPBridge_LogsAnOverriddenURLWithoutItsCredentials(t *testing.T) {
+	for name, tc := range map[string]struct {
+		grpc, http string
+		masked     []string
+	}{
+		"written from their scheme": {
+			grpc:   "grpc://grpcuser:Grpc-pa55word@collector.example:4317",
+			http:   "https://httpuser:Http-pa55word@collector.example:4318",
+			masked: []string{"grpc://********@collector.example:4317", "https://********@collector.example:4318"},
+		},
+		// A gRPC target is often written as host:port, with no scheme.
+		"written without their //": {
+			grpc:   "grpcuser:Grpc-pa55word@collector.example:4317",
+			http:   "httpuser@collector.example:4318",
+			masked: []string{"********@collector.example:4317", "********@collector.example:4318"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			a := &orbAgent{
+				logger: slog.New(slog.NewTextHandler(&buf, nil)),
+				config: config.Config{OrbAgent: config.OrbAgent{Backends: map[string]any{
+					"common": map[string]any{"otlp": map[string]any{"grpc": tc.grpc, "http": tc.http}},
+				}}},
+			}
+
+			a.handBackendsOTLPBridge(4317, 4318)
+
+			logged := buf.String()
+			for _, credential := range []string{"grpcuser", "Grpc-pa55word", "httpuser", "Http-pa55word"} {
+				assert.NotContains(t, logged, credential)
+			}
+			for _, m := range tc.masked {
+				assert.Contains(t, logged, m)
+			}
+		})
+	}
+}
+
 func TestStart_FleetConfig_RejectsUnusablePorts(t *testing.T) {
 	// Backends dial the configured port on localhost, so an ephemeral (0) or
 	// out-of-range port must fail start-up loudly instead of leaving pktvisor

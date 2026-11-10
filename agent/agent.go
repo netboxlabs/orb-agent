@@ -443,11 +443,13 @@ func (a *orbAgent) handBackendsOTLPBridge(grpcPort, httpPort int) {
 		otlpSection = map[string]any{}
 		commonMap["otlp"] = otlpSection
 	}
+	// A collector URL can carry a login, as user:password@host, with or
+	// without a scheme: it is logged with its user info masked.
 	if grpcURL, _ := otlpSection["grpc"].(string); grpcURL != "" && grpcURL != otlpBridgeEndpoint {
-		a.logger.Warn("Overriding OTLP gRPC URL for fleet config manager", "url", grpcURL)
+		a.logger.Warn("Overriding OTLP gRPC URL for fleet config manager", "url", redact.Endpoint(grpcURL))
 	}
 	if httpURL, _ := otlpSection["http"].(string); httpURL != "" && httpURL != otlpBridgeHTTPEndpoint {
-		a.logger.Warn("Overriding OTLP HTTP URL for fleet config manager", "url", httpURL)
+		a.logger.Warn("Overriding OTLP HTTP URL for fleet config manager", "url", redact.Endpoint(httpURL))
 	}
 	otlpSection["grpc"] = otlpBridgeEndpoint
 	otlpSection["http"] = otlpBridgeHTTPEndpoint
