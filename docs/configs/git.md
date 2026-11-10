@@ -40,6 +40,7 @@ orb:
         password: ${GIT_TOKEN}
         skip_tls: false  # optional; set true for self-signed certificates
 ```
+A password or token can also be written in the URL itself, as in `https://git-user:<token>@host/repo.git`, `https://<token>:x-oauth-basic@github.com/org/repo.git` or `https://<token>@host/repo.git`. The agent masks the URL's user and password together, as `https://********@host/repo.git`, wherever it logs the URL or an error that quotes it. A `/`, `?`, `#` or `%` in the user or the password must be percent-encoded (`%2F`, `%3F`, `%23`, `%25`), and a URL that carries a user or password needs its scheme, as in `https://`. Without that, the credential is read as the host or the port, so the agent refuses the URL at startup, with an error that quotes it masked. `${GIT_TOKEN}` is expanded only as the whole value of `url`, not inside it. A URL with an `@` in its path is logged with everything between its `//` and that `@` masked: the agent cannot tell that `@` from one that ends a token holding a `/`. `auth: basic` with `password: ${GIT_TOKEN}` keeps the token out of the URL.
 
 **SSH authentication** (private key):
 ```yaml
@@ -87,7 +88,7 @@ See [GitHub App Authentication](#github-app-authentication) below for how to cre
 | skip_tls | bool | no | skip TLS certificate verification when connecting to the repository (default: false). Useful for self-signed or private CA certificates |
 | github_app.client_id | string | yes, when auth is 'github_app' | the GitHub App's Client ID (preferred) or its numeric App ID |
 | github_app.installation_id | string | yes, when auth is 'github_app' | the numeric id of the app's installation on the account that owns the repository |
-| github_app.private_key | string | yes, when auth is 'github_app' | the path to the app's `.pem` private key, or the PEM content itself |
+| github_app.private_key | string | yes, when auth is 'github_app' | the path to the app's `.pem` private key, or the whole PEM document, with its `-----BEGIN` line |
 
 ## SSH Authentication
 
@@ -187,6 +188,8 @@ environment variable or a secrets manager without ever being written to disk:
           # private_key: ${vault://secret/github-app#pem}
 ```
 
+Content given this way must be the whole PEM document, with its `-----BEGIN` and `-----END` lines. A value without a `-----BEGIN` line is read as a path. When nothing is there, the error quotes the value only if it ends in `.pem` or `.key`, as a path does and key material never does; otherwise it says only why the value could not be read.
+
 Both PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`, what GitHub issues) and PKCS#8
 (`-----BEGIN PRIVATE KEY-----`) are accepted. Passphrase-protected keys are not; decrypt first with
 `openssl rsa -in key.pem -out key-decrypted.pem`.
@@ -208,6 +211,7 @@ automatically once fewer than five minutes of validity remain. There is nothing 
 | `GitHub refused the token request (HTTP 403…)` | The app is suspended, blocked by an org policy, or rate limited. |
 | Clone fails with 404 after a successful token mint | The app is installed on the account but the policy repo was not selected during installation. |
 | `holds an OpenSSH key, not a GitHub App key` | `private_key` points at an SSH key instead of the app's `.pem`. |
+| `failed to read private_key: it has no -----BEGIN line` | `private_key` is neither the path of the app's `.pem` nor the whole PEM document, for example key content that lost its `-----BEGIN` line on its way into an environment variable or a secret. |
 
 > **Note:** `skip_tls: true` also disables TLS verification for the api.github.com token exchange, not
 > just for the git connection.

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/go-co-op/gocron/v2"
 	gitv5 "github.com/go-git/go-git/v5"
@@ -24,6 +26,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
 var _ Manager = (*gitConfigManager)(nil)
@@ -69,6 +72,82 @@ func (gc *gitConfigManager) annotateAuthError(err error) error {
 	}
 	if mintErr := gc.githubApp.lastError(); mintErr != nil {
 		return fmt.Errorf("%w (github_app token refresh also failed: %v)", err, mintErr)
+	}
+	return err
+}
+
+// requireReadableUserInfo refuses a URL whose credential no parser reads as
+// user info, but as a host or a port, which go-git and git would look up and
+// quote in their errors: user info that holds an unescaped / ? or #, or a %
+// that starts no escape, and user info in a URL with no scheme. Such a URL
+// cannot reach the repository. The error masks all of it before its last @.
+// An @ in a path is not refused: it is not user info. Neither is a URL Go
+// cannot parse for another reason: system git may take it, and go-git's
+// error names the cause.
+func requireReadableUserInfo(rawURL string) error {
+	if !strings.Contains(rawURL, "@") {
+		return nil
+	}
+	var start int
+	switch scheme := strings.Index(rawURL, "://"); {
+	case scheme >= 0:
+		start = scheme + len("://")
+		if !userInfoSpills(rawURL, authority(rawURL[start:])) {
+			return nil
+		}
+	case strings.HasPrefix(rawURL, "//"):
+		start = len("//")
+		if !strings.Contains(authority(rawURL[start:]), "@") {
+			return nil
+		}
+	default:
+		// An scp-like URL, user@host:path, has no : before its @.
+		head, _, _ := strings.Cut(rawURL, "/")
+		if at := strings.LastIndex(head, "@"); at < 0 || !strings.Contains(head[:at], ":") {
+			return nil
+		}
+	}
+	masked := rawURL[:start] + redact.MaskedSecret + rawURL[strings.LastIndex(rawURL, "@"):]
+	return fmt.Errorf("url %q: its credential is not read as user info; percent-encode each / ? # or %% "+
+		"in its user and password, and give it a scheme, as in https://", masked)
+}
+
+// userInfoSpills reports whether the user info of rawURL, a URL with a scheme
+// and the given authority, is read as part of something else.
+func userInfoSpills(rawURL, authority string) bool {
+	u, err := url.Parse(rawURL)
+	var escapeErr url.EscapeError
+	switch {
+	case err == nil:
+		return u.User == nil && strings.Contains(u.RawQuery+u.Fragment, "@")
+	case errors.As(err, &escapeErr):
+		at := strings.LastIndex(authority, "@")
+		return at >= 0 && strings.Contains(authority[:at], string(escapeErr))
+	default:
+		// The @ is past the authority: the credential is read as its host,
+		// or as a port.
+		return !strings.Contains(authority, "@")
+	}
+}
+
+// authority returns what s, a URL from after its //, holds before its path,
+// query or fragment.
+func authority(s string) string {
+	if end := strings.IndexAny(s, "/?#"); end >= 0 {
+		return s[:end]
+	}
+	return s
+}
+
+// maskURLIn returns err with the user info of the repository URL masked
+// wherever its message writes the URL: go-git's errors write the URL of the
+// request they failed, and git's write the URL it asks a password for.
+func (gc *gitConfigManager) maskURLIn(err error) error {
+	if err == nil {
+		return nil
+	}
+	if msg := redact.URLIn(err.Error(), gc.config.URL); msg != err.Error() {
+		return errors.New(msg)
 	}
 	return err
 }
@@ -251,7 +330,7 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 	if gc.tempDir != "" {
 		// Azure DevOps fallback: use system git
 		if err := gc.fetchWithSystemGit(); err != nil {
-			gc.logger.Error("Failed to fetch latest changes", "error", err)
+			gc.logger.Error("Failed to fetch latest changes", "error", gc.maskURLIn(err))
 			return
 		}
 	} else {
@@ -262,7 +341,7 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 			RefSpecs:        []gitconfig.RefSpec{"refs/heads/*:refs/heads/*"},
 		})
 		if err != nil && err != gitv5.NoErrAlreadyUpToDate {
-			gc.logger.Error("Failed to fetch latest changes", "error", gc.annotateAuthError(err))
+			gc.logger.Error("Failed to fetch latest changes", "error", gc.maskURLIn(gc.annotateAuthError(err)))
 			return
 		}
 	}
@@ -379,7 +458,13 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 	}
 }
 
+// Start clones the repository and applies the policies its selector.yaml
+// matches. Its error masks the user info of the repository URL.
 func (gc *gitConfigManager) Start(ctx context.Context, cfg config.Config, backends map[string]backend.Backend) error {
+	return gc.maskURLIn(gc.start(ctx, cfg, backends))
+}
+
+func (gc *gitConfigManager) start(ctx context.Context, cfg config.Config, backends map[string]backend.Backend) error {
 	var err error
 	var startOK bool
 	gc.version = 1
@@ -390,6 +475,9 @@ func (gc *gitConfigManager) Start(ctx context.Context, cfg config.Config, backen
 	}
 	gc.config.URL, err = config.ResolveEnv(gc.config.URL)
 	if err != nil {
+		return err
+	}
+	if err = requireReadableUserInfo(gc.config.URL); err != nil {
 		return err
 	}
 
@@ -440,7 +528,7 @@ func (gc *gitConfigManager) Start(ctx context.Context, cfg config.Config, backen
 	var branchName string
 
 	if IsAzureDevOpsURL(gc.config.URL) {
-		gc.logger.Info("Azure DevOps URL detected, using system git fallback", "url", gc.config.URL)
+		gc.logger.Info("Azure DevOps URL detected, using system git fallback", "url", redact.URL(gc.config.URL))
 		branchName = gc.config.Branch // may be empty; cloneWithSystemGit handles that
 
 		var dir string
@@ -516,7 +604,7 @@ func (gc *gitConfigManager) Start(ctx context.Context, cfg config.Config, backen
 			}
 		}
 
-		gc.logger.Info("cloning repository", "url", gc.config.URL, "branch", branchName)
+		gc.logger.Info("cloning repository", "url", redact.URL(gc.config.URL), "branch", branchName)
 
 		// Now clone the repository with the determined branch
 		gc.repo, err = gitv5.Clone(memory.NewStorage(), nil, &gitv5.CloneOptions{
