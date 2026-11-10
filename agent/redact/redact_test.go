@@ -574,6 +574,9 @@ func TestURL_ShowsNoCredentialNearWhatLooksLikeAReferenceOrADigest(t *testing.T)
 		// A ${ whose body holds a URL with a user info in its authority.
 		"${vault://kv/a/https://u:S3cret@h}",
 		"${cyberark://Other://u:S3cret@Safe/Object}",
+		// A password with an unescaped / or ? before the @.
+		"${vault://kv/a/https://u:S3cret/x@host}",
+		"${vault://kv/a/https://u:S3cret?x@host}",
 		"S3cret@" + testDigest,
 	} {
 		if got := URL(in); strings.Contains(got, "S3cret") {
@@ -609,7 +612,10 @@ func TestURL_KeepsAReferenceWithAnAtSignAsWritten(t *testing.T) {
 		"${vault://secret/path/field,@name}": "${vault://secret/path/field,@name}",
 		// CyberArk's qualified form, whose AppID can hold a :, as Other:.
 		"${cyberark://Other://Safe/Object@Field}": "${cyberark://Other://Safe/Object@Field}",
-		"${vault://secret/path/a b@c}":            "${vault://secret/path/a b@c}",
+		// Its Safe, Object and Field can hold a separator.
+		"${cyberark://Other://Safe/DB Account@Field}": "${cyberark://Other://Safe/DB Account@Field}",
+		"${cyberark://Other://Safe/a,b;c@Field}":      "${cyberark://Other://Safe/a,b;c@Field}",
+		"${vault://secret/path/a b@c}":                "${vault://secret/path/a b@c}",
 		// Read as one URL, as before, from the reference's :// to the last @:
 		// what follows the reference is masked up to that @.
 		"${vault://kv/f;x@y} https://u:p@h": "${vault://kv/f;x@y}********@h",

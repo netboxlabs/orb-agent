@@ -68,10 +68,11 @@ a password with a space, the user is kept. Kept as written are an e-mail
 address written alone, as `ops@example.com`, a secret reference, whatever
 its path or field holds but a `}`, and a URL with a `/` before the `:` of its
 user and password, which git reads as a local path. A `${vault://...}` whose
-body holds a URL with a user and a password, or a `://` and a separator, as
-one that no `}` closes before a URL takes in, is no reference, and is masked
-as the rest of the text is; a `://` alone, as in CyberArk's
-`${cyberark://AppID://Safe/Object}`, is kept. An image with a digest, as
+body holds a URL with a user info, one with a `:` or an `@` between its `://`
+and its first `/`, or a `user:password@` word, as one that no `}` closes
+before a URL takes in, is no reference, and is masked as the rest of the text
+is. Another `://` is kept, as in CyberArk's
+`${cyberark://AppID://Safe/Object}`, whatever its names hold. An image with a digest, as
 `img:tag@sha256:...`, is masked before its `@` as a user would be, since
 nothing tells it from git's `user@host:path`, unless a `/` comes before its
 first `:`, as in `ghcr.io/org/img:tag@sha256:...`. The configuration the agent reports is the one as

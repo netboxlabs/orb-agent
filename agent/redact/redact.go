@@ -438,22 +438,20 @@ func references(s string) [][]int {
 }
 
 // holdsCredential reports whether body, a reference's, holds a URL with a
-// user info: a :// and a separator, as a list of URLs does; a URL whose
-// authority, before its first / ? or #, holds an @; or a word written
-// without // that holds a user and a password before its @. A reference can
-// hold a :// otherwise, as CyberArk's AppID//Safe/Object does for an AppID
-// that ends with a :.
+// user info: a URL whose authority, what follows its :// up to its first
+// / ? # or separator, holds an @, or a : as a user and a password do, even
+// one whose password holds a / that ends the authority early; or a word
+// written without // that holds a user and a password before its @. A
+// reference can hold a :// otherwise, as CyberArk's AppID//Safe/Object does
+// for an AppID that ends with a :, whose Safe holds neither.
 func holdsCredential(body string) bool {
-	if strings.Contains(body, "://") && strings.ContainsAny(body, urlSeparators) {
-		return true
-	}
 	for i := strings.Index(body, "://"); i >= 0; {
 		j := i + len("://")
-		for j < len(body) && strings.IndexByte("/?#@", body[j]) < 0 && !strings.HasPrefix(body[j:], "://") {
+		for j < len(body) && strings.IndexByte("/?#", body[j]) < 0 && strings.IndexByte(urlSeparators, body[j]) < 0 && !strings.HasPrefix(body[j:], "://") {
+			if body[j] == '@' || body[j] == ':' {
+				return true
+			}
 			j++
-		}
-		if j < len(body) && body[j] == '@' {
-			return true
 		}
 		next := strings.Index(body[j:], "://")
 		if next < 0 {
