@@ -2,6 +2,7 @@ package redact
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -628,6 +629,23 @@ func TestSensitiveData_KeepsEveryKeyMaskedIntoAnother(t *testing.T) {
 		if want := map[string]any{"1": "int", "1 (2)": "string"}; !reflect.DeepEqual(mixed, want) {
 			t.Fatalf("Expected keys written the same kept in the order of their types, got %v", mixed)
 		}
+	}
+}
+
+// TestSensitiveData_KeepsTheValueOfAKeyNotEqualToItself keeps the value of a
+// NaN key, which YAML decodes .nan into and which no lookup finds again.
+func TestSensitiveData_KeepsTheValueOfAKeyNotEqualToItself(t *testing.T) {
+	redacted := SensitiveData(map[string]any{
+		"plain":     map[any]any{math.NaN(): "x"},
+		"auth_args": map[any]any{math.NaN(): "s3cret", "role": map[any]any{math.NaN(): "s3cret"}},
+	}).(map[string]any)
+
+	if want := map[string]any{"NaN": "x"}; !reflect.DeepEqual(redacted["plain"], want) {
+		t.Errorf("Expected the NaN key's value kept, got %v", redacted["plain"])
+	}
+	want := map[string]any{"NaN": MaskedSecret, "role": map[string]any{"NaN": MaskedSecret}}
+	if !reflect.DeepEqual(redacted["auth_args"], want) {
+		t.Errorf("Expected the NaN keys' values masked, got %v", redacted["auth_args"])
 	}
 }
 

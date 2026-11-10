@@ -170,29 +170,42 @@ func redactMap(val reflect.Value) any {
 	}
 
 	result := make(map[string]any, val.Len())
-	for _, key := range sortedKeys(val) {
-		keyStr := mapKey(key)
+	for _, entry := range sortedEntries(val) {
+		keyStr := mapKey(entry.key)
 		// Redact the value, passing the field name for sensitive field detection
-		putKey(result, keyStr, redactValue(val.MapIndex(key), keyStr))
+		putKey(result, keyStr, redactValue(entry.value, keyStr))
 	}
 
 	return result
 }
 
-// sortedKeys returns the keys of the map val, in the order of their strings,
-// and of their types for keys written the same.
-func sortedKeys(val reflect.Value) []reflect.Value {
-	keys := val.MapKeys()
-	slices.SortFunc(keys, func(a, b reflect.Value) int {
-		if c := strings.Compare(mapKey(a), mapKey(b)); c != 0 {
+// mapEntry is a key of a map and its value.
+type mapEntry struct{ key, value reflect.Value }
+
+// sortedEntries returns the entries of the map val, in the order of their
+// keys' strings, then of their keys' types, then of their values', for keys
+// written the same. It takes each value as it ranges the map: a key not
+// equal to itself, as a NaN, finds no value when looked up again.
+func sortedEntries(val reflect.Value) []mapEntry {
+	entries := make([]mapEntry, 0, val.Len())
+	iter := val.MapRange()
+	for iter.Next() {
+		entries = append(entries, mapEntry{iter.Key(), iter.Value()})
+	}
+	slices.SortFunc(entries, func(a, b mapEntry) int {
+		if c := strings.Compare(mapKey(a.key), mapKey(b.key)); c != 0 {
 			return c
 		}
-		return strings.Compare(fmt.Sprintf("%T", keyValue(a)), fmt.Sprintf("%T", keyValue(b)))
+		if c := strings.Compare(fmt.Sprintf("%T", keyValue(a.key)), fmt.Sprintf("%T", keyValue(b.key))); c != 0 {
+			return c
+		}
+		return strings.Compare(fmt.Sprintf("%v", keyValue(a.value)), fmt.Sprintf("%v", keyValue(b.value)))
 	})
-	return keys
+	return entries
 }
 
-// keyValue returns what the map key key holds, behind its interface.
+// keyValue returns what key, a map's key or value, holds behind its
+// interface.
 func keyValue(key reflect.Value) any {
 	for key.Kind() == reflect.Interface && !key.IsNil() {
 		key = key.Elem()
@@ -514,13 +527,13 @@ func redactContainer(val reflect.Value, keep []string) any {
 	}
 
 	result := make(map[string]any, val.Len())
-	for _, key := range sortedKeys(val) {
-		keyStr := mapKey(key)
+	for _, entry := range sortedEntries(val) {
+		keyStr := mapKey(entry.key)
 		// A login reads a field under its exact name, and as a string.
-		if slices.Contains(keep, keyStr) && isString(val.MapIndex(key)) {
-			putKey(result, keyStr, redactValue(val.MapIndex(key), keyStr))
+		if slices.Contains(keep, keyStr) && isString(entry.value) {
+			putKey(result, keyStr, redactValue(entry.value, keyStr))
 		} else {
-			putKey(result, keyStr, maskLeaves(val.MapIndex(key)))
+			putKey(result, keyStr, maskLeaves(entry.value))
 		}
 	}
 
@@ -552,8 +565,8 @@ func maskLeaves(val reflect.Value) any {
 			return nil
 		}
 		result := make(map[string]any, val.Len())
-		for _, key := range sortedKeys(val) {
-			putKey(result, mapKey(key), maskLeaves(val.MapIndex(key)))
+		for _, entry := range sortedEntries(val) {
+			putKey(result, mapKey(entry.key), maskLeaves(entry.value))
 		}
 		return result
 	case reflect.Slice, reflect.Array:
