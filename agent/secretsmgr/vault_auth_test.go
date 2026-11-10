@@ -107,6 +107,21 @@ func TestNewAuthentication_AMistypedValueIsNamedNotQuoted(t *testing.T) {
 	}
 }
 
+// TestNewAuthentication_ATypeErrorNoFieldExplainsQuotesNoValue gives a Vault
+// login a value of the wrong type under a YAML merge key, which sets a field
+// the agent cannot trace back to one key: the error still quotes no value.
+func TestNewAuthentication_ATypeErrorNoFieldExplainsQuotesNoValue(t *testing.T) {
+	auth, err := newAuthentication("approle", map[string]any{
+		"role_id": "r", "secret_id": "s",
+		"<<": map[string]any{"wrapping_token": "mrgS3cr3t"},
+	})
+	assert.Nil(t, auth)
+	if assert.Error(t, err) {
+		assert.NotContains(t, err.Error(), "mrgS3cr3t", "the error quotes no value")
+		assert.Contains(t, err.Error(), "a value has the wrong type")
+	}
+}
+
 func TestTokenAuth_Authenticate(t *testing.T) {
 	// Use shared test vault server
 	// If setup failed (e.g., Docker port binding), createTestVault will skip via getTestVaultClient

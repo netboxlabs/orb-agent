@@ -418,6 +418,15 @@ func TestSensitiveData_MasksAURLsUserInfo(t *testing.T) {
 		"https:u:s3cret@vault.example.com?x": "https:********@vault.example.com?x",
 		// So is an @ in a path, at the cost of the host it hides.
 		"https://registry.example.com/@scope/pkg": "https://********@scope/pkg",
+		// A URL written without a scheme, from its //, which a parser reads
+		// as a user and a host.
+		"//proxyuser:Pr0xy-pa55word@127.0.0.1:1": "//********@127.0.0.1:1",
+		"//T0ken@vault:8200":                     "//********@vault:8200",
+		"//u:pa/ss@vault:8200":                   "//********@vault:8200",
+		// Even when a :// comes later, in its query or fragment.
+		"//u:p@h/?next=https://x":  "//********@h/?next=https://x",
+		"//u:p@h#https://x":        "//********@h#https://x",
+		"//vault.example.com:8200": "//vault.example.com:8200",
 	} {
 		if got := URL(in); got != want {
 			t.Errorf("URL(%q) = %q, want %q", in, got, want)

@@ -53,7 +53,7 @@ name, role and service account file, are masked as `********` wherever the
 agent reports or logs its configuration, as are the user and the password of
 a URL in it, such as a Vault address's, together. A URL with an
 `@` that a parser does not read as the end of its user info, such as one in
-its path, is masked between `://` and that `@`. The configuration the agent reports is the one as
+its path, is masked between the `//` before its host and that `@`. The configuration the agent reports is the one as
 written: a secret reference in it, such as one in `backends`, is reported as
 the reference, never as the value it resolves to.
 

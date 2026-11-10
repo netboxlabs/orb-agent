@@ -90,3 +90,27 @@ func TestVaultManager_AnAddressNoParserReadsIsRefusedWithoutQuotingIt(t *testing
 		}
 	}
 }
+
+// TestVaultManager_AnAddressWithoutASchemeIsLoggedWithoutItsCredentials
+// starts the Vault manager with an address written from its //, with no
+// scheme. A parser reads its user and password, so the agent takes it, and
+// the Vault client then fails on the missing scheme: the start log line
+// quotes neither the user nor the password.
+func TestVaultManager_AnAddressWithoutASchemeIsLoggedWithoutItsCredentials(t *testing.T) {
+	logs := &bytes.Buffer{}
+	vm := &vaultManager{
+		preLogger: slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		config: config.VaultManager{
+			Address:  "//proxyuser:Pr0xy-pa55word@127.0.0.1:1",
+			Auth:     "token",
+			AuthArgs: map[string]any{"token": "t"},
+		},
+	}
+	err := vm.Start(context.Background())
+	require.Error(t, err)
+	for _, part := range []string{"proxyuser", "Pr0xy-pa55word"} {
+		assert.NotContains(t, err.Error(), part, "the error quotes no credential")
+		assert.NotContains(t, logs.String(), part, "no log line quotes a credential")
+	}
+	assert.Contains(t, logs.String(), "//********@127.0.0.1:1", "the address is logged with its credentials masked")
+}
