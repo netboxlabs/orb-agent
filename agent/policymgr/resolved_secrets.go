@@ -14,8 +14,22 @@ import (
 
 // removedGrace is how long the values of a policy removed from a backend, or
 // moved to another, keep masking the backend's output: a line the backend
-// printed about the policy before can still be waiting to be relayed.
+// printed about the policy before can still be waiting to be relayed. A
+// backend can also go on with a run of the policy it started before:
+// device-discovery stops a removed policy without waiting for its runs, and
+// a run waits on each device for up to its timeout, a minute by default, per
+// call. So the values keep masking for removedGrace after the backend last
+// reported a run of the policy still running, up to removedRunCap after the
+// removal.
 const removedGrace = time.Minute
+
+// removedRunCap bounds how long a removed policy's values keep masking its
+// backend's output while the backend reports a run of it still running: a
+// run that never ends, or a backend that never reports it ended, keeps them
+// in memory no longer. An hour is ten times a device-discovery run of its
+// usual calls, each waiting for its whole default timeout; the other
+// discovery backends end a removed policy's runs when they remove it.
+const removedRunCap = time.Hour
 
 // resolvedSecrets holds, by policy ID, the values the policy's secret
 // references resolved to and the backend it runs on. The agent resolves a
@@ -27,12 +41,20 @@ type resolvedSecrets struct {
 	mu       sync.Mutex
 	byPolicy map[string]policySecrets
 	// departed holds the values of the policies removed from a backend, or
-	// moved to another, less than removedGrace ago.
+	// moved to another, that still mask its output (see removedGrace).
 	departed []departedSecrets
 	// maskers holds, by backend, what masks its output, built from its
 	// policies' values when a line needs it after they changed.
 	maskers map[string]*redact.Masker
 	now     func() time.Time
+	// afterFunc sets a timer that calls f after d, as time.AfterFunc does.
+	afterFunc func(d time.Duration, f func()) pruneTimer
+}
+
+// pruneTimer is a timer that has departed values pruned (see prune).
+type pruneTimer interface {
+	Reset(d time.Duration) bool
+	Stop() bool
 }
 
 type policySecrets struct {
@@ -62,6 +84,9 @@ type policySecrets struct {
 	// masks masks the runs the backend reports for the policy, built from
 	// forRuns when one is first stored after they changed.
 	masks *refusalMasks
+	// names are those the backend has known the policy by: it reports the
+	// policy's runs under them, after the policy departs too.
+	names []string
 }
 
 // both returns the values of the policy's last two resolutions, each once.
@@ -92,32 +117,42 @@ func (ps policySecrets) forRuns() []resolvedValue {
 var noSecrets = newRefusalMasks(nil)
 
 type departedSecrets struct {
-	backend string
-	values  []resolvedValue
-	at      time.Time
+	policyID, backend string
+	// names are those the backend has known the policy by (see
+	// policySecrets), and those it had when it was removed.
+	names  []string
+	values []resolvedValue
+	// at is when the policy departed, and seen when the backend last
+	// reported a run of it still running, or at.
+	at, seen time.Time
+	// prune drops the values once they are due.
+	prune pruneTimer
 }
 
 func newResolvedSecrets() *resolvedSecrets {
 	return &resolvedSecrets{
-		byPolicy: make(map[string]policySecrets),
-		maskers:  make(map[string]*redact.Masker),
-		now:      time.Now,
+		byPolicy:  make(map[string]policySecrets),
+		maskers:   make(map[string]*redact.Masker),
+		now:       time.Now,
+		afterFunc: func(d time.Duration, f func()) pruneTimer { return time.AfterFunc(d, f) },
 	}
 }
 
 // remember records the values a policy's references resolved to for an apply
-// to the named backend, before the agent applies it. A policy without secret
-// references is recorded too, for since.
-func (s *resolvedSecrets) remember(policyID, backendName string, resolved []resolvedValue) {
+// to the named backend, before the agent applies it, and the names the
+// backend knows the policy by with it (see knownNames). A policy without
+// secret references is recorded too, for since.
+func (s *resolvedSecrets) remember(policyID, backendName string, resolved []resolvedValue, names ...string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked()
 	ps, ok := s.byPolicy[policyID]
 	if ok && ps.backend != backendName {
-		s.departLocked(ps)
+		s.departLocked(policyID, ps)
 		ps, ok = policySecrets{}, false
 	}
 	ps.backend = backendName
+	ps.names = appendNames(ps.names, names)
 	if !ok || !sameValues(ps.values, resolved) {
 		now := s.now()
 		ps.since = now
@@ -148,42 +183,122 @@ func sameValues(a, b []resolvedValue) bool {
 	return slices.Equal(a, b)
 }
 
-// removed records that a policy was removed. Its values keep masking its
-// backend's output for removedGrace, and are dropped then.
-func (s *resolvedSecrets) removed(policyID string) {
+// removed records that the policy policyID, which the backends knew by names,
+// was removed. Its values keep masking its backend's output for removedGrace,
+// or longer while the backend reports a run of it still running under one of
+// its names (see reported), and are dropped then. A backend it moved from
+// before reports its runs under those names too.
+func (s *resolvedSecrets) removed(policyID string, names ...string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ps, ok := s.byPolicy[policyID]; ok {
 		delete(s.byPolicy, policyID)
-		s.departLocked(ps)
+		s.departLocked(policyID, ps)
+	}
+	for i := range s.departed {
+		if d := &s.departed[i]; d.policyID == policyID {
+			d.names = appendNames(d.names, names)
+		}
 	}
 }
 
 // departLocked keeps a policy's values masking the output of the backend it
 // ran on for removedGrace, and has them dropped then, whatever else happens
-// before. The caller holds s.mu.
-func (s *resolvedSecrets) departLocked(ps policySecrets) {
-	s.departed = append(s.departed, departedSecrets{backend: ps.backend, values: ps.both(), at: s.now()})
-	time.AfterFunc(removedGrace, s.prune)
+// before, unless reported keeps them. The caller holds s.mu.
+func (s *resolvedSecrets) departLocked(policyID string, ps policySecrets) {
+	now := s.now()
+	s.departed = append(s.departed, departedSecrets{
+		policyID: policyID, backend: ps.backend, names: slices.Clone(ps.names), values: ps.both(),
+		at: now, seen: now, prune: s.afterFunc(removedGrace, s.prune),
+	})
 }
 
+// appendNames appends to names those of more it does not hold yet.
+func appendNames(names, more []string) []string {
+	for _, n := range more {
+		if n != "" && !slices.Contains(names, n) {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+// knownNames returns the names a backend knows a policy by as the agent
+// stores it: its name, and the one before a rename the backend has not
+// applied yet.
+func knownNames(pd policies.PolicyData) []string {
+	if pd.PreviousPolicyData != nil {
+		return []string{pd.Name, pd.PreviousPolicyData.Name}
+	}
+	return []string{pd.Name}
+}
+
+// reported records the runs a backend reported under the name policyName,
+// which maps to the policy policyID, or to none when policyID is empty. When
+// one of them still runs, the values of that policy where it departed from,
+// and of every policy that departed the backend knew by that name, keep
+// masking the backend's output for removedGrace more, up to removedRunCap
+// after it departed: the lines the run prints quote them. A backend reports
+// the runs of every policy it knew by a name under it, so a removed policy's
+// run is told apart from those of a policy that holds its name by now by
+// nothing: its values are kept for both, which can mask more of the output
+// than its own run's lines, never less.
+func (s *resolvedSecrets) reported(policyID, policyName string, runs []policies.RunData) {
+	if !slices.ContainsFunc(runs, func(r policies.RunData) bool { return !policies.IsTerminalRunStatus(r.Status) }) {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked()
+	now := s.now()
+	for i := range s.departed {
+		d := &s.departed[i]
+		if policyID != "" && d.policyID == policyID || slices.Contains(d.names, policyName) {
+			d.seen = now
+		}
+	}
+}
+
+// prune drops the departed values that are due, when the timer of one of
+// them fires, and has each of the others' fire when they are due: a run can
+// keep them past the grace they departed with. Those are due after now, so
+// no timer is set to fire at once.
 func (s *resolvedSecrets) prune() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked()
+	now := s.now()
+	for _, d := range s.departed {
+		d.prune.Reset(d.due().Sub(now))
+	}
 }
 
-// pruneLocked drops the departed values older than removedGrace. The caller
-// holds s.mu.
+// pruneLocked drops the departed values that are due. The caller holds s.mu.
 func (s *resolvedSecrets) pruneLocked() {
 	now := s.now()
 	s.departed = slices.DeleteFunc(s.departed, func(d departedSecrets) bool {
-		if now.Sub(d.at) <= removedGrace {
+		if now.Before(d.due()) {
 			return false
 		}
+		d.prune.Stop()
 		delete(s.maskers, d.backend)
 		return true
 	})
+}
+
+// due returns when the values are dropped: removedGrace after the backend
+// last reported a run of the policy running, or after it departed, and
+// removedRunCap after it departed at the latest.
+func (d departedSecrets) due() time.Time {
+	return earliest(d.seen.Add(removedGrace), d.at.Add(removedRunCap))
+}
+
+// earliest returns the earlier of a and b.
+func earliest(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
 }
 
 // of returns the values kept for a policy the agent runs.
@@ -225,7 +340,7 @@ func (s *resolvedSecrets) current(policyID string, runs []policies.RunData) []po
 }
 
 // maskOutput masks, in a line a backend's process printed, the values of
-// every policy the backend runs, or ran less than removedGrace ago: a line
+// every policy the backend runs, or ran lately (see removedGrace): a line
 // names no policy.
 func (s *resolvedSecrets) maskOutput(backendName, line string) string {
 	s.mu.Lock()
@@ -296,6 +411,10 @@ func (r *maskingRepo) UpdateRuns(policyName string, runs []policies.RunData) err
 		maskedFor, maskedWith = pd.ID, r.secrets.masksOf(pd.ID)
 		maskedWith.maskRuns(runs)
 	}
+	// A backend goes on reporting the runs of a policy it no longer runs,
+	// under its name: one still running keeps the policy's values masking
+	// the backend's output.
+	r.secrets.reported(maskedFor, policyName, reported)
 	return r.PolicyRepo.UpdateRunsWith(policyName, runs, func(policyID string, runs []policies.RunData) []policies.RunData {
 		if masks := r.secrets.masksOf(policyID); policyID != maskedFor || masks != maskedWith {
 			copy(runs, reported)
@@ -475,9 +594,14 @@ func withoutPort(target string) string {
 }
 
 // Remove removes a policy; the values its secret references resolved to keep
-// masking its backend's output for removedGrace.
+// masking its backend's output for removedGrace, or while the backend reports
+// a run of it still running, under a name it knew the policy by.
 func (r *maskingRepo) Remove(policyID string) error {
+	var names []string
+	if pd, err := r.Get(policyID); err == nil {
+		names = knownNames(pd)
+	}
 	err := r.PolicyRepo.Remove(policyID)
-	r.secrets.removed(policyID)
+	r.secrets.removed(policyID, names...)
 	return err
 }

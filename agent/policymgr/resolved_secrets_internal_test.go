@@ -3,7 +3,9 @@ package policymgr
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
@@ -28,15 +32,344 @@ func TestRemovedPolicyKeepsItsResolvedValuesForAMinute(t *testing.T) {
 	const printed = "community c0mmun1ty-v4l, password p4ssw0rd-v4l"
 
 	require.NoError(t, repo.Remove("policy-1"))
-	now = now.Add(time.Minute)
+	now = now.Add(time.Minute - time.Second)
 	assert.Equal(t, "community ********, password ********", resolved.maskOutput("worker", printed),
 		"a line relayed within a minute of the removal")
 
 	now = now.Add(time.Second)
 	assert.Equal(t, "community c0mmun1ty-v4l, password ********", resolved.maskOutput("worker", printed),
-		"a line relayed later")
+		"a line relayed a minute after it")
 	assert.Empty(t, resolved.of("policy-1"), "the removed policy's values are dropped")
-	assert.Empty(t, resolved.departed, "and the agent holds none of them")
+	assert.Zero(t, departedCount(resolved), "and the agent holds none of them")
+}
+
+// TestRemovedPolicyKeepsMaskingWhileItsRunsRun removes a policy whose backend
+// goes on with a run it started before, as device-discovery does: the
+// backend's poll keeps reporting the run under the policy's name, still
+// running, and the lines the run prints quote the policy's values. They are
+// masked for as long as the run runs, and a minute after, for the lines it
+// printed last; the agent then drops the values.
+func TestRemovedPolicyKeepsMaskingWhileItsRunsRun(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	resolved.remember("policy-1", "device_discovery", []resolvedValue{{path: "scope[0].hostname", value: "sw1.s3cret-site.example"}})
+	const printed = "Policy policy-1, Hostname sw1.s3cret-site.example: Getting information"
+	started := now.Add(-time.Second)
+	run := func(status string) []policies.RunData {
+		return []policies.RunData{{ID: "run-1", Status: status, CreatedAt: started, Targets: []string{"sw1.s3cret-site.example"}}}
+	}
+
+	require.NoError(t, repo.Remove("policy-1"))
+	// The backend's poll reports the run every 10 seconds, for 20 minutes.
+	for range 120 {
+		now = now.Add(10 * time.Second)
+		assert.ErrorIs(t, repo.UpdateRuns("policy-1", run("running")), policies.ErrPolicyNotFound)
+	}
+	assert.Equal(t, "Policy policy-1, Hostname ********: Getting information", resolved.maskOutput("device_discovery", printed),
+		"a line the run prints 20 minutes after the removal")
+
+	now = now.Add(10 * time.Second)
+	assert.ErrorIs(t, repo.UpdateRuns("policy-1", run("completed")), policies.ErrPolicyNotFound)
+	now = now.Add(49 * time.Second)
+	assert.Equal(t, "Policy policy-1, Hostname ********: Getting information", resolved.maskOutput("device_discovery", printed),
+		"a line relayed within a minute of the run's last report running")
+	now = now.Add(time.Second)
+	assert.Equal(t, printed, resolved.maskOutput("device_discovery", printed), "a line relayed a minute after it")
+	assert.Zero(t, departedCount(resolved), "the agent holds none of the values")
+}
+
+// TestRemovedPolicyMasksItsRunsForAnHourAtMost removes a policy whose backend
+// reports a run of it running for longer than an hour: the values mask the
+// backend's output for an hour after the removal, and are dropped then.
+func TestRemovedPolicyMasksItsRunsForAnHourAtMost(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	resolved.remember("policy-1", "device_discovery", []resolvedValue{{path: "scope[0].password", value: "p4ssw0rd-v4l"}})
+	const printed = "auth failed with p4ssw0rd-v4l"
+	running := []policies.RunData{{ID: "run-1", Status: "running", CreatedAt: now.Add(-time.Second)}}
+
+	require.NoError(t, repo.Remove("policy-1"))
+	for range 359 {
+		now = now.Add(10 * time.Second)
+		_ = repo.UpdateRuns("policy-1", running)
+	}
+	assert.Equal(t, "auth failed with ********", resolved.maskOutput("device_discovery", printed), "59 minutes 50 seconds after the removal")
+	now = now.Add(10 * time.Second)
+	_ = repo.UpdateRuns("policy-1", running)
+	now = now.Add(time.Second)
+	_ = repo.UpdateRuns("policy-1", running)
+	assert.Equal(t, printed, resolved.maskOutput("device_discovery", printed), "past the hour, the run still reported running")
+	assert.Zero(t, departedCount(resolved), "the agent holds none of the values")
+}
+
+// TestMovedPolicyKeepsMaskingWhereItRanWhileItsRunsRun moves a policy to
+// another backend while the one it ran on goes on with a run of it: that
+// backend reports the run under the policy's name, which still maps to the
+// policy, and the policy's values keep masking its output while it runs.
+func TestMovedPolicyKeepsMaskingWhereItRanWhileItsRunsRun(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	values := []resolvedValue{{path: "scope[0].password", value: "p4ssw0rd-v4l"}}
+	const printed = "auth failed with p4ssw0rd-v4l"
+	resolved.remember("policy-1", "worker", values)
+	resolved.remember("policy-1", "device_discovery", values)
+
+	for range 30 {
+		now = now.Add(10 * time.Second)
+		require.NoError(t, repo.UpdateRuns("policy-1", []policies.RunData{{ID: "run-1", Status: "running", CreatedAt: now}}))
+	}
+	assert.Equal(t, "auth failed with ********", resolved.maskOutput("worker", printed), "five minutes after the move")
+	now = now.Add(time.Minute + time.Second)
+	assert.Equal(t, printed, resolved.maskOutput("worker", printed), "a minute after the run's last report running")
+}
+
+// TestRemovedPolicyKeepsMaskingUnderTheNameItsBackendKnows removes a policy
+// while a backend goes on with a run of it, under the name the backend knows
+// it by: the policy moved from that backend before, or a rename that never
+// reached it, or both in one update. The run's lines are masked while it is
+// reported running.
+func TestRemovedPolicyKeepsMaskingUnderTheNameItsBackendKnows(t *testing.T) {
+	values := []resolvedValue{{path: "scope[0].password", value: "p4ssw0rd-v4l"}}
+	const printed = "auth failed with p4ssw0rd-v4l"
+	for _, tc := range []struct {
+		name string
+		// apply applies the policy and stores it as the manager does, before
+		// it is removed.
+		apply func(t *testing.T, resolved *resolvedSecrets, repo *maskingRepo)
+		// reportedAs is the name the backend reports the run under.
+		reportedAs string
+	}{{
+		name: "moved from the backend",
+		apply: func(t *testing.T, resolved *resolvedSecrets, repo *maskingRepo) {
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-1", Name: "p1", Backend: "worker"}))
+			resolved.remember("policy-1", "device_discovery", values, "p1")
+			resolved.remember("policy-1", "worker", values, "p1")
+		},
+		reportedAs: "p1",
+	}, {
+		name: "renamed, the rename not applied",
+		apply: func(t *testing.T, resolved *resolvedSecrets, repo *maskingRepo) {
+			resolved.remember("policy-1", "device_discovery", values)
+			require.NoError(t, repo.Update(policies.PolicyData{
+				ID: "policy-1", Name: "new-name", Backend: "device_discovery",
+				PreviousPolicyData: &policies.PolicyData{Name: "old-name"},
+			}))
+		},
+		reportedAs: "old-name",
+	}, {
+		name: "renamed and moved in one update",
+		apply: func(t *testing.T, resolved *resolvedSecrets, repo *maskingRepo) {
+			resolved.remember("policy-1", "device_discovery", values, "old-name")
+			resolved.remember("policy-1", "worker", values, "new-name", "old-name")
+			// Once the update is applied, the rename is no longer pending.
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-1", Name: "new-name", Backend: "worker"}))
+		},
+		reportedAs: "old-name",
+	}, {
+		name: "moved from the backend, its names not given",
+		apply: func(t *testing.T, resolved *resolvedSecrets, repo *maskingRepo) {
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-1", Name: "p1", Backend: "worker"}))
+			resolved.remember("policy-1", "device_discovery", values)
+			resolved.remember("policy-1", "worker", values)
+		},
+		reportedAs: "p1",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+			resolved, repo := newTestMaskingRepo(t, &now)
+			tc.apply(t, resolved, repo)
+			run := []policies.RunData{{ID: "run-1", Status: "running", CreatedAt: now}}
+			require.NoError(t, repo.Remove("policy-1"))
+			for range 30 {
+				now = now.Add(10 * time.Second)
+				_ = repo.UpdateRuns(tc.reportedAs, run)
+			}
+			assert.Equal(t, "auth failed with ********", resolved.maskOutput("device_discovery", printed),
+				"5 minutes after the removal, the run still reported running")
+			now = now.Add(time.Minute)
+			assert.Equal(t, printed, resolved.maskOutput("device_discovery", printed), "a minute after its last report running")
+		})
+	}
+}
+
+// TestRemovedPolicyKeepsMaskingWhenAnotherPolicyHasItsName removes a policy
+// while a backend goes on with a run of it, under a name another policy holds
+// by then: one created under the same name, on that backend or another, or
+// one the removed policy swapped names with. The backend reports both
+// policies' runs under the name, so the removed policy's values keep masking
+// its output while a run is reported running.
+func TestRemovedPolicyKeepsMaskingWhenAnotherPolicyHasItsName(t *testing.T) {
+	const printed = "auth failed with p4ssw0rd-v4l"
+	p1 := []resolvedValue{{path: "scope[0].password", value: "p4ssw0rd-v4l"}}
+	q1 := []resolvedValue{{path: "scope[0].password", value: "q-s3cret-v4l"}}
+	for _, tc := range []struct {
+		name string
+		// apply applies and removes p1, and applies q1, as the manager does.
+		apply func(t *testing.T, resolved *resolvedSecrets, repo *maskingRepo)
+		// reportedAs is the name the backend reports p1's run under.
+		reportedAs string
+	}{{
+		name: "created again under the name on the backend",
+		apply: func(t *testing.T, resolved *resolvedSecrets, repo *maskingRepo) {
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "p1", Name: "foo", Backend: "device_discovery"}))
+			resolved.remember("p1", "device_discovery", p1, "foo")
+			require.NoError(t, repo.Remove("p1"))
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "q1", Name: "foo", Backend: "device_discovery"}))
+			resolved.remember("q1", "device_discovery", q1, "foo")
+		},
+		reportedAs: "foo",
+	}, {
+		name: "created again under the name on another backend",
+		apply: func(t *testing.T, resolved *resolvedSecrets, repo *maskingRepo) {
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "p1", Name: "foo", Backend: "device_discovery"}))
+			resolved.remember("p1", "device_discovery", p1, "foo")
+			require.NoError(t, repo.Remove("p1"))
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "q1", Name: "foo", Backend: "worker"}))
+			resolved.remember("q1", "worker", q1, "foo")
+		},
+		reportedAs: "foo",
+	}, {
+		name: "swapped names with another policy",
+		apply: func(t *testing.T, resolved *resolvedSecrets, repo *maskingRepo) {
+			resolved.remember("p1", "device_discovery", p1, "a")
+			resolved.remember("q1", "device_discovery", q1, "b")
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "p1", Name: "b", Backend: "device_discovery"}))
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "q1", Name: "a", Backend: "device_discovery"}))
+			resolved.remember("p1", "device_discovery", p1, "b")
+			resolved.remember("q1", "device_discovery", q1, "a")
+			require.NoError(t, repo.Remove("p1"))
+		},
+		reportedAs: "a",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+			resolved, repo := newTestMaskingRepo(t, &now)
+			tc.apply(t, resolved, repo)
+			for range 30 {
+				now = now.Add(10 * time.Second)
+				_ = repo.UpdateRuns(tc.reportedAs, []policies.RunData{{ID: "run-1", Status: "running", CreatedAt: now.Add(-time.Hour)}})
+			}
+			assert.Equal(t, "auth failed with ********", resolved.maskOutput("device_discovery", printed),
+				"5 minutes after the removal, the run still reported running")
+		})
+	}
+}
+
+// TestApplyKeepsTheNamesTheBackendKnowsThePolicyBy applies a policy to one
+// backend, then renames it and moves it to another in one update, then
+// removes it, while the first backend goes on with a run under the old name:
+// the apply passes the names on, so the run's lines are masked.
+func TestApplyKeepsTheNamesTheBackendKnowsThePolicyBy(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now)
+	a := &policyManager{logger: slog.New(slog.DiscardHandler), repo: repo, resolved: resolved}
+	payload := config.PolicyPayload{ID: "policy-1", Data: map[string]any{"password": "${vault://secrets/a/password}"}}
+	data := map[string]any{"password": "p4ssw0rd-v4l"}
+	const printed = "auth failed with p4ssw0rd-v4l"
+
+	require.NoError(t, a.applyPolicy(payload, refusingBackend{}, &policies.PolicyData{ID: "policy-1", Name: "old-name", Backend: "device_discovery", Data: data}, false))
+	renamed := &policies.PolicyData{
+		ID: "policy-1", Name: "new-name", Backend: "worker", Data: data,
+		PreviousPolicyData: &policies.PolicyData{Name: "old-name"},
+	}
+	require.NoError(t, a.applyPolicy(payload, refusingBackend{}, renamed, true))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-1", Name: "new-name", Backend: "worker"}))
+	require.NoError(t, repo.Remove("policy-1"))
+	for range 30 {
+		now = now.Add(10 * time.Second)
+		_ = repo.UpdateRuns("old-name", []policies.RunData{{ID: "run-1", Status: "running", CreatedAt: now}})
+	}
+	assert.Equal(t, "auth failed with ********", resolved.maskOutput("device_discovery", printed))
+}
+
+// refusingBackend runs, and refuses every policy.
+type refusingBackend struct{ backend.Backend }
+
+func (refusingBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
+	return backend.Running, "", nil
+}
+
+func (refusingBackend) ApplyPolicy(policies.PolicyData, bool) error { return errors.New("400 refused") }
+
+// TestDepartedValuesAreDroppedWhenDue prunes the values of a removed policy
+// when they are due, the clock standing still there: they are dropped, so
+// the timer that prunes them is not set to fire again at once, and again.
+func TestDepartedValuesAreDroppedWhenDue(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope.password", value: "p4ssw0rd-v4l"}})
+	require.NoError(t, repo.Remove("policy-1"))
+	now = now.Add(removedGrace)
+	resolved.prune()
+	assert.Zero(t, departedCount(resolved))
+}
+
+// TestPruneSetsTheTimerOfValuesItKeepsToWhenTheyAreDue fires the timer of a
+// removed policy's values when the grace they departed with ends, while a run
+// of the policy reported running keeps them: the timer is set again to when
+// they are due, and when it fires then, they are dropped, with nothing else
+// asking for them.
+func TestPruneSetsTheTimerOfValuesItKeepsToWhenTheyAreDue(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	var timers []*fakeTimer
+	resolved.afterFunc = func(d time.Duration, f func()) pruneTimer {
+		timer := &fakeTimer{after: d, fire: f}
+		timers = append(timers, timer)
+		return timer
+	}
+	resolved.remember("policy-1", "device_discovery", []resolvedValue{{path: "scope.password", value: "p4ssw0rd-v4l"}}, "policy-1")
+	require.NoError(t, repo.Remove("policy-1"))
+	require.Len(t, timers, 1)
+	assert.Equal(t, removedGrace, timers[0].after)
+
+	now = now.Add(50 * time.Second)
+	_ = repo.UpdateRuns("policy-1", []policies.RunData{{ID: "run-1", Status: "running", CreatedAt: now}})
+	now = now.Add(10 * time.Second)
+	timers[0].fire()
+	assert.Equal(t, 1, departedCount(resolved), "the run keeps them")
+	assert.Equal(t, []time.Duration{50 * time.Second}, timers[0].resets, "set again to when they are due")
+
+	now = now.Add(50 * time.Second)
+	timers[0].fire()
+	assert.Zero(t, departedCount(resolved))
+	assert.True(t, timers[0].stopped)
+}
+
+// fakeTimer is a pruneTimer a test fires.
+type fakeTimer struct {
+	after   time.Duration
+	fire    func()
+	resets  []time.Duration
+	stopped bool
+}
+
+func (f *fakeTimer) Reset(d time.Duration) bool {
+	f.resets = append(f.resets, d)
+	return true
+}
+
+func (f *fakeTimer) Stop() bool {
+	f.stopped = true
+	return true
+}
+
+// TestRunsUnderAnotherNameKeepNoRemovedPolicyMasking has a backend report a
+// running run under a name the removed policy never had: it keeps none of
+// its values past the minute.
+func TestRunsUnderAnotherNameKeepNoRemovedPolicyMasking(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1", "policy-2")
+	resolved.remember("policy-1", "device_discovery", []resolvedValue{{path: "scope[0].password", value: "p4ssw0rd-v4l"}})
+	const printed = "auth failed with p4ssw0rd-v4l"
+
+	require.NoError(t, repo.Remove("policy-1"))
+	for range 12 {
+		now = now.Add(10 * time.Second)
+		_ = repo.UpdateRuns("policy-2", []policies.RunData{{ID: "run-2", Status: "running", CreatedAt: now}})
+	}
+	now = now.Add(time.Second)
+	assert.Equal(t, printed, resolved.maskOutput("device_discovery", printed))
 }
 
 // TestPolicyAddedAgainKeepsMaskingWhereItRan adds a removed policy again: on
@@ -598,7 +931,7 @@ func TestRunsAreMaskedForThePolicyTheyAreStoredOn(t *testing.T) {
 		values: map[string][]resolvedValue{"policy-1": quoted},
 		meanwhile: func(t *testing.T, resolved *resolvedSecrets, repo policies.PolicyRepo) {
 			require.NoError(t, repo.Remove("policy-1"))
-			resolved.removed("policy-1")
+			resolved.removed("policy-1", "shared")
 			require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-1", Name: "shared", Backend: "worker"}))
 		},
 		storedOn: "policy-1",
@@ -725,4 +1058,12 @@ func newTestMaskingRepo(t *testing.T, now *time.Time, ids ...string) (*resolvedS
 		require.NoError(t, repo.Update(policies.PolicyData{ID: id, Name: id, Backend: "worker"}))
 	}
 	return resolved, repo
+}
+
+// departedCount returns how many departed policies' values s holds, read as
+// a timer that prunes them reads them.
+func departedCount(s *resolvedSecrets) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.departed)
 }

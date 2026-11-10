@@ -152,10 +152,21 @@ of the runs reported under its name. A run without a start time is kept
 whatever its policy, since nothing tells when it began; every discovery
 backend gives each run one. A backend that fails to remove the policy for two
 updates in a row can go on running a value the agent no longer keeps. When
-the policy is removed, its values keep masking the backend's output for a
-minute, for the lines it printed before the removal, and the agent then drops
-them. A line a backend prints about the policy after that, such as one from a
-backend that failed to remove it, is relayed as printed.
+the policy is removed, or moved to another backend, its values keep masking
+the output of the backend it ran on for a minute, for the lines it printed
+before. A backend can also go on with a run of the policy it started before:
+device-discovery stops a removed policy without waiting for its runs. For as
+long as the backend reports a run still running under a name the agent
+applied the policy with, its values keep masking the backend's output, and
+for a minute after the last such report, up to an hour after the policy left
+it. The agent then drops them. A backend reports the runs of every policy it
+knew by a name under that name, so the agent can't tell the removed policy's
+run from that of a policy that took its name since: a run of the new policy
+keeps the removed policy's values masking the backend's output too, up to
+the hour. A line a backend prints about the policy after that is relayed as
+printed: one from a run that goes on for more than an hour, or one from a
+backend that failed to remove the policy and starts another run of it on its
+schedule more than a minute after the last one it reported running.
 
 ## Rotation
 
