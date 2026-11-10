@@ -64,6 +64,8 @@ orb:
 
 Any URL whose path ends in `/api/Accounts`, compared case-insensitively, is used as the endpoint, minus any trailing slash. Any other URL, including one with a path prefix for a reverse proxy, gets `/AIMWebService/api/Accounts` appended. The agent logs the endpoint it resolved at startup.
 
+A `url` can carry a user and a password, as `https://user:password@host`, which the agent sends as basic auth. In the lines the CyberArk secrets manager logs and the errors it returns, the user and the password are masked together as `********`, for example `https://********@ccp.corp.example.com/AIMWebService/api/Accounts`. A `url` written without `https://` or `http://` is refused at startup, and the error masks everything before its last `@`.
+
 A lookup that fails with `HTTP 404 … without a CCP error body` most likely means the URL does not point at the CCP web service, for example a base URL on a server where CCP is installed under another name. A missing account is reported as `account not found`, with CCP's own error code.
 
 ## Authentication

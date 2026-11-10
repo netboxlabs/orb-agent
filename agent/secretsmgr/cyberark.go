@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
 const (
@@ -88,8 +89,13 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 		}
 		return fmt.Errorf("cyberark: url does not parse: %w", uerr.Err)
 	}
-	shown := parsedURL.Redacted()
+	shown := redact.Endpoint(c.config.URL)
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		// Without its //, a url's user is what a parser reads as its scheme:
+		// the scheme of such a url is not quoted.
+		if parsedURL.Opaque != "" || strings.Contains(c.config.URL, "@") {
+			return fmt.Errorf("cyberark: url %q must use http or https", shown)
+		}
 		return fmt.Errorf("cyberark: url %q must use http or https (got scheme %q)", shown, parsedURL.Scheme)
 	}
 	if parsedURL.Host == "" {
@@ -159,7 +165,7 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 	if err := c.startScheduler(c.config.Schedule); err != nil {
 		return err
 	}
-	c.preLogger.Info("secrets manager started", "active", "cyberark", "endpoint", c.endpoint.Redacted())
+	c.preLogger.Info("secrets manager started", "active", "cyberark", "endpoint", redact.Endpoint(c.endpoint.String()))
 	return nil
 }
 
@@ -205,6 +211,12 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		// The client's error quotes the request's url with its user, and its
+		// password as ***: the user info is masked as for the url itself.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			uerr.URL = redact.Endpoint(uerr.URL)
+		}
 		return "", fmt.Errorf("cyberark: get account %s (AppID=%s Safe=%s Object=%s): %w",
 			body, ref.appID, ref.safe, ref.object, err)
 	}
@@ -226,7 +238,7 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 		return "", fmt.Errorf("cyberark: get account %s: HTTP 404 from %s without a CCP error body%s; "+
 			"the url likely does not point at the CCP web service: set it to the CCP base URL, "+
 			"or to the full endpoint URL ending in %s when CCP is not installed as AIMWebService",
-			body, c.endpoint.Redacted(), nonHTMLBodySnippet(resp.Header.Get("Content-Type"), bodyBytes), ccpAPIPath)
+			body, redact.Endpoint(c.endpoint.String()), nonHTMLBodySnippet(resp.Header.Get("Content-Type"), bodyBytes), ccpAPIPath)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("cyberark: get account %s (AppID=%s Safe=%s Object=%s): HTTP %d: %s",
@@ -319,15 +331,14 @@ func nonHTMLBodySnippet(contentType string, b []byte) string {
 	return ": " + text
 }
 
-// displayURL renders a configured url for the startup log with any password
-// masked. A url that does not parse is not shown, since its password, if
-// any, cannot be located.
+// displayURL renders a configured url for the startup log with its user and
+// password masked. A url that does not parse is not shown, since its user
+// info, if any, cannot be located.
 func displayURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
+	if _, err := url.Parse(raw); err != nil {
 		return "<unparseable>"
 	}
-	return u.Redacted()
+	return redact.Endpoint(raw)
 }
 
 // isCCPEndpointPath reports whether a URL path already names the CCP endpoint.
