@@ -84,6 +84,7 @@ type githubAppAuth struct {
 	logger *slog.Logger
 
 	// Immutable after construction; read without the mutex.
+	repoURL        string // with its user info masked, for the lines SetAuth logs
 	clientID       string
 	installationID string
 	privateKey     *rsa.PrivateKey
@@ -105,9 +106,10 @@ type githubAppAuth struct {
 // Without SetAuth, go-git returns the opaque transport.ErrInvalidAuthMethod.
 var _ githttp.AuthMethod = (*githubAppAuth)(nil)
 
-// newGitHubAppAuth validates the configuration and loads the private key. It
-// performs no network I/O; call token() to mint eagerly.
-func newGitHubAppAuth(logger *slog.Logger, cfg config.GitHubAppAuth, skipTLS bool) (*githubAppAuth, error) {
+// newGitHubAppAuth validates the configuration and loads the private key for
+// the repository at repoURL. It performs no network I/O; call token() to mint
+// eagerly.
+func newGitHubAppAuth(logger *slog.Logger, repoURL string, cfg config.GitHubAppAuth, skipTLS bool) (*githubAppAuth, error) {
 	clientID, err := config.ResolveEnv(cfg.ClientID)
 	if err != nil {
 		return nil, fmt.Errorf("github_app: client_id: %w", err)
@@ -146,6 +148,7 @@ func newGitHubAppAuth(logger *slog.Logger, cfg config.GitHubAppAuth, skipTLS boo
 
 	return &githubAppAuth{
 		logger:         logger,
+		repoURL:        redact.URL(repoURL),
 		clientID:       clientID,
 		installationID: installationID,
 		privateKey:     key,
@@ -232,12 +235,12 @@ func (a *githubAppAuth) SetAuth(r *http.Request) {
 	case tok == "":
 		a.logger.Error("github_app: no installation access token available; sending the git request "+
 			"unauthenticated, which will fail with HTTP 401",
-			"url", redact.URL(r.URL.String()), "error", lastErr)
+			"url", a.repoURL, "error", lastErr)
 		return
 	case lastErr != nil:
 		a.logger.Warn("github_app: token refresh failed; retrying the git request with the previously "+
 			"minted token, which may already have expired",
-			"url", redact.URL(r.URL.String()), "error", lastErr)
+			"url", a.repoURL, "error", lastErr)
 	}
 
 	// GitHub accepts installation tokens on the git HTTPS endpoints as basic auth

@@ -504,7 +504,7 @@ func (gc *gitConfigManager) start(ctx context.Context, cfg config.Config, backen
 		if err = requireGitHubHTTPSURL(gc.config.URL); err != nil {
 			return err
 		}
-		if gc.githubApp, err = newGitHubAppAuth(gc.logger, gc.config.GitHubApp, gc.config.SkipTLS); err != nil {
+		if gc.githubApp, err = newGitHubAppAuth(gc.logger, gc.config.URL, gc.config.GitHubApp, gc.config.SkipTLS); err != nil {
 			return err
 		}
 		// Mint once now so a bad key, app id or installation id fails startup with
