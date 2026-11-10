@@ -56,12 +56,12 @@ func TestURLIn(t *testing.T) {
 		"written without //, with a quote": {
 			text:   `cloning https:user:a"b@host/repo.git failed`,
 			rawURL: `https:user:a"b@host/repo.git`,
-			want:   "cloning https:********@host/repo.git failed",
+			want:   "cloning ********@host/repo.git failed",
 		},
 		"written without //": {
 			text:   "cloning https:user:pass@host/repo.git failed",
 			rawURL: "https:user:pass@host/repo.git",
-			want:   "cloning https:********@host/repo.git failed",
+			want:   "cloning ********@host/repo.git failed",
 		},
 		"with <redacted> for its password, as git writes it when it refuses credentials in a URL": {
 			text:   "fatal: URL 'https://to%2fken:<redacted>@host/repo.git' uses plaintext credentials",

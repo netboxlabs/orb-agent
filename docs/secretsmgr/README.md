@@ -51,9 +51,22 @@ credentials in the agent's configuration, such as a token, a password, a client
 secret or any value of a Vault login's `auth_args` but its mount path, user
 name, role and service account file, are masked as `********` wherever the
 agent reports or logs its configuration, as are the user and the password of
-a URL in it, such as a Vault address's, together. A URL with an
-`@` that a parser does not read as the end of its user info, such as one in
-its path, is masked between the `//` before its host and that `@`. The configuration the agent reports is the one as
+a URL in it, such as a Vault address's, together. So are those of each URL of
+a list, as `https://u:p@a.example,https://u:p@b.example`, and of a URL used
+as a key. Two keys masked into the same one are both kept: in the order of
+the keys as written, each one after the first gets ` (2)`, ` (3)` and so on
+after it. A URL written without `//` whose part before its last `@` holds a
+`:` and no space, as `user:password@host` or git's
+`<token>:x-oauth-basic@host:path`, has all of that part masked from the start
+of its word, a scheme written before it too, as `mailto:`: `********@host`.
+Where the agent can't tell where a user and password end, as for an `@` in a
+URL's path, a password holding a space, a `,` or a `//`, or URLs that a space
+or a line break separates, it masks from the `//`, the first `:` or the start
+of the text to the last `@`, hiding what lies between, hosts included. Before
+a password with a space, the user is kept. Kept as written are an e-mail
+address written alone, as `ops@example.com`, an image digest
+(`@sha256:` and its 64 hex digits), a secret reference, and a URL with a `/`
+before the `:` of its user and password, which git reads as a local path. The configuration the agent reports is the one as
 written: a secret reference in it, such as one in `backends`, is reported as
 the reference, never as the value it resolves to.
 
