@@ -339,11 +339,12 @@ func spansOf(t string) []span {
 		}
 	}
 	// A user and a password right before an @, from the /, separator or @
-	// before them, as a URL written without // in another's path holds them.
+	// before them, as a URL written without // in another's path holds them,
+	// or a user before git's scp-like host:path.
 	from := 0
 	for at := strings.IndexByte(t, '@'); at >= 0; {
 		begin := from + strings.LastIndexAny(t[from:at], "/@"+urlSeparators) + 1
-		if strings.IndexByte(t[begin:at], ':') >= 0 {
+		if strings.IndexByte(t[begin:at], ':') >= 0 || begin < at && scpHost(t[at+1:]) {
 			spans = append(spans, span{begin, at})
 		}
 		from = at + 1
@@ -354,6 +355,13 @@ func spansOf(t string) []span {
 		at = from + next
 	}
 	return spans
+}
+
+// scpHost reports whether s, what follows an @, starts as git's scp-like
+// host:path does: a host, a : and a path, which no separator starts.
+func scpHost(s string) bool {
+	colon := strings.IndexAny(s, ":/@"+urlSeparators)
+	return colon > 0 && s[colon] == ':' && colon+1 < len(s) && strings.IndexByte(urlSeparators, s[colon+1]) < 0
 }
 
 // isSchemeByte reports whether c can be part of a URL's scheme.
