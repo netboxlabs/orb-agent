@@ -39,6 +39,17 @@ type vaultManager struct {
 	// tokenEndedSaid is set once the agent said the token it was given
 	// ended, which token auth cannot log in again for.
 	tokenEndedSaid bool
+	// lookupDenied is set when Vault refused the token the client holds a
+	// lookup of itself right after the login that gave it: a read Vault
+	// refuses then makes the agent log in again only past tokenEnd.
+	lookupDenied bool
+	// lookupDeniedSaid is set once the agent said so, at WARN.
+	lookupDeniedSaid bool
+	// tokenEnd is when the token the client holds ends, as far as the agent
+	// knows: the end of the lease its login gave, moved by each renewal its
+	// watcher reports, and the time its watcher ended without replacing it.
+	// It is zero for a token with no lease, which does not end.
+	tokenEnd time.Time
 	// stopWatch stops the watcher of the token the client holds.
 	stopWatch func()
 	// lastTry is when the agent last tried to log in again for a read, or
@@ -49,12 +60,17 @@ type vaultManager struct {
 }
 
 // loginInterval is the least time between two tries to log in again for a
-// read, and after a login that failed. A token whose policy does not let it
-// look itself up cannot tell Vault's refusal of a path it may not read from
-// the end of the token, and a login that fails, as for a password rotated in
-// a directory, counts against the account: neither is tried at every read.
-// It is under a minute so that each poll of a schedule of one minute can try.
+// read, and after a login that failed. A login that fails, as for a password
+// rotated in a directory, counts against the account: it is not tried at
+// every read. It is under a minute so that each poll of a schedule of one
+// minute can try.
 const loginInterval = 50 * time.Second
+
+// lookupTimeout is how long the agent waits on Vault for the lookup of a
+// token right after its login, which holds up the start or the read that
+// logged in: one Vault does not answer leaves whether the token may look
+// itself up unknown.
+const lookupTimeout = 5 * time.Second
 
 // errAddressNotAURL refuses a Vault address no URL parser reads. The parse
 // error would quote the address, and a password it carries with it.
@@ -134,8 +150,10 @@ func (v *vaultManager) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	v.tokenEnd = v.leaseEnd(v.token)
 
 	v.init(ctx, v.preLogger, "vault", v.fetch)
+	v.checkLookupLocked()
 
 	if err := v.startScheduler(v.config.Schedule); err != nil {
 		return err
@@ -201,6 +219,7 @@ func (v *vaultManager) watchToken(secret *vault.Secret) error {
 
 			case output := <-lw.RenewCh():
 				v.logger.Info("Token renewed", "renewedAt", output.RenewedAt)
+				v.renewed(secret.Auth.ClientToken, output.Secret)
 			}
 		}
 	}()
@@ -212,9 +231,10 @@ func (v *vaultManager) watchToken(secret *vault.Secret) error {
 // which Vault refused, if Vault no longer accepts it. Vault answers a 403
 // both for a token that ended and for a path the token may not read, so it
 // is asked about the token first: a valid token is not logged in again for,
-// at every read of such a path. A token whose policy does not let it look
-// itself up gets a 403 for that too, so the agent tries this at most once
-// every loginInterval. It reports whether the read is worth trying again.
+// at every read of such a path. A token Vault refused that question right
+// after its login (see checkLookupLocked) would be refused it again: it is
+// taken to have ended only past the end the agent knows for it. It reports
+// whether the read is worth trying again.
 func (v *vaultManager) loginAgainIfEnded(stale string) bool {
 	v.loginMu.Lock()
 	defer v.loginMu.Unlock()
@@ -224,26 +244,100 @@ func (v *vaultManager) loginAgainIfEnded(stale string) bool {
 	if v.triedLately() {
 		return false
 	}
-	_, err := v.client.Auth().Token().LookupSelfWithContext(v.ctx)
-	if err == nil || !isForbidden(err) {
+	if v.lookupDenied {
+		if v.tokenEnd.IsZero() || v.now().Before(v.tokenEnd) {
+			return false
+		}
+	} else if _, err := v.client.Auth().Token().LookupSelfWithContext(v.ctx); err == nil || !isForbidden(err) {
 		return false
 	}
 	v.lastTry = v.now()
 	return v.loginAgainLocked(stale)
 }
 
+// checkLookupLocked asks Vault about the token the agent just logged in with,
+// waiting lookupTimeout at most. A token whose policy does not let it look
+// itself up, as a role with token_no_default_policy gives, gets a 403 for it
+// while it is valid, and can't tell a path it may not read from its own end.
+// The agent says so once. Any other error leaves it unknown, and the token is
+// asked about at reads as any other. An auth method that cannot log in again
+// is not asked about. The caller holds v.loginMu, or is the manager's start:
+// the answer then applies to the token before a read Vault refused with it
+// decides anything. Only such reads, which wait for this login to read again,
+// and the renewals the watcher reports wait on it, and lookupTimeout bounds
+// that wait.
+func (v *vaultManager) checkLookupLocked() {
+	v.lookupDenied = false
+	if cannotLoginAgain(v.auth) != "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(v.ctx, lookupTimeout)
+	defer cancel()
+	if _, err := v.client.Auth().Token().LookupSelfWithContext(ctx); !isForbidden(err) {
+		return
+	}
+	v.lookupDenied = true
+	if !v.lookupDeniedSaid {
+		v.lookupDeniedSaid = true
+		v.logger.Warn("the agent's Vault token may not look itself up (auth/token/lookup-self): "+
+			"the agent cannot tell a path the token may not read from the end of the token, so a read "+
+			"Vault refuses makes it log in again only once the token's lease ended",
+			"auth", v.config.Auth)
+	}
+}
+
+// leaseEnd returns when the lease secret gives a token ends, or zero for a
+// token with no lease.
+func (v *vaultManager) leaseEnd(secret *vault.Secret) time.Time {
+	if secret == nil || secret.Auth == nil || secret.Auth.LeaseDuration <= 0 {
+		return time.Time{}
+	}
+	return v.now().Add(time.Duration(secret.Auth.LeaseDuration) * time.Second)
+}
+
+// renewed moves the end the agent knows for the token to the end of the
+// lease a renewal of it gave, while the client still holds it.
+func (v *vaultManager) renewed(token string, renewal *vault.Secret) {
+	v.loginMu.Lock()
+	defer v.loginMu.Unlock()
+	if v.client.Token() == token {
+		v.tokenEnd = v.leaseEnd(renewal)
+	}
+}
+
+// revokeReplaced revokes the token stale, which a login replaced, so that it
+// does not stay valid in Vault until its own TTL. It does not hold up the
+// login: a token whose policy does not let it revoke itself, or one that
+// ended, is refused, and the agent goes on.
+func (v *vaultManager) revokeReplaced(stale string) {
+	client, err := v.client.CloneWithHeaders()
+	if err != nil {
+		v.logger.Debug("the Vault token a login replaced was not revoked", "error", err)
+		return
+	}
+	client.SetToken(stale)
+	go func() {
+		if err := client.Auth().Token().RevokeSelfWithContext(v.ctx, ""); err != nil {
+			v.logger.Debug("the Vault token a login replaced was not revoked", "error", err)
+		}
+	}()
+}
+
 // loginAgain logs in again in place of the token stale, which Vault renews no
-// longer, unless a login failed less than loginInterval ago.
+// longer, unless a login failed less than loginInterval ago. When it does
+// not, nothing renews the token or logs in again for it any more: the agent
+// takes it to have ended, so that a read Vault refuses logs in again.
 func (v *vaultManager) loginAgain(stale string) bool {
 	v.loginMu.Lock()
 	defer v.loginMu.Unlock()
 	if v.client.Token() != stale {
 		return true
 	}
-	if v.triedLately() {
-		return false
+	if !v.triedLately() && v.loginAgainLocked(stale) {
+		return true
 	}
-	return v.loginAgainLocked(stale)
+	v.tokenEnd = v.now()
+	return false
 }
 
 // triedLately reports whether the agent tried to log in again for a read, or
@@ -256,8 +350,9 @@ func (v *vaultManager) triedLately() bool {
 // loginAgainLocked logs in again in place of the token stale, unless a login
 // already replaced it, and reports whether the client holds another token.
 // An auth method that cannot log in again is said once. A login that fails
-// is said once, at ERROR, and tried again at a read loginInterval later. The
-// caller holds v.loginMu.
+// is said once, at ERROR, and is not tried again for loginInterval: then by
+// the next read Vault refuses (see loginAgainIfEnded). The caller holds
+// v.loginMu.
 func (v *vaultManager) loginAgainLocked(stale string) bool {
 	if v.client.Token() != stale {
 		return true
@@ -288,10 +383,13 @@ func (v *vaultManager) loginAgainLocked(stale string) bool {
 	}
 	v.loginFailing = false
 	v.token = secret
+	v.tokenEnd = v.leaseEnd(secret)
 	v.logger.Info("logged in to Vault again", "auth", v.config.Auth)
+	v.revokeReplaced(stale)
 	if err := v.watchToken(secret); err != nil {
 		v.logger.Warn("the Vault token from the new login is not renewed", "error", err)
 	}
+	v.checkLookupLocked()
 	return true
 }
 

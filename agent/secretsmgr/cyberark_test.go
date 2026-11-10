@@ -602,8 +602,66 @@ func TestCyberArkStart_LogsRedactedEndpoint(t *testing.T) {
 		}
 	}
 	require.NotNil(t, started, "startup must log the resolved endpoint")
-	require.Equal(t, "https://svc:xxxxx@ccp.example.com/AIMWebServiceCustom/api/Accounts", started["endpoint"])
+	require.Equal(t, "https://********@ccp.example.com/AIMWebServiceCustom/api/Accounts", started["endpoint"])
 	require.NotContains(t, buf.String(), "hunter2", "no startup log line may carry the url password")
+	require.NotContains(t, buf.String(), "svc", "no startup log line may carry the url user")
+}
+
+func TestCyberArk_NeverQuotesTheURLsUser(t *testing.T) {
+	// The user of the url is half of its login, and the whole of it when the
+	// password is empty: the start log lines and the errors quote neither.
+	webServer404 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer webServer404.Close()
+	host := strings.TrimPrefix(webServer404.URL, "http://")
+
+	for name, tc := range map[string]struct {
+		url       string
+		forbidden []string
+	}{
+		"a url check error":                 {"ftp://ccpuser:Ccp-pa55word@ccp.example.com", []string{"ccpuser", "Ccp-pa55word"}},
+		"a url with no host":                {"https://ccpuser:Ccp-pa55word@", []string{"ccpuser", "Ccp-pa55word"}},
+		"a url with a query":                {"https://ccpuser:Ccp-pa55word@ccp.example.com?x=y", []string{"ccpuser", "Ccp-pa55word"}},
+		"a 404 from the web server":         {"http://ccpuser:Ccp-pa55word@" + host, []string{"ccpuser", "Ccp-pa55word"}},
+		"a request that fails":              {"https://ccpuser:Ccp-pa55word@127.0.0.1:1", []string{"ccpuser", "Ccp-pa55word"}},
+		"a user with an empty password":     {"https://ccpuser:@127.0.0.1:1", []string{"ccpuser"}},
+		"a user alone, as a token":          {"https://Ccp-t0ken@127.0.0.1:1", []string{"Ccp-t0ken"}},
+		"a user alone, through a 404 error": {"http://Ccp-t0ken@" + host, []string{"Ccp-t0ken"}},
+		"a user percent-encoded":            {"https://ccp%75ser:Ccp-pa55word@127.0.0.1:1", []string{"ccpuser", "ccp%75ser", "Ccp-pa55word"}},
+		"a url from its //":                 {"//ccpuser:Ccp-pa55word@ccp.example.com", []string{"ccpuser", "Ccp-pa55word"}},
+		// Without its //, a parser reads the user as the url's scheme, and a
+		// user alone as its host.
+		"a url without its //":         {"ccpuser:Ccp-pa55word@ccp.example.com", []string{"ccpuser", "Ccp-pa55word"}},
+		"a url with a port, no //":     {"ccpuser:Ccp-pa55word@ccp.example.com:443", []string{"ccpuser", "Ccp-pa55word"}},
+		"a user alone, no //":          {"Ccp-t0ken@ccp.example.com", []string{"Ccp-t0ken"}},
+		"a scheme without its //":      {"https:ccpuser:Ccp-pa55word@ccp.example.com", []string{"ccpuser", "Ccp-pa55word"}},
+		"a user alone after a scheme:": {"https:Ccp-t0ken@ccp.example.com", []string{"Ccp-t0ken"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			c := &cyberarkManager{
+				preLogger: slog.New(slog.NewJSONHandler(&buf, nil)),
+				config:    config.CyberArkManager{URL: tc.url, AppID: "orb"},
+			}
+			var messages []string
+			if err := c.Start(context.Background()); err != nil {
+				messages = append(messages, err.Error())
+			} else {
+				_, err := c.fetch("Lab/DB-Account")
+				require.Error(t, err)
+				messages = append(messages, err.Error())
+			}
+			messages = append(messages, buf.String())
+			for _, m := range messages {
+				for _, f := range tc.forbidden {
+					require.NotContains(t, m, f)
+				}
+			}
+			require.Contains(t, buf.String(), "********@", "the start log line shows the url with its user info masked")
+		})
+	}
 }
 
 func TestCyberArkStart_NeverEchoesURLPassword(t *testing.T) {
@@ -622,6 +680,9 @@ func TestCyberArkStart_NeverEchoesURLPassword(t *testing.T) {
 		{"https://svc:hun#ter2@ccp.example.com", []string{"hun", "ter2"}},
 		{"https://svc:hun%zzter2@ccp.example.com", []string{"hun", "%zz", "ter2"}},
 		{"https://svc:hunter2@127.0.0.1:1", []string{"hunter2"}},
+		// Without its //, the url parses as an opaque one whose scheme is the
+		// user: the password must not come back with it.
+		{"svc:hunter2@ccp.example.com", []string{"hunter2"}},
 	} {
 		t.Run(tc.url, func(t *testing.T) {
 			var buf bytes.Buffer

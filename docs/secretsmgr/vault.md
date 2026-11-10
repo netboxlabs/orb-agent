@@ -189,14 +189,36 @@ The agent logs in to Vault when it starts. It renews the token it gets while
 Vault renews it, and logs in again with the same method once Vault renews it
 no longer: at its max TTL, or when renewals keep failing. A read that Vault
 refuses because the token is no longer valid also logs in again and reads
-again: a token revoked, or one Vault does not renew (not renewable, or a batch
-token), when it ends. Reads that find it so together log in once.
+again, as for a token revoked, or for one Vault does not renew (not renewable,
+or a batch token) once its TTL ends. Reads that find it so together log in
+once. A token that may not look itself up is told ended by its lease instead;
+see below.
 
 Vault refuses a read with a 403 both for a token that is no longer valid and
 for a path the token may not read, so the agent asks Vault about its token
 first, and does not log in again for a valid one. Give the token's policy the
 `auth/token/lookup-self` capability, as Vault's `default` policy does: without
 it, Vault refuses that question too, and the agent can't tell the two apart.
+
+The agent asks Vault about each token right after it logs in, and waits 5
+seconds at most for the answer. When Vault refuses the question with a 403, as
+for a role with `token_no_default_policy` set, the agent says so once at WARN.
+It then takes that token to have ended only once its lease has: the lease its
+login gave, moved by each renewal, or at once when the agent stopped renewing
+it without logging in again, as after a login that failed. A read Vault
+refuses before then fails, with no login, and one after logs in again. A
+token revoked before its lease ends is replaced when the lease ends, and the
+reads with it fail until then. A token with no lease, which Vault does not
+end, is never taken to have ended: if it is revoked, the reads with it fail
+until the agent restarts. The agent asks again after each login, so a
+capability granted later counts from the next login. Any other answer, or
+none, is taken as for a token that may look itself up.
+
+After a login that replaces a token, the agent revokes the token it replaced
+(`auth/token/revoke-self`, which Vault's `default` policy allows), so that it
+does not stay valid in Vault until its own TTL. Vault refuses that for a
+token that may not revoke itself, or one that already ended: the agent logs
+it at DEBUG and goes on.
 
 This holds for AppRole, userpass, LDAP and Kubernetes. AppRole logs in again
 with the same `secret_id`, so it needs one that can be used again: a wrapped
@@ -205,9 +227,11 @@ with the same `secret_id`, so it needs one that can be used again: a wrapped
 
 The agent tries to log in again for a read at most once in 50 seconds, so once
 per poll of a one-minute schedule, and as often after a login that fails: a
-directory counts failed binds against the account. A login that fails, as with a `secret_id` that expired or a password
-rotated, is logged once at ERROR, as `failed to log in to Vault again`, and
-`logged in to Vault again` is logged at INFO once a login works.
+directory counts failed binds against the account. After a login that fails,
+the next read Vault refuses from 50 seconds on tries again. A login that
+fails, as with a `secret_id` that expired or a password rotated, is logged at
+ERROR as `failed to log in to Vault again` once until a login works again,
+and every login that works is logged at INFO as `logged in to Vault again`.
 
 Token auth and a wrapped `secret_id` cannot log in again. The agent does not
 renew a token given with token auth. When the token ends, the reads fail until
@@ -216,6 +240,6 @@ ERROR.
 
 ## Secret Polling
 
-If you configure the `schedule` parameter, the Orb Agent will periodically check for changes to referenced secrets. If a secret value changes, the related policies are automatically updated with the new values. If a secret can no longer be read (path deleted, Vault unreachable, a login that fails, a token given with token auth or from a wrapped `secret_id` that ended, a token that ends within 50 seconds of a try to log in again), the agent stops the policies that use it, reports them failed, and re-applies them once a re-fetch succeeds; see [Rotation](README.md#rotation).
+If you configure the `schedule` parameter, the Orb Agent will periodically check for changes to referenced secrets. If a secret value changes, the related policies are automatically updated with the new values. If a secret can no longer be read (path deleted, Vault unreachable, a login that fails, a token given with token auth or from a wrapped `secret_id` that ended, a token that ends within 50 seconds of a try to log in again, a token that may not look itself up and was revoked before its lease ended), the agent stops the policies that use it, reports them failed, and re-applies them once a re-fetch succeeds; see [Rotation](README.md#rotation).
 
 This is useful for credential rotation scenarios, where you want to update credentials in Vault without restarting the Orb Agent or manually updating policies.

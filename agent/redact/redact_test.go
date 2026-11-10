@@ -443,6 +443,37 @@ func TestSensitiveData_MasksAURLsUserInfo(t *testing.T) {
 	}
 }
 
+func TestEndpoint_MasksTheUserInfoOfAValueKnownToBeAURLOrAnAddress(t *testing.T) {
+	for in, want := range map[string]string{
+		// Written from its scheme's :// or from its //: as URL masks it.
+		"https://u:p@h:8200/v1": "https://********@h:8200/v1",
+		"https://T0ken@h":       "https://********@h",
+		"//u:p@h":               "//********@h",
+		// An empty authority, as gRPC's dns:/// and unix:/// write one, keeps
+		// its third /.
+		"dns:///u:p@collector:4317":      "dns:///********@collector:4317",
+		"unix:///u:p@sock":               "unix:///********@sock",
+		"dns:///collector:4317":          "dns:///collector:4317",
+		"https://collector.example:4318": "https://collector.example:4318",
+		// Written without //, which a parser reads as a scheme and an opaque
+		// part, the user being the scheme: everything before the last @ is
+		// masked.
+		"grpcuser:Grpc-pa55@collector.example:4317": "********@collector.example:4317",
+		"Tok3n@collector.example":                   "********@collector.example",
+		"Tok3n@collector.example:4317":              "********@collector.example:4317",
+		"svc7:hunter2@ccp.example.com:443":          "********@ccp.example.com:443",
+		"https:svc7:hunter2@ccp.example.com":        "********@ccp.example.com",
+		"u:p@h/path?next=https://x":                 "********@h/path?next=https://x",
+		" https://user:pw@collector.example:4318":   "********@collector.example:4318",
+		"collector.example:4317":                    "collector.example:4317",
+		"":                                          "",
+	} {
+		if got := Endpoint(in); got != want {
+			t.Errorf("Endpoint(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // TestSensitiveData_AuthArgsKeepsOnlyAStringUnderAKeptName keeps a field of
 // a Vault login's auth_args only as its login reads it: under the exact name,
 // and a string. A Vault login matches the names exactly.
