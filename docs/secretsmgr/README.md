@@ -72,7 +72,9 @@ body holds a URL with a user info, one with a `:` or an `@` between its `://`
 and its first `/`, or a `user:password@` word, as one that no `}` closes
 before a URL takes in, is no reference, and is masked as the rest of the text
 is. Another `://` is kept, as in CyberArk's
-`${cyberark://AppID://Safe/Object}`, whatever its names hold. An image with a digest, as
+`${cyberark://AppID://Safe/Object}`, but for a Safe that holds an `@` or a
+`:`: such a reference is shown masked where the configuration is reported or
+logged, and still resolves as written. An image with a digest, as
 `img:tag@sha256:...`, is masked before its `@` as a user would be, since
 nothing tells it from git's `user@host:path`, unless a `/` comes before its
 first `:`, as in `ghcr.io/org/img:tag@sha256:...`. The configuration the agent reports is the one as
