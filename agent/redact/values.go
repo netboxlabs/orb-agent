@@ -336,10 +336,23 @@ func shortMasked(s string, from, to int, v string, w wording) bool {
 // them stays masked. yaml.v3 quotes at most 10 bytes of the value, as they
 // are, so a new line in them runs the type error on to the next line, and
 // two type errors are never one.
+//
+// And device-discovery's refusal of a field of the wrong type, missing or not
+// allowed: a list of pydantic's errors, each its message, the field and the
+// error's type, which the agent writes as map[error:... field:... type:...].
+// Only the messages pydantic gives for those quote nothing of the input; a
+// message of one of device-discovery's own validators can, so an element
+// with any other message is not wording.
 var errorWordingPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`yaml: unmarshal errors:`),
 	regexp.MustCompile(`yaml: line \d+: `),
 	regexp.MustCompile("(?m)^[ \\t]*(line \\d+: cannot unmarshal !!\\S+ (?:`((?s:.{0,10}))` )?into (?:[\\w.*\\[\\]]|interface \\{\\}|struct \\{\\})+)$"),
+	regexp.MustCompile(`map\[error:(?:` +
+		`Input should be a valid (?:integer|number|boolean|string|list|dictionary)` +
+		`(?:, (?:unable to parse string as (?:an integer|a number)|unable to interpret input|got a number with a fractional part))?` +
+		`|Input should be a valid dictionary or instance of \w+` +
+		`|Field required|Extra inputs are not permitted` +
+		`) field:\S+ type:\w+\]`),
 }
 
 // errorWording returns, for each byte of s, whether it is part of the

@@ -77,7 +77,17 @@ length of the value:
 - the wording of a YAML decoding error: the `yaml: unmarshal errors:` heading,
   the `yaml: line N: ` in front of a syntax error, and each `cannot unmarshal`
   type error on a line of its own (`line 4: cannot unmarshal !!str ... into
-  int`), apart from the value it quotes.
+  int`), apart from the value it quotes;
+- device-discovery's refusal of a field of the wrong type, a field missing or
+  one not allowed: each of pydantic's messages for those, such as
+  `Input should be a valid integer, unable to parse string as an integer`,
+  with the field and the error type that come with it. These quote nothing of
+  the value, so such a refusal has nothing masked and no note. A message of
+  one of device-discovery's own checks, such as one about a device's rack
+  position, can quote a value, so its words are not left alone. The field is
+  read as the path to it, of field names, list positions and keys, so for a
+  policy whose name has a space in it, the agent can't tell where the field
+  ends, and masks a short value in the message as anywhere else.
 
 A value such as `int`, `line` or `marshal` is masked where such an error
 quotes it and left where it is one of those words or a run of them, so the

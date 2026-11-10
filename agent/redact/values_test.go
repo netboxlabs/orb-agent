@@ -65,6 +65,10 @@ func jsonRoundTrip(t *testing.T, s string) string {
 	return decoded
 }
 
+// ddIntParsing is device-discovery's refusal of a string in a field that
+// takes an integer, as the agent writes the JSON body it answers with.
+const ddIntParsing = "[map[error:Input should be a valid integer, unable to parse string as an integer field:policies.p1.scope.0.timeout type:int_parsing]]"
+
 // TestValues masks a policy's resolved values in a backend's error text,
 // whole, truncated and escaped as backends quote them, and leaves the error's
 // own words readable, including those a value happens to contain.
@@ -246,6 +250,36 @@ func TestValues(t *testing.T) {
 			text:   "400 yaml: unmarshal errors:x9Qz-tail",
 			values: []string{"errors:x9Qz-tail"},
 			want:   "400 yaml: unmarshal ********",
+		},
+		{
+			// device-discovery refuses a field of the wrong type with
+			// pydantic's message, which quotes nothing of the input.
+			name:   "a short value that is a word of device-discovery's type error is left",
+			text:   "403 " + ddIntParsing,
+			values: []string{"a", "valid", "type", "integer"},
+			want:   "403 " + ddIntParsing,
+		},
+		{
+			// A message of a validator of device-discovery's own can quote
+			// the value: it is not wording the agent knows.
+			name:   "a short value in device-discovery's message of its own is masked",
+			text:   "403 [map[error:Value error, sw1: position and face go together; set both field:policies.p1.scope.0 type:value_error]]",
+			values: []string{"sw1"},
+			want:   "403 [map[error:Value error, ********: position and face go together; set both field:policies.p1.scope.0 type:value_error]]",
+		},
+		{
+			name:   "a short value is masked in device-discovery's message of its own, and left in its type error",
+			text:   "403 [" + ddIntParsing[1:len(ddIntParsing)-1] + " map[error:Value error, a: position and face go together; set both field:policies.p1.scope.1 type:value_error]]",
+			values: []string{"a"},
+			want:   "403 [" + ddIntParsing[1:len(ddIntParsing)-1] + " map[error:Value error, ********: position and face go together; set both field:policies.p1.scope.1 type:value_error]]",
+		},
+		{
+			// The field is a path of names, indices and keys, with no space
+			// in it but in a name the agent can't tell from the message.
+			name:   "a short value in device-discovery's type error for a policy whose name has a space is masked",
+			text:   "403 [map[error:Input should be a valid integer, unable to parse string as an integer field:policies.my policy.scope.0.timeout type:int_parsing]]",
+			values: []string{"a"},
+			want:   "403 [map[error:Input should be ******** valid integer, unable to parse string as an integer field:policies.my policy.scope.0.timeout type:int_parsing]]",
 		},
 		{
 			name:   "a YAML syntax error's prefix is left",
@@ -716,7 +750,10 @@ func TestRunStartsFollowTheirDefinition(t *testing.T) {
 	r := rand.New(rand.NewSource(825))
 	alphabets := [][]rune{[]rune("ab"), []rune("ab_ "), []rune("aab-"), []rune("a1_.€é"), []rune("ab密"), []rune("ab`'\" "), []rune("int 4"), []rune("ab\n "), []rune("aab\n")}
 	// Pieces of the wording errorWording knows, so values meet it.
-	wording := []string{"400 ", "yaml: unmarshal errors:\n  ", "line 4: cannot unmarshal !!str `", "` into int", "yaml: line 4: "}
+	wording := []string{
+		"400 ", "yaml: unmarshal errors:\n  ", "line 4: cannot unmarshal !!str `", "` into int", "yaml: line 4: ",
+		"map[error:Input should be a valid boolean field:p.a type:bool_type]",
+	}
 	word := func(alphabet []rune, n int) string {
 		var b strings.Builder
 		for range n {
@@ -898,6 +935,12 @@ func TestErrorWording(t *testing.T) {
 		{
 			text:    "  line 4: cannot unmarshal !!str `012345678\na` into int",
 			wording: strings.Repeat(" ", len("  line 4: cannot unmarshal !!str `012345678\na` into int")),
+		},
+		{
+			// device-discovery's type errors, as the agent writes them: each
+			// element whose message pydantic gives for a type, and no other.
+			text:    "[map[error:Input should be a valid integer, unable to parse string as an integer field:policies.p1.scope.0.timeout type:int_parsing] map[error:Value error, sw1: bad face field:policies.p1.scope.1 type:value_error] map[error:Field required field:policies.p1.scope.2.hostname type:missing]]",
+			wording: " " + strings.Repeat("^", len("map[error:Input should be a valid integer, unable to parse string as an integer field:policies.p1.scope.0.timeout type:int_parsing]")) + strings.Repeat(" ", len(" map[error:Value error, sw1: bad face field:policies.p1.scope.1 type:value_error] ")) + strings.Repeat("^", len("map[error:Field required field:policies.p1.scope.2.hostname type:missing]")) + " ",
 		},
 		{
 			text:    "  line 4: cannot unmarshal !!str `a` into int\n  line 5: cannot unmarshal !!str `b` into int",

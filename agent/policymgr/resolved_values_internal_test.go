@@ -149,6 +149,36 @@ func TestBackendRefusal(t *testing.T) {
 		assert.Equal(t, text, logged)
 	})
 
+	t.Run("names no field for a short value that is only a word of device-discovery's type error", func(t *testing.T) {
+		// device-discovery's answer to a timeout of "a", "valid" or "type":
+		// pydantic's message quotes nothing of the input.
+		text := "[map[error:Input should be a valid integer, unable to parse string as an integer field:policies.p1.scope.0.timeout type:int_parsing]]"
+		for _, v := range []string{"a", "valid", "type"} {
+			logged, reason := backendRefusal("403 ", text, []resolvedValue{{path: "scope[0].timeout", value: v}})
+			assert.Equal(t, "403 "+text, reason, v)
+			assert.Equal(t, "403 "+text, logged, v)
+		}
+	})
+
+	t.Run("masks nothing in device-discovery's type errors the end of what it masks cuts", func(t *testing.T) {
+		// A long refusal of the same field in many targets: wherever the end of
+		// what is masked falls in an element, that element is still wording.
+		values := []resolvedValue{{path: "scope[0].timeout", value: "a"}, {path: "scope[1].timeout", value: "valid"}, {path: "scope[2].timeout", value: "type"}, {path: "scope[3].timeout", value: "integer"}}
+		var elements []string
+		for i := range 120 {
+			elements = append(elements, fmt.Sprintf("map[error:Input should be a valid integer, unable to parse string as an integer field:policies.p1.scope.%d.timeout type:int_parsing]", i))
+		}
+		list := "[" + strings.Join(elements, " ") + "]"
+		require.Greater(t, len(list), maxMaskedErrLen+300)
+		for pad := range 140 {
+			text := strings.Repeat("y", pad) + " " + list
+			logged, reason := backendRefusal("403 ", text, values)
+			require.Contains(t, logged, "... (truncated)", "the bound cuts the refusal")
+			assert.NotContains(t, logged, redact.MaskedSecret, "the list from byte %d", pad)
+			assert.NotContains(t, reason, redact.MaskedSecret, "the list from byte %d", pad)
+		}
+	})
+
 	t.Run("masks a long value that is a run of the YAML error's words only where the error quotes it", func(t *testing.T) {
 		// snmp-discovery's error for retries: "marshal", decoded as int.
 		logged, reason := backendRefusal("400 ", "yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `marshal` into int", []resolvedValue{{path: "config.retries", value: "marshal"}})
