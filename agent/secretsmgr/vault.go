@@ -261,7 +261,11 @@ func (v *vaultManager) loginAgainIfEnded(stale string) bool {
 // while it is valid, and can't tell a path it may not read from its own end.
 // The agent says so once. Any other error leaves it unknown, and the token is
 // asked about at reads as any other. An auth method that cannot log in again
-// is not asked about. The caller holds v.loginMu, or is the manager's start.
+// is not asked about. The caller holds v.loginMu, or is the manager's start:
+// the answer then applies to the token before a read Vault refused with it
+// decides anything. Only such reads, which wait for this login to read again,
+// and the renewals the watcher reports wait on it, and lookupTimeout bounds
+// that wait.
 func (v *vaultManager) checkLookupLocked() {
 	v.lookupDenied = false
 	if cannotLoginAgain(v.auth) != "" {
