@@ -718,6 +718,17 @@ func TestSensitiveData_KeepsTheValueOfAKeyNotEqualToItself(t *testing.T) {
 			t.Fatalf("Expected the NaN keys in the order of their values' types, got %#v", got)
 		}
 	}
+
+	// So are values whose types differ only inside them.
+	nested := map[any]any{}
+	nested[math.NaN()] = []any{1}
+	nested[math.NaN()] = []any{"1"}
+	for range 50 {
+		got := SensitiveData(nested)
+		if want := map[string]any{"NaN": []any{"1"}, "NaN (2)": []any{int64(1)}}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("Expected the NaN keys in the order of their values' nested types, got %#v", got)
+		}
+	}
 }
 
 // TestSensitiveData_MasksAURLUsedAsAKeyInAuthArgs masks a key of a Vault

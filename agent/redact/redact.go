@@ -184,7 +184,8 @@ type mapEntry struct{ key, value reflect.Value }
 
 // sortedEntries returns the entries of the map val, in the order of their
 // keys' strings, then of their keys' types, then of their values' types and
-// strings, for keys written the same. It takes each value as it ranges the
+// Go syntax, nested types included, for keys written the same. It takes each
+// value as it ranges the
 // map: a key not equal to itself, as a NaN, finds no value when looked up
 // again.
 func sortedEntries(val reflect.Value) []mapEntry {
@@ -203,7 +204,8 @@ func sortedEntries(val reflect.Value) []mapEntry {
 		if c := strings.Compare(fmt.Sprintf("%T", keyValue(a.value)), fmt.Sprintf("%T", keyValue(b.value))); c != 0 {
 			return c
 		}
-		return strings.Compare(fmt.Sprintf("%v", keyValue(a.value)), fmt.Sprintf("%v", keyValue(b.value)))
+		// Go's syntax writes the types inside a value too, as []interface {}{1}.
+		return strings.Compare(fmt.Sprintf("%#v", keyValue(a.value)), fmt.Sprintf("%#v", keyValue(b.value)))
 	})
 	return entries
 }
