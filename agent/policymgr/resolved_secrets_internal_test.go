@@ -534,8 +534,12 @@ func TestMaskingALineReusesWhatItMasksWith(t *testing.T) {
 	line := `{"level":"debug","msg":"polled 192.0.2.10 ifHCInOctets.1 = 123456789 in 12ms"}`
 	resolved.maskOutput("worker", line)
 
+	// Masking the line takes 5 allocations, and from 7 to 11 under the race
+	// detector: regexp keeps its matchers in a sync.Pool, which drops a
+	// quarter of them there. Building what the values are masked with takes
+	// about 160,000.
 	allocs := testing.AllocsPerRun(20, func() { resolved.maskOutput("worker", line) })
-	assert.LessOrEqual(t, allocs, 10.0, "allocations to mask one line")
+	assert.LessOrEqual(t, allocs, 100.0, "allocations to mask one line")
 }
 
 // TestRunsAreMaskedForThePolicyTheyAreStoredOn has the store change after
