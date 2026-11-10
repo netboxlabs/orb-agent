@@ -350,40 +350,21 @@ func opaqueSpans(t string, at, off int, word bool) []span {
 	return spans
 }
 
-// userInfoAt returns where the last @ of t that can end a user info is, or
-// -1. The @ of an image's digest, as in img:tag@sha256:..., ends none.
+// userInfoAt returns where the last @ of t is, which can end a user info, or
+// -1. The @ of an image's digest, as in img@sha256:..., is one too: nothing
+// tells it from git's user@host:path for a host named sha256.
 func userInfoAt(t string) int {
-	for at := strings.LastIndexByte(t, '@'); at >= 0; at = strings.LastIndexByte(t[:at], '@') {
-		if !isDigest(t[at+1:]) {
-			return at
-		}
-	}
-	return -1
-}
-
-// isDigest reports whether s starts with an image digest, as sha256: and its
-// 64 lowercase hex digits, which ends s or comes before a / or a separator.
-func isDigest(s string) bool {
-	for _, d := range []struct {
-		algorithm string
-		hex       int
-	}{{"sha256:", 64}, {"sha384:", 96}, {"sha512:", 128}} {
-		rest, ok := strings.CutPrefix(s, d.algorithm)
-		if !ok || len(rest) < d.hex || strings.Trim(rest[:d.hex], "0123456789abcdef") != "" {
-			continue
-		}
-		return len(rest) == d.hex || rest[d.hex] == '/' || strings.IndexByte(urlSeparators, rest[d.hex]) >= 0
-	}
-	return false
+	return strings.LastIndexByte(t, '@')
 }
 
 // referencePattern matches a secret reference, as ${vault://mount/path/key},
 // as the agent's secrets managers match one, for the schemes they resolve.
 // Anything else in ${...}, as ${https://user:password@host}, is no reference,
-// nor is one whose body holds what a reference doesn't but a user info or a
-// list can: an @, a space, a quote, a , or a ;. Such a ${, which a } further
-// on would close, would otherwise keep the user info before it as written.
-var referencePattern = regexp.MustCompile("\\$\\{(?:vault|fleet|doppler|delinea|cyberark|dsv)://[^}@\\s\"'`,;]*\\}")
+// nor is one whose body holds what a reference doesn't but a list can: a
+// space, a quote, a , or a ;. Such a ${, which a } further on would close,
+// would otherwise keep a URL after it as written. A body can hold an @, as a
+// Vault path or field can.
+var referencePattern = regexp.MustCompile("\\$\\{(?:vault|fleet|doppler|delinea|cyberark|dsv)://[^}\\s\"'`,;]*\\}")
 
 // references returns where the secret references of s are, in order: those
 // referencePattern matches with no other :// in their body.

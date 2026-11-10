@@ -64,9 +64,12 @@ URL's path, a password holding a space, a `,` or a `//`, or URLs that a space
 or a line break separates, it masks from the `//`, the first `:` or the start
 of the text to the last `@`, hiding what lies between, hosts included. Before
 a password with a space, the user is kept. Kept as written are an e-mail
-address written alone, as `ops@example.com`, an image digest
-(`@sha256:` and its 64 hex digits), a secret reference, and a URL with a `/`
-before the `:` of its user and password, which git reads as a local path. The configuration the agent reports is the one as
+address written alone, as `ops@example.com`, a secret reference, even one
+whose path holds an `@`, and a URL with a `/` before the `:` of its user and
+password, which git reads as a local path. An image with a digest, as
+`img:tag@sha256:...`, is masked before its `@` as a user would be, since
+nothing tells it from git's `user@host:path`, unless a `/` comes before its
+first `:`, as in `ghcr.io/org/img:tag@sha256:...`. The configuration the agent reports is the one as
 written: a secret reference in it, such as one in `backends`, is reported as
 the reference, never as the value it resolves to.
 

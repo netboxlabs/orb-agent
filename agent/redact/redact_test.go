@@ -505,8 +505,12 @@ func TestURL_MasksEveryURLAStringHolds(t *testing.T) {
 		"https://user:${vault://kv/p/k}@h":     "https://********${vault://kv/p/k}@h",
 		"${vault://secret/data/git/token}":     "${vault://secret/data/git/token}",
 		"tok:${vault://kv/p/k}@github.com:o/r": "********${vault://kv/p/k}@github.com:o/r",
-		// The @ of an image's digest ends no user info.
-		"localhost:5000/img:tag@" + testDigest:      "localhost:5000/img:tag@" + testDigest,
+		// An image's name before its digest can't be told from a user and a
+		// password, or git's user, before a host named sha256: it is masked as
+		// one, but where a / comes before its first :.
+		"localhost:5000/img:tag@" + testDigest:      "********@" + testDigest,
+		"nginx:1.25@" + testDigest:                  "********@" + testDigest,
+		"img@" + testDigest:                         "********@" + testDigest,
 		"ghcr.io/o/i:v1@" + testDigest:              "ghcr.io/o/i:v1@" + testDigest,
 		"https://u:p@reg.example/img@" + testDigest: "https://********@reg.example/img@" + testDigest,
 	} {
@@ -549,8 +553,8 @@ func TestSensitiveData_MasksEveryURLInAValueOrAKey(t *testing.T) {
 const testDigest = "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 
 // TestURL_ShowsNoCredentialNearWhatLooksLikeAReferenceOrADigest masks the
-// user info by a ${ that no } closes before it, and before an @ that only
-// looks like the start of an image digest.
+// user info by a ${ that no } closes before it, and before what looks like
+// an image digest.
 func TestURL_ShowsNoCredentialNearWhatLooksLikeAReferenceOrADigest(t *testing.T) {
 	for _, in := range []string{
 		"password=${vault://kv//a/b;url=https://u:S3cret@h}",
@@ -558,18 +562,36 @@ func TestURL_ShowsNoCredentialNearWhatLooksLikeAReferenceOrADigest(t *testing.T)
 		`{"a":"${vault://kv//a/b","u":"https://u:S3cret@h"}`,
 		"${vault://kv//a/b https://u:S3cret}ss@h",
 		"${vault://kv/a/b https://u:S3cret@h}",
-		"${vault://kv/a/${vault://u:S3cret@h}",
 		"https://u:S3cret@sha256:12345",
 		"u:S3cret@sha256:abcdef",
 		"https://u:S3cret@sha256:" + strings.Repeat("a", 64) + ":443",
+		// git's scp-like host:path, with a host named sha256 and a path of
+		// 64 hex digits: what is before the @ is a user info, not an image.
+		"S3cret:x-oauth-basic@" + testDigest,
+		"u:S3cret/x@" + testDigest,
+		"https://u:S3cret@" + testDigest,
+		"S3cret@" + testDigest,
 	} {
 		if got := URL(in); strings.Contains(got, "S3cret") {
 			t.Errorf("URL(%q) = %q, which shows the password", in, got)
 		}
 	}
-	digest := "registry.example:5000/img:tag@sha256:" + strings.Repeat("9f", 32)
-	if got := URL(digest); got != digest {
-		t.Errorf("URL(%q) = %q, want an image reference kept", digest, got)
+}
+
+// TestURL_KeepsAReferenceWithAnAtSignAsWritten keeps a secret reference whose
+// path or field holds an @, which a Vault path can.
+func TestURL_KeepsAReferenceWithAnAtSignAsWritten(t *testing.T) {
+	for in, want := range map[string]string{
+		"${vault://secret/path/field@name}": "${vault://secret/path/field@name}",
+		"${vault://kv/path@v2/key}":         "${vault://kv/path@v2/key}",
+		// Read as one URL, as before, its user info runs to the reference's
+		// @: the host before the reference is masked with it.
+		"https://u:p@h ${vault://kv/a@b/c}":  "https://********${vault://kv/a@b/c}",
+		"https://u:${vault://kv/a@b/c}@host": "https://********${vault://kv/a@b/c}@host",
+	} {
+		if got := URL(in); got != want {
+			t.Errorf("URL(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
