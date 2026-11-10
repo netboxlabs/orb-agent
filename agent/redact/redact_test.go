@@ -571,6 +571,9 @@ func TestURL_ShowsNoCredentialNearWhatLooksLikeAReferenceOrADigest(t *testing.T)
 		"S3cret:x-oauth-basic@" + testDigest,
 		"u:S3cret/x@" + testDigest,
 		"https://u:S3cret@" + testDigest,
+		// A ${ whose body holds a URL with a user info in its authority.
+		"${vault://kv/a/https://u:S3cret@h}",
+		"${cyberark://Other://u:S3cret@Safe/Object}",
 		"S3cret@" + testDigest,
 	} {
 		if got := URL(in); strings.Contains(got, "S3cret") {
@@ -588,6 +591,9 @@ func TestURL_MasksAURLInsideAnotherOnesQuery(t *testing.T) {
 		"https://u1:p1@a/x#https://u2:p2@b":       "https://********@a/x#https://********@b",
 		"https://u1:p1@a/x?n=1&r=https://u2:p2@b": "https://********@a/x?n=1&r=https://********@b",
 		"https://a/x/ssh://u2:p2@b/r.git":         "https://********@b/r.git",
+		// A URL written without // after another's ? or #.
+		"https://u1:p1@a?u2:p2@b": "https://********@a?********@b",
+		"https://u1:p1@a#u2:p2@b": "https://********@a#********@b",
 	} {
 		if got := URL(in); got != want {
 			t.Errorf("URL(%q) = %q, want %q", in, got, want)
@@ -601,7 +607,9 @@ func TestURL_KeepsAReferenceWithAnAtSignAsWritten(t *testing.T) {
 	for in, want := range map[string]string{
 		// A field can hold anything but a }, as the resolver reads it.
 		"${vault://secret/path/field,@name}": "${vault://secret/path/field,@name}",
-		"${vault://secret/path/a b@c}":       "${vault://secret/path/a b@c}",
+		// CyberArk's qualified form, whose AppID can hold a :, as Other:.
+		"${cyberark://Other://Safe/Object@Field}": "${cyberark://Other://Safe/Object@Field}",
+		"${vault://secret/path/a b@c}":            "${vault://secret/path/a b@c}",
 		// Read as one URL, as before, from the reference's :// to the last @:
 		// what follows the reference is masked up to that @.
 		"${vault://kv/f;x@y} https://u:p@h": "${vault://kv/f;x@y}********@h",

@@ -333,8 +333,8 @@ func isSchemeByte(c byte) bool {
 }
 
 // urlSeparators are the bytes that can come between the URLs of a list, or
-// of a query, after its &.
-const urlSeparators = " \t\r\n,;|=&\"'`<>()[]{}"
+// after another URL's query, fragment or a value of its query.
+const urlSeparators = " \t\r\n,;|=&?#\"'`<>()[]{}"
 
 // span is the bytes [from, to) of a text.
 type span struct{ from, to int }
@@ -422,19 +422,58 @@ func userInfoAt(t string) int {
 var referencePattern = regexp.MustCompile(`\$\{(?:vault|fleet|doppler|delinea|cyberark|dsv)://([^}]*)\}`)
 
 // references returns where the secret references of s are, in order: those
-// referencePattern matches but those whose body holds another :// or a user
-// info. Such a body is what a ${ that no } closed before a URL takes in, up
-// to a } further on, as in ${vault://kv/a/b,https://user:password@host}, and
-// is masked as the rest of s is.
+// referencePattern matches but those whose body holds a credential, as
+// holdsCredential tells. Such a body is what a ${ that no } closed before a
+// URL takes in, up to a } further on, as in
+// ${vault://kv/a/b,https://user:password@host}, and is masked as the rest of
+// s is.
 func references(s string) [][]int {
 	var refs [][]int
 	for _, ref := range referencePattern.FindAllStringSubmatchIndex(s, -1) {
-		body := s[ref[2]:ref[3]]
-		if !strings.Contains(body, "://") && len(spansOf(body)) == 0 {
+		if !holdsCredential(s[ref[2]:ref[3]]) {
 			refs = append(refs, ref[:2])
 		}
 	}
 	return refs
+}
+
+// holdsCredential reports whether body, a reference's, holds a URL with a
+// user info: a :// and a separator, as a list of URLs does; a URL whose
+// authority, before its first / ? or #, holds an @; or a word written
+// without // that holds a user and a password before its @. A reference can
+// hold a :// otherwise, as CyberArk's AppID//Safe/Object does for an AppID
+// that ends with a :.
+func holdsCredential(body string) bool {
+	if strings.Contains(body, "://") && strings.ContainsAny(body, urlSeparators) {
+		return true
+	}
+	for i := strings.Index(body, "://"); i >= 0; {
+		j := i + len("://")
+		for j < len(body) && strings.IndexByte("/?#@", body[j]) < 0 && !strings.HasPrefix(body[j:], "://") {
+			j++
+		}
+		if j < len(body) && body[j] == '@' {
+			return true
+		}
+		next := strings.Index(body[j:], "://")
+		if next < 0 {
+			break
+		}
+		i = j + next
+	}
+	word := 0
+	for i := 0; i <= len(body); i++ {
+		if i < len(body) && strings.IndexByte(urlSeparators, body[i]) < 0 {
+			continue
+		}
+		if w := body[word:i]; !strings.Contains(w, "//") {
+			if at := strings.LastIndexByte(w, '@'); at >= 0 && holdsUserInfo(w[:at]) {
+				return true
+			}
+		}
+		word = i + 1
+	}
+	return false
 }
 
 // withoutReferences returns spans with the secret references refs, in order,
