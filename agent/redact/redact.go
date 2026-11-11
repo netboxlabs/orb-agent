@@ -384,10 +384,9 @@ func URL(s string) string {
 	if !strings.Contains(s, "@") {
 		return s
 	}
-	spans := spansOf(s)
+	texts := []string{s}
 	// s is read again with what looks like a reference as a run of x, so that
-	// its :// and braces read as nothing a URL holds; what either reading
-	// masks is masked.
+	// its :// and braces read as nothing a URL holds.
 	if looks := referencePattern.FindAllStringIndex(s, -1); len(looks) > 0 {
 		b := []byte(s)
 		for _, ref := range looks {
@@ -395,7 +394,20 @@ func URL(s string) string {
 				b[i] = 'x'
 			}
 		}
-		spans = append(spans, spansOf(string(b))...)
+		texts = append(texts, string(b))
+	}
+	// And with each tab as a space, which a URL parser takes in a password,
+	// where it refuses a tab.
+	if strings.IndexByte(s, '\t') >= 0 {
+		n := len(texts)
+		for _, t := range texts[:n] {
+			texts = append(texts, strings.ReplaceAll(t, "\t", " "))
+		}
+	}
+	// What any reading masks is masked.
+	var spans []span
+	for _, t := range texts {
+		spans = append(spans, spansOf(t)...)
 	}
 	return maskSpans(s, withoutReferences(references(s), spans))
 }

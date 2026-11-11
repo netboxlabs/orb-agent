@@ -495,9 +495,14 @@ func TestURL_MasksEveryURLAStringHolds(t *testing.T) {
 		"user:p@ss,//word@h":                        "********@h",
 		"u1:p1@h1,u2:abc=//def@h2":                  "********@h2",
 		"https://u1:p1@h1 u2:p,//x@h2":              "https://********@h2",
-		// A password with a space is masked; the user before it can't be
-		// told from a text's word, and is kept.
-		"user:pa ss@host": "user:********@host",
+		// A password with a space or a tab is masked; the user before it
+		// can't be told from a text's word, and is kept.
+		"user:pa ss@host":  "user:********@host",
+		"user:pa\tss@host": "user:********@host",
+		// A line break ends a line: what comes before it can't be told from a
+		// key and a value, and what follows from an e-mail address.
+		"user:pa\nss@host":          "user:pa\nss@host",
+		"Contact:\nops@example.com": "Contact:\nops@example.com",
 		// A secret reference is kept as written, whatever is masked around it.
 		"https://u:p@h/x ${vault://kv//a/b}": "https://********@h/x ${vault://kv//a/b}",
 		"${vault://kv//a/b},https://u:p@h":   "${vault://kv//a/b}********@h",

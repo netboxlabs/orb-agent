@@ -89,7 +89,10 @@ So a URL of a list that follows another's path without
 URL's path, a password holding a space, a `,` or a `//`, or URLs that a space
 or a line break separates, it masks from the `//`, the first `:` or the start
 of the text to the last `@`, hiding what lies between, hosts included. Before
-a password with a space, the user is kept. Kept as written are an e-mail
+a password with a space or a tab, the user is kept. A password written
+without `//` that holds a line break is shown, as `user:pa` and `ss@host` on
+two lines: nothing tells them from a line that ends in a key and its value
+and one that holds an e-mail address. Kept as written are an e-mail
 address written alone, as `ops@example.com`, a secret reference whose body
 holds no `@`, whatever else it holds, as CyberArk's
 `${cyberark://AppID://Safe/Object}`. A reference whose
