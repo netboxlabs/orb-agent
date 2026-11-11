@@ -51,9 +51,63 @@ credentials in the agent's configuration, such as a token, a password, a client
 secret or any value of a Vault login's `auth_args` but its mount path, user
 name, role and service account file, are masked as `********` wherever the
 agent reports or logs its configuration, as are the user and the password of
-a URL in it, such as a Vault address's, together. A URL with an
-`@` that a parser does not read as the end of its user info, such as one in
-its path, is masked between the `//` before its host and that `@`. The configuration the agent reports is the one as
+a URL in it, such as a Vault address's, together. So are those of each URL of
+a list, as `https://u:p@a.example,https://u:p@b.example`, of a URL in another
+one's path, query or fragment, with its scheme or from its `//`, as after a
+`/`, `?`, `&` or `#`, which is also read as it is alone, up to the next
+space, quote or URL, so a password holding a `?` or a `#` is masked whole and
+an `@` in its path, query or fragment hides what lies between, and of a URL
+used as a key. One whose password holds a `//`, a space or a quote shows what
+comes before it, as `.../https://user:pa//********@host`: nothing tells that
+`//` from the start of another URL, or that space from the end of a word. Two keys masked into the same one are both kept: in the order of
+the keys as written, each one after the first gets ` (2)`, ` (3)` and so on
+after it. A URL written without `//` whose part before its last `@` holds a
+`:` and no space, as `user:password@host` or git's
+`<token>:x-oauth-basic@host:path`, has all of that part masked from the start
+of its word, a scheme written before it too, as `mailto:`: `********@host`.
+So is a user and a password right before an `@` after a `/`, as a URL written
+without `//` in another's path holds them: `ab/cd:token@host` becomes
+`ab/********@host`; and so is a user before git's `host:path` after a `/`, as
+in `.../TOKEN@github.com:org/repo.git`. These are read
+from the `/` to the `@`, through the `@`, `,` `;` `=` `&` `'` and parentheses
+that a user and a password can hold: `.../TOK,EN@github.com:org/repo.git` and
+`.../me@corp:PA,SS@host` become `.../********@github.com:org/repo.git` and
+`.../********@host`. After a `//`, which starts a URL's authority, a user
+alone is masked as well, as a token is: `.../https://TOK=EN@host` becomes
+`.../https://********@host`. In a query or a fragment, they are read the same way
+from the start of a value: from the first `=` after a `?`, `#` or `&`, or
+from that `?`, `#` or `&` when a `:` comes before the `=`, as in a password
+that holds one. `?r=usr:PA;SS@host` and `?proxy=user:c2VjcmV0==@host` become
+`?r=********@host` and `?proxy=********@host`. A flag's value in a text is
+read from its first `=` too: `java -Dhttp.proxy=user:c2VjcmV0==@proxy`
+becomes `java -Dhttp.proxy=********@proxy`. An `&` still separates the
+values of a query or a fragment, so a user and a password that hold one
+there, as in `?r=usr:pa&ss@host`, are shown: `ss@host` reads as a value of
+its own. So is a user that holds an `=` with no name before it, as in
+`?usr=:pass@host`, which reads as a value named `usr`: `?usr=********@host`.
+So a URL of a list that follows another's path without
+`//`, as `https://u:p@a/x,u2:p2@b`, hides that path's last part:
+`https://********@a/********@b`; and a list in a query, as
+`?r=u1:p1@h1,u2:p2@h2`, hides the hosts before its last one:
+`?r=********@h2`. Where the agent can't tell where a user and password end, as for an `@` in a
+URL's path, a password holding a space, a `,` or a `//`, or URLs that a space
+or a line break separates, it masks from the `//`, the first `:` or the start
+of the text to the last `@`, hiding what lies between, hosts included. Before
+a password with a space or a tab, the user is kept. A password written
+without `//` that holds a line break is shown, as `user:pa` and `ss@host` on
+two lines: nothing tells them from a line that ends in a key and its value
+and one that holds an e-mail address. Kept as written are an e-mail
+address written alone, as `ops@example.com`, a secret reference whose body
+holds no `@`, whatever else it holds, as CyberArk's
+`${cyberark://AppID://Safe/Object}`. A reference whose
+body holds an `@`, as a Vault field or a CyberArk Safe can, or that an `@`
+follows in its word, as a user or a password before a host, is masked as the
+rest of the text is: nothing tells it from what a `${` that no `}` closes takes
+in before a URL with a user and a password. It is masked only where the
+configuration is reported or logged, and still resolves as written. An image
+with a digest, as `img:tag@sha256:...`, has its name, and tag, after its last
+`/` masked as a user would be, since nothing tells it from git's
+`user@host:path` for a host named `sha256`: `ghcr.io/org/********@sha256:...`. The configuration the agent reports is the one as
 written: a secret reference in it, such as one in `backends`, is reported as
 the reference, never as the value it resolves to.
 

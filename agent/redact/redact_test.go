@@ -1,8 +1,12 @@
 package redact
 
 import (
+	"fmt"
+	"math"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
@@ -384,9 +388,12 @@ func TestSensitiveData_MasksAURLsUserInfo(t *testing.T) {
 	if redacted["user"] != "https://********@vault.example.com" {
 		t.Errorf("Expected a user with no password, which can be a token, to be masked, got %v", redacted["user"])
 	}
+	// A word of a text that is a user and a password before an @ is masked.
+	if redacted["text"] != "not a URL: ********@host" {
+		t.Errorf("Expected the user and password in the text to be masked, got %v", redacted["text"])
+	}
 	for name, want := range map[string]string{
-		"url":  "https://git.example.com/repo.git",
-		"text": "not a URL: user:pass@host",
+		"url": "https://git.example.com/repo.git",
 	} {
 		if redacted[name] != want {
 			t.Errorf("Expected %s to be kept as %q, got %v", name, want, redacted[name])
@@ -411,18 +418,31 @@ func TestSensitiveData_MasksAURLsUserInfo(t *testing.T) {
 		"https://T0k/en@vault:8200": "https://********@vault:8200",
 		"https://T0k?en@vault:8200": "https://********@vault:8200",
 		"https://T0k#en@vault:8200": "https://********@vault:8200",
-		// A URL written without //, which a parser reads as a scheme and an
-		// opaque part: what is before its last @ is masked.
-		"https:u:s3cret@vault.example.com":   "https:********@vault.example.com",
-		"u:s3cret@vault.example.com:8200":    "u:********@vault.example.com:8200",
-		"https:u:s3cret@vault.example.com?x": "https:********@vault.example.com?x",
+		// A URL written without //, whose part before its last @ holds a :,
+		// as a user and a password do: all of that part is masked, since a
+		// parser reads a user, or a token, as the URL's scheme.
+		"https:u:s3cret@vault.example.com":   "********@vault.example.com",
+		"u:s3cret@vault.example.com:8200":    "********@vault.example.com:8200",
+		"https:u:s3cret@vault.example.com?x": "********@vault.example.com?x",
+		"https:/u:s3cret@vault.example.com":  "********@vault.example.com",
+		"mailto:ops@example.com":             "********@example.com",
+		// A token as git's user, before x-oauth-basic, made of what a scheme
+		// can hold or not.
+		"ghp_T0ken:x-oauth-basic@github.com:org/r.git": "********@github.com:org/r.git",
+		"T0ken123:x-oauth-basic@github.com:org/r.git":  "********@github.com:org/r.git",
+		"glpat-T0ken:x@gitlab.com:org/r.git":           "********@gitlab.com:org/r.git",
+		// An e-mail address, with no : before its @, is not one. After a /,
+		// a user and a password before an @ are masked from the /.
+		"ops@example.com":                    "ops@example.com",
+		"a/b:c@d":                            "a/********@d",
+		"ab/cd:x-oauth-basic@github.com:o/r": "ab/********@github.com:o/r",
 		// git's scp-like address, user@host:path, which no parser reads: what
 		// is before its last @ is masked, whether a token or git's own user.
 		"ghp_T0ken@github.com:org/repo.git": "********@github.com:org/repo.git",
 		"git@github.com:org/repo.git":       "********@github.com:org/repo.git",
-		// A path with a / before its first : is not one, nor is a text with
-		// a space there, nor one with nothing before its @.
-		"./a@b:c":                        "./a@b:c",
+		// After a /, it is masked from the /, as in a path. A text with a
+		// space after the :, or one with nothing before its @, is not one.
+		"./a@b:c":                        "./********@b:c",
 		"Contact ops@example.com: today": "Contact ops@example.com: today",
 		"@scope:value":                   "@scope:value",
 		// So is an @ in a path, at the cost of the host it hides.
@@ -440,6 +460,497 @@ func TestSensitiveData_MasksAURLsUserInfo(t *testing.T) {
 		if got := URL(in); got != want {
 			t.Errorf("URL(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestURL_MasksEveryURLAStringHolds(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://u4:p4@a.invalid,https://u5:p5@b.invalid":  "https://********@a.invalid,https://********@b.invalid",
+		"https://u4:p4@a.invalid;//u5:p5@b.invalid":        "https://********@a.invalid;//********@b.invalid",
+		"u4:p4@a.invalid,https://u5:p5@b.invalid":          "********@a.invalid,https://********@b.invalid",
+		"https://u4:p4@a.invalid,https://b.invalid":        "https://********@a.invalid,https://b.invalid",
+		"https://a.invalid,https://b.invalid":              "https://a.invalid,https://b.invalid",
+		"https://u:p@a.invalid,https://TOK=EN@b.invalid/x": "https://********@a.invalid,https://********@b.invalid/x",
+		// URLs written without //, in a list.
+		"u1:p1@h1\nu2:p2@h2": "********@h1\n********@h2",
+		"git@github.com:org/a.git tok:x-oauth-basic@github.com:org/b.git": "********@github.com:org/a.git ********@github.com:org/b.git",
+		// A password that ends in the = of base64's padding, in a flag's
+		// value, which runs from its first =.
+		"java -Dhttp.proxy=user:c2VjcmV0==@proxy -jar x": "java -Dhttp.proxy=********@proxy -jar x",
+		"opts a=1,proxy=user:c2VjcmV0==@proxy":           "opts a=1,proxy=********@proxy",
+		"see usr:pa=ss@proxy":                            "see ********@proxy",
+		"x -Dhosts=u1:p1@h1,u2:p2@h2 -x":                 "x -Dhosts=********@h1,********@h2 -x",
+		// Read as one URL, the string has everything from its first // or
+		// : to its last @ masked, where no parser tells where its user info
+		// ends: a password that holds a separator, a , or a // is masked
+		// whole, at the cost of the hosts it hides.
+		"https://u4:p4@a.invalid, https://u5:p5@b.invalid": "https://********@b.invalid",
+		"https://u4@a.invalid\nssh://u5@b.invalid/r.git":   "https://********@b.invalid/r.git",
+		"app:S3cret@kafka1:9092, app:S3cret@kafka2:9092":   "********@kafka2:9092",
+		"app:S3cret@kafka1:9092,app:S3cret@kafka2:9092":    "********@kafka2:9092",
+		"https://u:p,//x@h":                         "https://********@h",
+		"https://u:p, https://x@h":                  "https://********@h",
+		"https://a.invalid,https://u5:p5@b.invalid": "https://********@b.invalid",
+		"https://u:p://x@h":                         "https://********@h",
+		"user:p@ss,//word@h":                        "********@h",
+		"u1:p1@h1,u2:abc=//def@h2":                  "********@h2",
+		"https://u1:p1@h1 u2:p,//x@h2":              "https://********@h2",
+		// A password with a space or a tab is masked; the user before it
+		// can't be told from a text's word, and is kept.
+		"user:pa ss@host":  "user:********@host",
+		"user:pa\tss@host": "user:********@host",
+		// A line break ends a line: what comes before it can't be told from a
+		// key and a value, and what follows from an e-mail address.
+		"user:pa\nss@host":          "user:pa\nss@host",
+		"Contact:\nops@example.com": "Contact:\nops@example.com",
+		// A secret reference is kept as written, whatever is masked around it.
+		"https://u:p@h/x ${vault://kv//a/b}": "https://********@h/x ${vault://kv//a/b}",
+		"${vault://kv//a/b},https://u:p@h":   "${vault://kv//a/b}********@h",
+		"${vault://secret/data/git/token}":   "${vault://secret/data/git/token}",
+		// But for one an @ follows in its word, as a user or a password: it is
+		// masked with the user info.
+		"${vault://m/p/k}tok@":                 "${vault://********@",
+		"${vault://kv//db/user}@db:5432":       "********@db:5432",
+		"https://user:${vault://kv/p/k}@h":     "https://********@h",
+		"tok:${vault://kv/p/k}@github.com:o/r": "********@github.com:o/r",
+		// ${...} with a scheme no secrets manager resolves is no reference.
+		"${https://u:p@h}": "${https://********@h}",
+		// git's scp-like address with nothing after its :, read as one URL.
+		"tok@:": "********@:",
+		// In a text, a user and a password start after the separator before
+		// them, as after a flag's =.
+		"-Dhttp.proxy=u:p@proxy:3128":    "-Dhttp.proxy=********@proxy:3128",
+		"ghp_T0ken:abc==@github.com:o/r": "********@github.com:o/r",
+		// An image's name, and tag, before its digest can't be told from a
+		// user and a password, or git's user, before a host named sha256:
+		// they are masked as one, from the image's last /.
+		"localhost:5000/img:tag@" + testDigest:      "********@" + testDigest,
+		"nginx:1.25@" + testDigest:                  "********@" + testDigest,
+		"img@" + testDigest:                         "********@" + testDigest,
+		"ghcr.io/o/i:v1@" + testDigest:              "ghcr.io/o/********@" + testDigest,
+		"ghcr.io/o/i@" + testDigest:                 "ghcr.io/o/********@" + testDigest,
+		"https://u:p@reg.example/img@" + testDigest: "https://********@reg.example/********@" + testDigest,
+	} {
+		if got := URL(in); got != want {
+			t.Errorf("URL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSensitiveData_MasksEveryURLInAValueOrAKey(t *testing.T) {
+	redacted := SensitiveData(map[string]any{
+		"qa_url_list": "https://u4:p4@a.invalid,https://u5:p5@b.invalid",
+		"qa_map":      map[string]any{"https://u6:p6@c.invalid": "x"},
+		"urls":        []any{"https://u7:p7@d.invalid", "ok"},
+		// A key is masked, but its value is still told sensitive by the key
+		// as written.
+		"git@github.com:org/r.git": map[string]any{"password": "s3cret"},
+	}).(map[string]any)
+
+	if got := redacted["qa_url_list"]; got != "https://********@a.invalid,https://********@b.invalid" {
+		t.Errorf("Expected both URLs of the list masked, got %v", got)
+	}
+	if got := redacted["qa_map"]; !reflect.DeepEqual(got, map[string]any{"https://********@c.invalid": "x"}) {
+		t.Errorf("Expected the URL used as a key masked, got %v", got)
+	}
+	if got := redacted["urls"]; !reflect.DeepEqual(got, []any{"https://********@d.invalid", "ok"}) {
+		t.Errorf("Expected the URL in a list masked, got %v", got)
+	}
+	if got := redacted["********@github.com:org/r.git"]; !reflect.DeepEqual(got, map[string]any{"password": MaskedSecret}) {
+		t.Errorf("Expected the key masked and its password masked, got %v", redacted)
+	}
+	for _, canary := range []string{"u4", "p4", "u5", "p5", "u6", "p6", "u7", "p7", "s3cret"} {
+		if strings.Contains(fmt.Sprint(redacted), canary) {
+			t.Errorf("Expected %q nowhere, got %v", canary, redacted)
+		}
+	}
+}
+
+// testDigest is an image digest: sha256 and its 64 hex digits.
+const testDigest = "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+
+// TestURL_ShowsNoCredentialNearWhatLooksLikeAReferenceOrADigest masks the
+// user info by a ${ that no } closes before it, and before what looks like
+// an image digest.
+func TestURL_ShowsNoCredentialNearWhatLooksLikeAReferenceOrADigest(t *testing.T) {
+	for _, in := range []string{
+		"password=${vault://kv//a/b;url=https://u:S3cret@h}",
+		"${vault://kv//a/b,u:S3cret@h}",
+		`{"a":"${vault://kv//a/b","u":"https://u:S3cret@h"}`,
+		"${vault://kv//a/b https://u:S3cret}ss@h",
+		"${vault://kv/a/b https://u:S3cret@h}",
+		"https://u:S3cret@sha256:12345",
+		"u:S3cret@sha256:abcdef",
+		"https://u:S3cret@sha256:" + strings.Repeat("a", 64) + ":443",
+		// git's scp-like host:path, with a host named sha256 and a path of
+		// 64 hex digits: what is before the @ is a user info, not an image.
+		"S3cret:x-oauth-basic@" + testDigest,
+		"u:S3cret/x@" + testDigest,
+		"https://u:S3cret@" + testDigest,
+		// A ${ whose body holds a URL with a user info in its authority.
+		"${vault://kv/a/https://u:S3cret@h}",
+		"${cyberark://Other://u:S3cret@Safe/Object}",
+		// A password with an unescaped / or ? before the @.
+		"${vault://kv/a/https://u:S3cret/x@host}",
+		"${vault://kv/a/https://u:S3cret?x@host}",
+		// A user info holding what a list separates with, which a URL's
+		// user info can hold.
+		"${vault://kv/a,https://S3cret=x@host}",
+		"${vault://kv/a,https://S3cret;x@host}",
+		"${vault://kv/a,https://S3cret,x@host}",
+		"${vault://kv/a,https://S3cret&x@host}",
+		"${vault://kv/a,tok:S3cret=y@h}",
+		"${vault://kv/a tok:S3cret;y@h}",
+		// A URL written from its //, or with a ' or ( in its user info.
+		"${vault://kv/a //S3cret@host}",
+		"${vault://kv/a,https://S3cret'x@host}",
+		"${vault://kv/a,https://S3cret(x@host}",
+		"${vault://kv/a,https://S3cret!x@host}",
+		// The same after a URL whose user info a parser reads.
+		"https://u:p@h/${vault://kv/a/https://u2:S3cret@h2}",
+		"S3cret@" + testDigest,
+	} {
+		if got := URL(in); strings.Contains(got, "S3cret") {
+			t.Errorf("URL(%q) = %q, which shows the password", in, got)
+		}
+	}
+}
+
+// TestURL_MasksAURLInsideAnotherOnesQuery masks a URL that follows another's
+// path, query or fragment with no separator before it.
+func TestURL_MasksAURLInsideAnotherOnesQuery(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://u1:p1@a/x&https://u2:p2@b/y":     "https://********@a/x&https://********@b/y",
+		"https://u1:p1@a/x?https://u2:p2@b":       "https://********@a/x?https://********@b",
+		"https://u1:p1@a/x#https://u2:p2@b":       "https://********@a/x#https://********@b",
+		"https://u1:p1@a/x?n=1&r=https://u2:p2@b": "https://********@a/x?n=1&r=https://********@b",
+		"https://a/x/ssh://u2:p2@b/r.git":         "https://********@b/r.git",
+		// A URL written without // after another's ? or #.
+		"https://u1:p1@a?u2:p2@b": "https://********@a?********@b",
+		"https://u1:p1@a#u2:p2@b": "https://********@a#********@b",
+		// A URL written from its // in another's path or query.
+		"https://u1:p1@a/x//u2:p2@b":  "https://********@a/x//********@b",
+		"https://u1:p1@a/x?r=//u2@b":  "https://********@a/x?r=//********@b",
+		"https://u1:p1@a/x///u2:p2@b": "https://********@a/x///********@b",
+		// A URL written without // in another's path.
+		"https://u1:p1@a/x/https:u2:p2@b": "https://********@a/x/********@b",
+		"https://u1:p1@a/x/u2:p2@b":       "https://********@a/x/********@b",
+		// git's scp-like user@host:path in another's path.
+		"https://u:p@a/x/TOKEN@github.com:org/repo.git": "https://********@a/x/********@github.com:org/repo.git",
+		"https://u:p@a/x/git@github.com:/abs/r":         "https://********@a/x/********@github.com:/abs/r",
+		"see ops@example.com: now":                      "see ops@example.com: now",
+		// A user info holding what a list or a query separates with, as RFC
+		// 3986 lets one hold it, after a /: all of it.
+		"https://u:p@a/x/TOK,EN@github.com:org/repo.git": "https://********@a/x/********@github.com:org/repo.git",
+		"https://u:p@a/x/TO=KEN@github.com:org/repo.git": "https://********@a/x/********@github.com:org/repo.git",
+		"https://u:p@a/x/TO;KEN@github.com:org/repo.git": "https://********@a/x/********@github.com:org/repo.git",
+		"https://u:p@a/x/TO&KEN@github.com:org/repo.git": "https://********@a/x/********@github.com:org/repo.git",
+		"https://u:p@a/x/TO'KEN@github.com:org/repo.git": "https://********@a/x/********@github.com:org/repo.git",
+		"https://u:p@a/x/TO(K)EN@github.com:org/r.git":   "https://********@a/x/********@github.com:org/r.git",
+		"https://u1:p1@a/x/u2:pa,ss@b":                   "https://********@a/x/********@b",
+		"https://u1:p1@a/x/u2:pa=ss@b":                   "https://********@a/x/********@b",
+		// In a query or a fragment, through all of them but & and =, which
+		// still separate its values.
+		"https://u1:p1@a/x?n=1&r=u2:p2@b":           "https://********@a/x?n=1&r=********@b",
+		"https://u1:p1@a/x?TO,KEN@github.com:org/r": "https://********@a/x?********@github.com:org/r",
+		"https://u1:p1@a/x#usr:PA,SS@b":             "https://********@a/x#********@b",
+		"https://u1:p1@a/x?r=usr:PA;SS@b":           "https://********@a/x?r=********@b",
+		// A user that holds an @, before a password that holds a separator.
+		"https://u1:p1@a/x/me@corp:PA,SS@b":         "https://********@a/x/********@b",
+		"https://u1:p1@a/x/https://me@corp:PA,SS@b": "https://********@a/x/https://********@b",
+		"https://u1:p1@a/x?r=me@corp:PA,SS@b":       "https://********@a/x?r=********@b",
+		// A value of a query runs from its first =, a password that holds
+		// one, as base64's padding, included.
+		"https://u1:p1@a/x?proxy=user:c2VjcmV0==@host": "https://********@a/x?proxy=********@host",
+		"https://u1:p1@a/x?n=1&r=user:pa=ss@host":      "https://********@a/x?n=1&r=********@host",
+		"https://u1:p1@a/x?r=me@corp:PA==@b":           "https://********@a/x?r=********@b",
+		// A = after a : is a password's, as no name before a value holds a :.
+		"https://u1:p1@a/x?usr:pa=ss@b": "https://********@a/x?********@b",
+		// A token alone, holding a separator, in a nested URL's authority.
+		"https://u:p@a/x/https://TOK=EN@h/z":   "https://********@a/x/https://********@h/z",
+		"https://u:p@a/x/https://TOK,EN@h/z":   "https://********@a/x/https://********@h/z",
+		"https://u:p@a/x/https://TOK;EN@h/z":   "https://********@a/x/https://********@h/z",
+		"https://u:p@a/x/https://TOK&EN@h/z":   "https://********@a/x/https://********@h/z",
+		"https://u:p@a/x/https://TO'K(E)N@h/z": "https://********@a/x/https://********@h/z",
+		"https://u:p@a/x?r=https://TOK,EN@h":   "https://********@a/x?r=https://********@h",
+		"https://u:p@a/x#https://TOK;EN@h":     "https://********@a/x#https://********@h",
+		"https://u:p@a/x//TOK=EN@h/z":          "https://********@a/x//********@h/z",
+		"https://u:p@a/x///TOK=EN@h/z":         "https://********@a/x///********@h/z",
+		"https://u:p@a/x/dns:///TOK=EN@h":      "https://********@a/x/dns:///********@h",
+		// A nested URL whose password holds a ? or a #, read as it is alone.
+		"https://u:p@outer/x/https://user:pa?ss@host/x":    "https://********@outer/x/https://********@host/x",
+		"https://u:p@outer/x/https://user:pa#ss@host/x":    "https://********@outer/x/https://********@host/x",
+		"https://u:p@outer/x?r=https://user:pa?ss@host":    "https://********@outer/x?r=https://********@host",
+		"https://u:p@outer/x//user:pa?ss@host":             "https://********@outer/x//********@host",
+		"https://u:p@outer/x/https://user:pa?ss@host next": "https://********@outer/x/https://********@host next",
+		// An e-mail address in a path is no authority's user.
+		"https://u:p@a/x/ops@example.com": "https://********@a/x/ops@example.com",
+	} {
+		if got := URL(in); got != want {
+			t.Errorf("URL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestURL_KeepsAReferenceWithNoAtSignAsWritten keeps a secret reference whose
+// body holds no @, whatever else it holds, and masks one whose body holds an
+// @ as the rest of the text: such a body can be a URL with a user info that a
+// ${ no } closed took in, which nothing tells from a name holding an @.
+func TestURL_KeepsAReferenceWithNoAtSignAsWritten(t *testing.T) {
+	for in, want := range map[string]string{
+		"${vault://kv//a/b}":                    "${vault://kv//a/b}",
+		"${vault://secret/path/a b,c;d}":        "${vault://secret/path/a b,c;d}",
+		"${cyberark://Other://Safe/Object}":     "${cyberark://Other://Safe/Object}",
+		"${cyberark://Other://Safe/DB Account}": "${cyberark://Other://Safe/DB Account}",
+		"https://u:p@h ${vault://kv//a/b}":      "https://********@h ${vault://kv//a/b}",
+		"https://u:${vault://kv/p/k}@h":         "https://********@h",
+		// Read as one URL, as before, from the reference's :// to the last @:
+		// what follows the reference is masked up to that @.
+		"${cyberark://App//Safe/Object},u:p@h/x/y": "${cyberark://App//Safe/Object}********@h/x/y",
+	} {
+		if got := URL(in); got != want {
+			t.Errorf("URL(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for _, in := range []string{
+		"${vault://secret/path/field@name}",
+		"${vault://kv/path@v2/key}",
+		"${cyberark://Other://Safe/Object@Field}",
+		"${cyberark://Other://Safe@Prod/Object}",
+	} {
+		if got := URL(in); got == in || !strings.Contains(got, MaskedSecret) {
+			t.Errorf("URL(%q) = %q, want it masked as text", in, got)
+		}
+	}
+}
+
+// TestURL_TakesTimeInLineWithTheString masks a long string with many
+// references in about the time a short one takes per byte: 8 times the
+// length takes about 8 times as long, where a time that grows with the
+// square of the length takes 64 times as long. The times are compared with
+// each other, not with a deadline, so a slower machine or -race does not
+// change the result.
+func TestURL_TakesTimeInLineWithTheString(t *testing.T) {
+	for name, build := range map[string]func(n int) string{
+		// It took 38 s on 1 MiB when references were taken out of the masks
+		// one by one.
+		"a reference every 19 bytes": func(n int) string { return strings.Repeat("${vault://a} u:p@h ", n/19) },
+		// A reference between each two @, after a / or a ?, which every @ is
+		// also read from.
+		"a reference between each two @ after a /": func(n int) string { return "/" + strings.Repeat("${vault://k},a:b@", n/17) },
+		"a reference between each two @ after a ?": func(n int) string { return "?" + strings.Repeat("${vault://k},a:b@", n/17) },
+	} {
+		short, long := fastest(build(32<<10)), fastest(build(256<<10))
+		if growth := float64(long) / float64(short); growth > 24 {
+			t.Errorf("URL of %s took %.0f times as long on 8 times the length: %v, then %v", name, growth, short, long)
+		}
+	}
+}
+
+// fastest returns the shortest of three times URL takes on s.
+func fastest(s string) time.Duration {
+	var best time.Duration
+	for i := range 3 {
+		start := time.Now()
+		URL(s)
+		if took := time.Since(start); i == 0 || took < best {
+			best = took
+		}
+	}
+	return best
+}
+
+// TestSensitiveData_KeepsEveryKeyMaskedIntoAnother keeps both entries of two
+// keys masked into the same one, the same way at every run.
+func TestSensitiveData_KeepsEveryKeyMaskedIntoAnother(t *testing.T) {
+	for range 20 {
+		redacted := SensitiveData(map[string]any{
+			"https://u1:p1@h/x":    "a",
+			"https://u2:p2@h/x":    "b",
+			"https://********@h/x": "c",
+		}).(map[string]any)
+		want := map[string]any{
+			"https://********@h/x":     "c",
+			"https://********@h/x (2)": "a",
+			"https://********@h/x (3)": "b",
+		}
+		if !reflect.DeepEqual(redacted, want) {
+			t.Fatalf("Expected every entry kept, in the order of the keys as written, got %v", redacted)
+		}
+		// Keys written the same, of different types, in the order of their types.
+		mixed := SensitiveData(map[any]any{1: "int", "1": "string"})
+		if want := map[string]any{"1": "int", "1 (2)": "string"}; !reflect.DeepEqual(mixed, want) {
+			t.Fatalf("Expected keys written the same kept in the order of their types, got %v", mixed)
+		}
+	}
+}
+
+// TestSensitiveData_KeepsTheValueOfAKeyNotEqualToItself keeps the value of a
+// NaN key, which YAML decodes .nan into and which no lookup finds again.
+func TestSensitiveData_KeepsTheValueOfAKeyNotEqualToItself(t *testing.T) {
+	redacted := SensitiveData(map[string]any{
+		"plain":     map[any]any{math.NaN(): "x"},
+		"auth_args": map[any]any{math.NaN(): "s3cret", "role": map[any]any{math.NaN(): "s3cret"}},
+	}).(map[string]any)
+
+	if want := map[string]any{"NaN": "x"}; !reflect.DeepEqual(redacted["plain"], want) {
+		t.Errorf("Expected the NaN key's value kept, got %v", redacted["plain"])
+	}
+	want := map[string]any{"NaN": MaskedSecret, "role": map[string]any{"NaN": MaskedSecret}}
+	if !reflect.DeepEqual(redacted["auth_args"], want) {
+		t.Errorf("Expected the NaN keys' values masked, got %v", redacted["auth_args"])
+	}
+
+	// Two NaN keys, whose values print the same, are told apart by their
+	// values' types, the same way at every run.
+	twoNaNs := map[any]any{}
+	twoNaNs[math.NaN()] = 1
+	twoNaNs[math.NaN()] = "1"
+	for range 50 {
+		got := SensitiveData(twoNaNs)
+		if want := map[string]any{"NaN": int64(1), "NaN (2)": "1"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("Expected the NaN keys in the order of their values' types, got %#v", got)
+		}
+	}
+
+	// So are values whose types differ only inside them.
+	nested := map[any]any{}
+	nested[math.NaN()] = []any{1}
+	nested[math.NaN()] = []any{"1"}
+	for range 50 {
+		got := SensitiveData(nested)
+		if want := map[string]any{"NaN": []any{int64(1)}, "NaN (2)": []any{"1"}}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("Expected the NaN keys in the order of their values' nested types, got %#v", got)
+		}
+	}
+}
+
+// sameGoString writes itself the same in Go syntax, whatever it holds.
+type sameGoString struct{ X string }
+
+func (sameGoString) GoString() string { return "same" }
+
+// TestSensitiveData_OrdersValuesThatWriteThemselvesTheSame orders two NaN
+// keys whose values write themselves the same, by what they hold, the same
+// way at every run.
+func TestSensitiveData_OrdersValuesThatWriteThemselvesTheSame(t *testing.T) {
+	twoNaNs := map[float64]sameGoString{}
+	twoNaNs[math.NaN()] = sameGoString{"a"}
+	twoNaNs[math.NaN()] = sameGoString{"b"}
+	var first any
+	for i := range 50 {
+		got := SensitiveData(twoNaNs)
+		if i == 0 {
+			first = got
+		}
+		if !reflect.DeepEqual(got, first) {
+			t.Fatalf("Expected the same order at every run, got %v, then %v", first, got)
+		}
+	}
+	if got := fmt.Sprint(first.(map[string]any)["NaN"]); !strings.Contains(got, "a") {
+		t.Errorf("Expected the value holding a first, got %v", first)
+	}
+}
+
+// TestSensitiveData_OrdersKeysAtEveryLevelInLineWithTheirDepth orders NaN
+// keys at each of 1,000 levels in about the time the levels take alone.
+func TestSensitiveData_OrdersKeysAtEveryLevelInLineWithTheirDepth(t *testing.T) {
+	var v any = "leaf"
+	for range 1000 {
+		level := map[any]any{}
+		level[math.NaN()] = v
+		level[math.NaN()] = "x"
+		v = level
+	}
+	start := time.Now()
+	SensitiveData(map[string]any{"backends": v})
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("Expected 1,000 levels in under 1 s, took %v", took)
+	}
+}
+
+// TestSensitiveData_OrdersValuesNoneOfWhoseTypesWritesThem orders two NaN
+// keys whose values are channels, or functions, the same way at every run.
+func TestSensitiveData_OrdersValuesNoneOfWhoseTypesWritesThem(t *testing.T) {
+	for name, values := range map[string][2]any{
+		"channels":  {make(chan int), make(chan int)},
+		"functions": {func() {}, strings.ToUpper},
+	} {
+		twoNaNs := map[float64]any{}
+		twoNaNs[math.NaN()] = values[0]
+		twoNaNs[math.NaN()] = values[1]
+		first := fmt.Sprint(SensitiveData(twoNaNs))
+		for range 50 {
+			if got := fmt.Sprint(SensitiveData(twoNaNs)); got != first {
+				t.Fatalf("Expected the %s in the same order at every run, got %v, then %v", name, first, got)
+			}
+		}
+	}
+}
+
+// TestSensitiveData_OrdersValuesThatDifferDeepInside orders two NaN keys
+// whose values differ only many levels down, the same way at every run.
+func TestSensitiveData_OrdersValuesThatDifferDeepInside(t *testing.T) {
+	deep := func(leaf string) any {
+		var v any = leaf
+		for range 18 {
+			v = []any{v}
+		}
+		return v
+	}
+	twoNaNs := map[float64]any{}
+	twoNaNs[math.NaN()] = deep("a")
+	twoNaNs[math.NaN()] = deep("b")
+	var first any
+	for i := range 50 {
+		got := SensitiveData(twoNaNs)
+		if i == 0 {
+			first = got
+		}
+		if !reflect.DeepEqual(got, first) {
+			t.Fatalf("Expected the same order at every run, got %v, then %v", first, got)
+		}
+	}
+	if got := fmt.Sprint(first.(map[string]any)["NaN"]); !strings.Contains(got, "a") {
+		t.Errorf("Expected the value holding a first, got %v", first)
+	}
+}
+
+// TestSensitiveData_NumbersManyKeysMaskedIntoOneInLineWithTheirCount numbers
+// 10,000 keys masked into one in about the time 10,000 other keys take.
+func TestSensitiveData_NumbersManyKeysMaskedIntoOneInLineWithTheirCount(t *testing.T) {
+	keys := map[string]any{}
+	for i := range 10000 {
+		keys[fmt.Sprintf("https://u%05d:p@h", i)] = i
+	}
+	start := time.Now()
+	redacted := SensitiveData(keys).(map[string]any)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("Masking 10,000 keys masked into one took %v", took)
+	}
+	if len(redacted) != 10000 || redacted["https://********@h"] != int64(0) || redacted["https://********@h (10000)"] != int64(9999) {
+		t.Errorf("Expected 10,000 entries numbered in the order of the keys, got %d", len(redacted))
+	}
+}
+
+// TestSensitiveData_MasksAURLUsedAsAKeyInAuthArgs masks a key of a Vault
+// login's auth_args, and of a map under it, as a key anywhere else.
+func TestSensitiveData_MasksAURLUsedAsAKeyInAuthArgs(t *testing.T) {
+	args := SensitiveData(map[string]any{
+		"auth_args": map[string]any{
+			"https://u1:p1@h": "s3cret",
+			"role":            "reader",
+			"extra":           map[string]any{"https://u2:p2@h": "s3cret"},
+		},
+	}).(map[string]any)["auth_args"].(map[string]any)
+
+	want := map[string]any{
+		"https://********@h": MaskedSecret,
+		"role":               "reader",
+		"extra":              map[string]any{"https://********@h": MaskedSecret},
+	}
+	if !reflect.DeepEqual(args, want) {
+		t.Errorf("Expected the URL keys masked, got %v", args)
 	}
 }
 
