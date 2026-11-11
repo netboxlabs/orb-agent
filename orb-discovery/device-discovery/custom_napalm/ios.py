@@ -7,6 +7,7 @@ row into a :class:`custom_napalm._vlan.SwitchportInfo`, and delegates to
 the generic classifier. The classifier handles voice promotion, DTP
 fallback, wildcard signaling, and clamping — none of that is duplicated here.
 ``get_modules()`` adds Module / module-bay discovery for modular IOS-XE chassis.
+``get_interfaces()`` leaves out the interfaces the device reports as not present.
 """
 
 import logging
@@ -56,6 +57,27 @@ _IOS_ADDL_NAME_MAP = {
     "FI": "FiveGigabitEthernet",
     "fi": "FiveGigabitEthernet",
 }
+
+# ``show interfaces`` on a Catalyst lists every uplink its network-module slot
+# could carry, and marks the ones the fitted module (or an empty slot) does not
+# provide with this line under the interface header.
+_IOS_NOT_PRESENT_RE = re.compile(r"^\s+Hardware is not present", re.IGNORECASE)
+_IOS_INTERFACE_HEADER_RE = re.compile(r"^(\S+)\s+is\s")
+
+
+def _parse_not_present_interfaces(output: str) -> set[str]:
+    """Names of the interfaces whose block carries ``Hardware is not present``."""
+    absent: set[str] = set()
+    current: str | None = None
+    for line in output.splitlines():
+        # Every interface header starts at column 0, and nothing else at
+        # column 0 belongs to the block above it.
+        if line and not line[0].isspace():
+            header = _IOS_INTERFACE_HEADER_RE.match(line)
+            current = header.group(1) if header else None
+        elif current is not None and _IOS_NOT_PRESENT_RE.match(line):
+            absent.add(current)
+    return absent
 
 
 def _maybe_int(v: object) -> int | None:
@@ -162,6 +184,27 @@ def _ios_row_to_switchport_info(row: dict) -> SwitchportInfo:
 
 class IOSDriver(NapalmIOSDriver):
     """Cisco IOS NAPALM driver with VLAN-interface association support."""
+
+    def get_interfaces(self) -> dict[str, dict]:
+        """
+        Return NAPALM's interfaces, minus those the device reports as not present.
+
+        NAPALM keeps every interface ``show interfaces`` lists, including
+        uplinks that are marked ``Hardware is not present``. The markers are
+        read from the same output, so no second command is sent.
+        """
+        self._show_interfaces = ""
+        interfaces = super().get_interfaces()
+        output, self._show_interfaces = self._show_interfaces, ""
+        absent = _parse_not_present_interfaces(output)
+        return {name: data for name, data in interfaces.items() if name not in absent}
+
+    def _send_command(self, command, *args, **kwargs) -> str:
+        """Run *command* through NAPALM, keeping the ``show interfaces`` output for get_interfaces."""
+        output = super()._send_command(command, *args, **kwargs)
+        if command == "show interfaces":
+            self._show_interfaces = output
+        return output
 
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """

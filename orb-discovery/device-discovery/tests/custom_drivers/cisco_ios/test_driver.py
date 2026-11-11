@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-from custom_napalm.ios import IOSDriver, _maybe_int
+from custom_napalm.ios import IOSDriver, _maybe_int, _parse_not_present_interfaces
 from tests.custom_drivers.base_test import BaseDriverTest
 from tests.custom_drivers.mock_device import FakeCLIDevice
 
@@ -21,6 +21,50 @@ def test_ios_maybe_int_rejects_bool_false():
 def test_ios_maybe_int_passes_through_string_int():
     """Plain string-int still coerces normally."""
     assert _maybe_int("42") == 42
+
+
+def test_not_present_marker_names_the_interface_above_it():
+    """The marker belongs to the header before it, not the one after."""
+    output = (
+        "GigabitEthernet1/0/1 is up, line protocol is up (connected) \n"
+        "TenGigabitEthernet1/1/1 is down, line protocol is down (notconnect) \n"
+        "  Hardware is not present\n"
+        "TwentyFiveGigE1/1/1 is up, line protocol is up (connected) \n"
+    )
+    assert _parse_not_present_interfaces(output) == {"TenGigabitEthernet1/1/1"}
+
+
+def test_not_present_marker_matches_in_any_case():
+    """A release that capitalises the marker still marks the port."""
+    output = (
+        "TenGigabitEthernet1/1/1 is down, line protocol is down (notconnect) \n"
+        "  Hardware is Not Present\n"
+    )
+    assert _parse_not_present_interfaces(output) == {"TenGigabitEthernet1/1/1"}
+
+
+def test_not_present_marker_in_a_description_is_ignored():
+    """An operator description quoting the phrase does not mark the port."""
+    output = (
+        "GigabitEthernet1/0/1 is up, line protocol is up (connected) \n"
+        "  Description: Hardware is not present\n"
+    )
+    assert _parse_not_present_interfaces(output) == set()
+
+
+def test_not_present_marker_after_a_non_interface_line_is_ignored():
+    """A column-0 line the header pattern can't name still ends the block above it."""
+    output = (
+        "GigabitEthernet1/0/1 is up, line protocol is up (connected) \n"
+        "Control Plane Interface is up, line protocol is up \n"
+        "  Hardware is not present\n"
+    )
+    assert _parse_not_present_interfaces(output) == set()
+
+
+def test_not_present_marker_before_any_header_is_ignored():
+    """A marker with no interface header above it names nothing."""
+    assert _parse_not_present_interfaces("  Hardware is not present\n") == set()
 
 
 class TestIOSDriver(BaseDriverTest):
@@ -865,3 +909,19 @@ class TestIOSDriver(BaseDriverTest):
         result = classify_switchport(_ios_row_to_switchport_info(row))
         # NOT mode=trunk — promotion is suppressed when voice == access.
         assert result == {"mode": "access", "tagged": [], "untagged": 10}
+
+    def test_get_interfaces_reads_show_interfaces_once(self) -> None:
+        """The not-present markers come from the output NAPALM already reads."""
+        mock_dir = self.mock_data_root / "test_get_interfaces" / "uplinks_not_present"
+        driver = self._build_driver(mock_dir)
+
+        sent: list[str] = []
+        original = driver.device.send_command
+
+        def recording(cmd, *a, **kw):  # type: ignore[no-untyped-def]
+            sent.append(cmd)
+            return original(cmd, *a, **kw)
+        driver.device.send_command = recording  # type: ignore[method-assign]
+
+        driver.get_interfaces()
+        assert sent == ["show interfaces"]
