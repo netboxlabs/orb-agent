@@ -465,11 +465,12 @@ func TestSensitiveData_MasksAURLsUserInfo(t *testing.T) {
 
 func TestURL_MasksEveryURLAStringHolds(t *testing.T) {
 	for in, want := range map[string]string{
-		"https://u4:p4@a.invalid,https://u5:p5@b.invalid": "https://********@a.invalid,https://********@b.invalid",
-		"https://u4:p4@a.invalid;//u5:p5@b.invalid":       "https://********@a.invalid;//********@b.invalid",
-		"u4:p4@a.invalid,https://u5:p5@b.invalid":         "********@a.invalid,https://********@b.invalid",
-		"https://u4:p4@a.invalid,https://b.invalid":       "https://********@a.invalid,https://b.invalid",
-		"https://a.invalid,https://b.invalid":             "https://a.invalid,https://b.invalid",
+		"https://u4:p4@a.invalid,https://u5:p5@b.invalid":  "https://********@a.invalid,https://********@b.invalid",
+		"https://u4:p4@a.invalid;//u5:p5@b.invalid":        "https://********@a.invalid;//********@b.invalid",
+		"u4:p4@a.invalid,https://u5:p5@b.invalid":          "********@a.invalid,https://********@b.invalid",
+		"https://u4:p4@a.invalid,https://b.invalid":        "https://********@a.invalid,https://b.invalid",
+		"https://a.invalid,https://b.invalid":              "https://a.invalid,https://b.invalid",
+		"https://u:p@a.invalid,https://TOK=EN@b.invalid/x": "https://********@a.invalid,https://********@b.invalid/x",
 		// URLs written without //, in a list.
 		"u1:p1@h1\nu2:p2@h2": "********@h1\n********@h2",
 		"git@github.com:org/a.git tok:x-oauth-basic@github.com:org/b.git": "********@github.com:org/a.git ********@github.com:org/b.git",
@@ -660,6 +661,19 @@ func TestURL_MasksAURLInsideAnotherOnesQuery(t *testing.T) {
 		"https://u1:p1@a/x?r=me@corp:PA==@b":           "https://********@a/x?r=********@b",
 		// A = after a : is a password's, as no name before a value holds a :.
 		"https://u1:p1@a/x?usr:pa=ss@b": "https://********@a/x?********@b",
+		// A token alone, holding a separator, in a nested URL's authority.
+		"https://u:p@a/x/https://TOK=EN@h/z":   "https://********@a/x/https://********@h/z",
+		"https://u:p@a/x/https://TOK,EN@h/z":   "https://********@a/x/https://********@h/z",
+		"https://u:p@a/x/https://TOK;EN@h/z":   "https://********@a/x/https://********@h/z",
+		"https://u:p@a/x/https://TOK&EN@h/z":   "https://********@a/x/https://********@h/z",
+		"https://u:p@a/x/https://TO'K(E)N@h/z": "https://********@a/x/https://********@h/z",
+		"https://u:p@a/x?r=https://TOK,EN@h":   "https://********@a/x?r=https://********@h",
+		"https://u:p@a/x#https://TOK;EN@h":     "https://********@a/x#https://********@h",
+		"https://u:p@a/x//TOK=EN@h/z":          "https://********@a/x//********@h/z",
+		"https://u:p@a/x///TOK=EN@h/z":         "https://********@a/x///********@h/z",
+		"https://u:p@a/x/dns:///TOK=EN@h":      "https://********@a/x/dns:///********@h",
+		// An e-mail address in a path is no authority's user.
+		"https://u:p@a/x/ops@example.com": "https://********@a/x/ops@example.com",
 	} {
 		if got := URL(in); got != want {
 			t.Errorf("URL(%q) = %q, want %q", in, got, want)

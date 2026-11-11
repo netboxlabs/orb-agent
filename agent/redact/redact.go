@@ -457,7 +457,8 @@ func spansOf(t string) []span {
 	// before them, as a URL written without // in another's path holds them,
 	// or a user before git's scp-like host:path. They are also read:
 	//   - from the last / before them, in a path, through the @ and the
-	//     separators a user info can hold;
+	//     separators a user info can hold; when that / ends a //, it starts
+	//     an authority, so a user alone is masked as well, as a token is;
 	//   - in a query or a fragment, from the first = after the last ?, # or &
 	//     before them, which ends a parameter's name, or from that ?, # or &
 	//     when no such = follows it, through the same but &, which separates
@@ -470,15 +471,18 @@ func spansOf(t string) []span {
 	// Where each reading starts, and the last :, are kept from one @ to the
 	// next, so the text is read in time in line with its length.
 	from, inPath, inQuery, inFlag, colon := 0, -1, -1, -1, -1
+	inAuthority := false
 	for at := strings.IndexByte(t, '@'); at >= 0; {
 		seg := t[from:at]
 		if i := strings.LastIndexByte(seg, ':'); i >= 0 {
 			colon = from + i
 		}
 		if i := strings.LastIndexAny(seg, "/"+pathSeparators); i >= 0 {
-			inPath = -1
+			inPath, inAuthority = -1, false
 			if seg[i] == '/' {
 				inPath = from + i + 1
+				// A /// is read from its last //, as the URL that follows it.
+				inAuthority = strings.HasSuffix(t[:inPath], "//")
 			}
 		}
 		if i := strings.LastIndexAny(seg, "/&"+pathSeparators); i >= 0 {
@@ -502,7 +506,7 @@ func spansOf(t string) []span {
 		scp := scpHost(t[at+1:])
 		begin := from + strings.LastIndexAny(seg, "/@"+urlSeparators) + 1
 		for _, head := range [...]int{begin, inPath, inQuery, inFlag} {
-			if head >= 0 && head <= begin && (colon >= head || head < at && scp) {
+			if head >= 0 && head <= begin && (colon >= head || head < at && (scp || head == inPath && inAuthority)) {
 				spans = append(spans, span{head, at})
 			}
 		}

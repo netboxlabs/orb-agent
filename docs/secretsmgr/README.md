@@ -68,7 +68,9 @@ in `.../TOKEN@github.com:org/repo.git`. These are read
 from the `/` to the `@`, through the `@`, `,` `;` `=` `&` `'` and parentheses
 that a user and a password can hold: `.../TOK,EN@github.com:org/repo.git` and
 `.../me@corp:PA,SS@host` become `.../********@github.com:org/repo.git` and
-`.../********@host`. In a query or a fragment, they are read the same way
+`.../********@host`. After a `//`, which starts a URL's authority, a user
+alone is masked as well, as a token is: `.../https://TOK=EN@host` becomes
+`.../https://********@host`. In a query or a fragment, they are read the same way
 from the start of a value: from the first `=` after a `?`, `#` or `&`, or
 from that `?`, `#` or `&` when a `:` comes before the `=`, as in a password
 that holds one. `?r=usr:PA;SS@host` and `?proxy=user:c2VjcmV0==@host` become
