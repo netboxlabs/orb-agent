@@ -520,6 +520,46 @@ func TestEmbeddedLookupExtensions_CiscoCatalyst1200And1300(t *testing.T) {
 	}
 }
 
+func TestEmbeddedLookupExtensions_ExtremeBaseMIB(t *testing.T) {
+	// Product OIDs from EXTREME-BASE-MIB (extremeProduct, .1916.2), named by
+	// their MIB object names.
+	deviceLookup, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+
+	for oid, want := range map[string]string{
+		".1.3.6.1.4.1.1916.2.1":   "summit1",                           // lowest suffix in the MIB
+		".1.3.6.1.4.1.1916.2.325": "vsp7400-48Y-8C",                    // VSP 7400-48Y-8C
+		".1.3.6.1.4.1.1916.2.352": "extreme552048WEXOS",                // 5520-48W, EXOS
+		".1.3.6.1.4.1.1916.2.361": "extreme552048WVOSS",                // 5520-48W, VOSS
+		".1.3.6.1.4.1.1916.2.433": "extreme552048WSwitchEngine",        // 5520-48W, Switch Engine
+		".1.3.6.1.4.1.1916.2.440": "extreme552048WFabricEngine",        // 5520-48W, Fabric Engine
+		".1.3.6.1.4.1.1916.2.549": "extreme5420M24W24S4YESwitchEngine", // highest suffix; only in the 2025-04-02 revision
+		// Products registered under a series node.
+		".1.3.6.1.4.1.1916.2.131.15":  "summitWM3700",
+		".1.3.6.1.4.1.1916.2.504.1.1": "extreme873032D",
+		// Entries that predate the MIB import keep their names, so devices
+		// already in NetBox keep their device type.
+		".1.3.6.1.4.1.1916.2":     "extremeSwitch",
+		".1.3.6.1.4.1.1916.2.89":  "extremeSummitX250e",
+		".1.3.6.1.4.1.1916.2.343": "extremeSwitchingX435",
+	} {
+		model, err := deviceLookup.GetDeviceModel(oid, map[string]string{})
+		assert.NoError(t, err, "OID %s should resolve", oid)
+		assert.Equal(t, want, model, "OID %s", oid)
+	}
+
+	// Series nodes are not products, and the MIB reassigned .504 to one.
+	for _, oid := range []string{
+		".1.3.6.1.4.1.1916.2.131",
+		".1.3.6.1.4.1.1916.2.504",
+		".1.3.6.1.4.1.1916.2.504.1",
+		".1.3.6.1.4.1.1916.2.504.2",
+	} {
+		_, err := deviceLookup.GetDeviceModel(oid, map[string]string{})
+		assert.Error(t, err, "series node %s should not name a model", oid)
+	}
+}
+
 func TestEmbeddedLookupExtensions_NoDuplicateOIDs(t *testing.T) {
 	oidSources := make(map[string]string) // oid -> first file it was seen in
 
