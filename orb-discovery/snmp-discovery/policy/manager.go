@@ -77,6 +77,8 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 	}
 
 	for name, policy := range payload.Policies {
+		normalizeAuthProtocolVersions(&policy)
+		payload.Policies[name] = policy
 		if err := m.validatePolicy(policy); err != nil {
 			return nil, fmt.Errorf("%s : invalid policy : %w", name, err)
 		}
@@ -143,6 +145,32 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 		default:
 			m.logger.Warn("unknown interface_name_source; using auto", "value", *src)
 			policy.Config.Options.InterfaceNameSource = nil // normalize → auto
+		}
+	}
+}
+
+// normalizeProtocolVersion canonicalises common shorthand aliases to the expected form.
+// "2c", "v2c", "2" → "SNMPv2c"; "1", "v1" → "SNMPv1"; "3", "v3" → "SNMPv3".
+func normalizeProtocolVersion(v string) string {
+	switch strings.ToLower(v) {
+	case "1", "v1":
+		return snmp.ProtocolVersion1
+	case "2", "v2", "2c", "v2c":
+		return snmp.ProtocolVersion2c
+	case "3", "v3":
+		return snmp.ProtocolVersion3
+	default:
+		return v
+	}
+}
+
+// normalizeAuthProtocolVersions normalises protocol_version aliases across all
+// authentication blocks in the policy (scope-level and per-target overrides).
+func normalizeAuthProtocolVersions(policy *config.Policy) {
+	policy.Scope.Authentication.ProtocolVersion = normalizeProtocolVersion(policy.Scope.Authentication.ProtocolVersion)
+	for i := range policy.Scope.Targets {
+		if policy.Scope.Targets[i].Authentication != nil {
+			policy.Scope.Targets[i].Authentication.ProtocolVersion = normalizeProtocolVersion(policy.Scope.Targets[i].Authentication.ProtocolVersion)
 		}
 	}
 }
