@@ -677,6 +677,12 @@ func TestURL_MasksAURLInsideAnotherOnesQuery(t *testing.T) {
 		"https://u:p@a/x//TOK=EN@h/z":          "https://********@a/x//********@h/z",
 		"https://u:p@a/x///TOK=EN@h/z":         "https://********@a/x///********@h/z",
 		"https://u:p@a/x/dns:///TOK=EN@h":      "https://********@a/x/dns:///********@h",
+		// A nested URL whose password holds a ? or a #, read as it is alone.
+		"https://u:p@outer/x/https://user:pa?ss@host/x":    "https://********@outer/x/https://********@host/x",
+		"https://u:p@outer/x/https://user:pa#ss@host/x":    "https://********@outer/x/https://********@host/x",
+		"https://u:p@outer/x?r=https://user:pa?ss@host":    "https://********@outer/x?r=https://********@host",
+		"https://u:p@outer/x//user:pa?ss@host":             "https://********@outer/x//********@host",
+		"https://u:p@outer/x/https://user:pa?ss@host next": "https://********@outer/x/https://********@host next",
 		// An e-mail address in a path is no authority's user.
 		"https://u:p@a/x/ops@example.com": "https://********@a/x/ops@example.com",
 	} {

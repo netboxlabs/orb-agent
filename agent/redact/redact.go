@@ -441,22 +441,14 @@ func spansOf(t string) []span {
 				start--
 			}
 		}
-		end := i + len("//")
-		for end < len(t) && strings.IndexByte(urlSeparators, t[end]) < 0 && !strings.HasPrefix(t[end:], "//") {
-			end++
-		}
-		next := -1
-		if strings.HasPrefix(t[end:], "//") {
-			next = end
-			if end > i+len("//") && t[end-1] == ':' {
-				end--
-				for end > i+len("//") && isSchemeByte(t[end-1]) {
-					end--
-				}
-			}
-		}
+		end, next := urlEnd(t, i, urlSeparators)
 		if start > 0 {
 			spans = append(spans, userInfoSpans(t[start:end], start, true)...)
+			// And to the end of its word, as it is read alone: a password can
+			// hold a ? or a #, which ends it above, where its last @ ends it.
+			if whole, _ := urlEnd(t, i, wordSeparators); whole > end {
+				spans = append(spans, userInfoSpans(t[start:whole], start, true)...)
+			}
 		}
 		i = next
 		if next < 0 {
@@ -541,6 +533,26 @@ func valueAt(s string) (int, bool) {
 	return eq, eq >= 0 && (colon < 0 || eq < colon)
 }
 
+// urlEnd returns where the URL whose // is at i in t ends: at the first of
+// stops, or at the next URL, without its scheme, whose // it returns too, or
+// -1.
+func urlEnd(t string, i int, stops string) (end, next int) {
+	end, next = i+len("//"), -1
+	for end < len(t) && strings.IndexByte(stops, t[end]) < 0 && !strings.HasPrefix(t[end:], "//") {
+		end++
+	}
+	if strings.HasPrefix(t[end:], "//") {
+		next = end
+		if end > i+len("//") && t[end-1] == ':' {
+			end--
+			for end > i+len("//") && isSchemeByte(t[end-1]) {
+				end--
+			}
+		}
+	}
+	return end, next
+}
+
 // scpHost reports whether s, what follows an @, starts as git's scp-like
 // host:path does: a host, a : and a path, which no separator starts.
 func scpHost(s string) bool {
@@ -560,6 +572,10 @@ const urlSeparators = pathSeparators + ",;=&'()"
 // pathSeparators are the urlSeparators that a path or a user info can't hold:
 // RFC 3986 lets both hold a , ; = & ' ( or ).
 const pathSeparators = " \t\r\n|?#\"`<>[]{}"
+
+// wordSeparators are the bytes that no URL holds, which a text puts between
+// its words.
+const wordSeparators = " \t\r\n\"`<>|"
 
 // span is the bytes [from, to) of a text.
 type span struct{ from, to int }

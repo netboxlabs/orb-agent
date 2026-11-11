@@ -54,8 +54,12 @@ agent reports or logs its configuration, as are the user and the password of
 a URL in it, such as a Vault address's, together. So are those of each URL of
 a list, as `https://u:p@a.example,https://u:p@b.example`, of a URL in another
 one's path, query or fragment, with its scheme or from its `//`, as after a
-`/`, `?`, `&` or `#`, and of a URL used as a
-key. Two keys masked into the same one are both kept: in the order of
+`/`, `?`, `&` or `#`, which is also read as it is alone, up to the next
+space, quote or URL, so a password holding a `?` or a `#` is masked whole and
+an `@` in its path, query or fragment hides what lies between, and of a URL
+used as a key. One whose password holds a `//`, a space or a quote shows what
+comes before it, as `.../https://user:pa//********@host`: nothing tells that
+`//` from the start of another URL, or that space from the end of a word. Two keys masked into the same one are both kept: in the order of
 the keys as written, each one after the first gets ` (2)`, ` (3)` and so on
 after it. A URL written without `//` whose part before its last `@` holds a
 `:` and no space, as `user:password@host` or git's
