@@ -34,6 +34,15 @@ def test_not_present_marker_names_the_interface_above_it():
     assert _parse_not_present_interfaces(output) == {"TenGigabitEthernet1/1/1"}
 
 
+def test_not_present_marker_matches_in_any_case():
+    """A release that capitalises the marker still marks the port."""
+    output = (
+        "TenGigabitEthernet1/1/1 is down, line protocol is down (notconnect) \n"
+        "  Hardware is Not Present\n"
+    )
+    assert _parse_not_present_interfaces(output) == {"TenGigabitEthernet1/1/1"}
+
+
 def test_not_present_marker_in_a_description_is_ignored():
     """An operator description quoting the phrase does not mark the port."""
     output = (

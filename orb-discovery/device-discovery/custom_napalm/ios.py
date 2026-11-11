@@ -61,7 +61,7 @@ _IOS_ADDL_NAME_MAP = {
 # ``show interfaces`` on a Catalyst lists every uplink its network-module slot
 # could carry, and marks the ones the fitted module (or an empty slot) does not
 # provide with this line under the interface header.
-_IOS_NOT_PRESENT_RE = re.compile(r"^\s+Hardware is not present")
+_IOS_NOT_PRESENT_RE = re.compile(r"^\s+Hardware is not present", re.IGNORECASE)
 _IOS_INTERFACE_HEADER_RE = re.compile(r"^(\S+)\s+is\s")
 
 
