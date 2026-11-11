@@ -64,7 +64,26 @@ of its word, a scheme written before it too, as `mailto:`: `********@host`.
 So is a user and a password right before an `@` after a `/`, as a URL written
 without `//` in another's path holds them: `ab/cd:token@host` becomes
 `ab/********@host`; and so is a user before git's `host:path` after a `/`, as
-in `.../TOKEN@github.com:org/repo.git`. Where the agent can't tell where a user and password end, as for an `@` in a
+in `.../TOKEN@github.com:org/repo.git`. These are read
+from the `/` to the `@`, through the `@`, `,` `;` `=` `&` `'` and parentheses
+that a user and a password can hold: `.../TOK,EN@github.com:org/repo.git` and
+`.../me@corp:PA,SS@host` become `.../********@github.com:org/repo.git` and
+`.../********@host`. In a query or a fragment, they are read the same way
+from the start of a value: from the first `=` after a `?`, `#` or `&`, or
+from that `?`, `#` or `&` when a `:` comes before the `=`, as in a password
+that holds one. `?r=usr:PA;SS@host` and `?proxy=user:c2VjcmV0==@host` become
+`?r=********@host` and `?proxy=********@host`. A flag's value in a text is
+read from its first `=` too: `java -Dhttp.proxy=user:c2VjcmV0==@proxy`
+becomes `java -Dhttp.proxy=********@proxy`. An `&` still separates the
+values of a query or a fragment, so a user and a password that hold one
+there, as in `?r=usr:pa&ss@host`, are shown: `ss@host` reads as a value of
+its own. So is a user that holds an `=` with no name before it, as in
+`?usr=:pass@host`, which reads as a value named `usr`: `?usr=********@host`.
+So a URL of a list that follows another's path without
+`//`, as `https://u:p@a/x,u2:p2@b`, hides that path's last part:
+`https://********@a/********@b`; and a list in a query, as
+`?r=u1:p1@h1,u2:p2@h2`, hides the hosts before its last one:
+`?r=********@h2`. Where the agent can't tell where a user and password end, as for an `@` in a
 URL's path, a password holding a space, a `,` or a `//`, or URLs that a space
 or a line break separates, it masks from the `//`, the first `:` or the start
 of the text to the last `@`, hiding what lies between, hosts included. Before

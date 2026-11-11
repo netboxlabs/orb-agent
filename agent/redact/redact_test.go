@@ -473,6 +473,12 @@ func TestURL_MasksEveryURLAStringHolds(t *testing.T) {
 		// URLs written without //, in a list.
 		"u1:p1@h1\nu2:p2@h2": "********@h1\n********@h2",
 		"git@github.com:org/a.git tok:x-oauth-basic@github.com:org/b.git": "********@github.com:org/a.git ********@github.com:org/b.git",
+		// A password that ends in the = of base64's padding, in a flag's
+		// value, which runs from its first =.
+		"java -Dhttp.proxy=user:c2VjcmV0==@proxy -jar x": "java -Dhttp.proxy=********@proxy -jar x",
+		"opts a=1,proxy=user:c2VjcmV0==@proxy":           "opts a=1,proxy=********@proxy",
+		"see usr:pa=ss@proxy":                            "see ********@proxy",
+		"x -Dhosts=u1:p1@h1,u2:p2@h2 -x":                 "x -Dhosts=********@h1,********@h2 -x",
 		// Read as one URL, the string has everything from its first // or
 		// : to its last @ masked, where no parser tells where its user info
 		// ends: a password that holds a separator, a , or a // is masked
@@ -627,6 +633,33 @@ func TestURL_MasksAURLInsideAnotherOnesQuery(t *testing.T) {
 		"https://u:p@a/x/TOKEN@github.com:org/repo.git": "https://********@a/x/********@github.com:org/repo.git",
 		"https://u:p@a/x/git@github.com:/abs/r":         "https://********@a/x/********@github.com:/abs/r",
 		"see ops@example.com: now":                      "see ops@example.com: now",
+		// A user info holding what a list or a query separates with, as RFC
+		// 3986 lets one hold it, after a /: all of it.
+		"https://u:p@a/x/TOK,EN@github.com:org/repo.git": "https://********@a/x/********@github.com:org/repo.git",
+		"https://u:p@a/x/TO=KEN@github.com:org/repo.git": "https://********@a/x/********@github.com:org/repo.git",
+		"https://u:p@a/x/TO;KEN@github.com:org/repo.git": "https://********@a/x/********@github.com:org/repo.git",
+		"https://u:p@a/x/TO&KEN@github.com:org/repo.git": "https://********@a/x/********@github.com:org/repo.git",
+		"https://u:p@a/x/TO'KEN@github.com:org/repo.git": "https://********@a/x/********@github.com:org/repo.git",
+		"https://u:p@a/x/TO(K)EN@github.com:org/r.git":   "https://********@a/x/********@github.com:org/r.git",
+		"https://u1:p1@a/x/u2:pa,ss@b":                   "https://********@a/x/********@b",
+		"https://u1:p1@a/x/u2:pa=ss@b":                   "https://********@a/x/********@b",
+		// In a query or a fragment, through all of them but & and =, which
+		// still separate its values.
+		"https://u1:p1@a/x?n=1&r=u2:p2@b":           "https://********@a/x?n=1&r=********@b",
+		"https://u1:p1@a/x?TO,KEN@github.com:org/r": "https://********@a/x?********@github.com:org/r",
+		"https://u1:p1@a/x#usr:PA,SS@b":             "https://********@a/x#********@b",
+		"https://u1:p1@a/x?r=usr:PA;SS@b":           "https://********@a/x?r=********@b",
+		// A user that holds an @, before a password that holds a separator.
+		"https://u1:p1@a/x/me@corp:PA,SS@b":         "https://********@a/x/********@b",
+		"https://u1:p1@a/x/https://me@corp:PA,SS@b": "https://********@a/x/https://********@b",
+		"https://u1:p1@a/x?r=me@corp:PA,SS@b":       "https://********@a/x?r=********@b",
+		// A value of a query runs from its first =, a password that holds
+		// one, as base64's padding, included.
+		"https://u1:p1@a/x?proxy=user:c2VjcmV0==@host": "https://********@a/x?proxy=********@host",
+		"https://u1:p1@a/x?n=1&r=user:pa=ss@host":      "https://********@a/x?n=1&r=********@host",
+		"https://u1:p1@a/x?r=me@corp:PA==@b":           "https://********@a/x?r=********@b",
+		// A = after a : is a password's, as no name before a value holds a :.
+		"https://u1:p1@a/x?usr:pa=ss@b": "https://********@a/x?********@b",
 	} {
 		if got := URL(in); got != want {
 			t.Errorf("URL(%q) = %q, want %q", in, got, want)
@@ -674,6 +707,16 @@ func TestURL_TakesTimeInLineWithTheString(t *testing.T) {
 	URL(s)
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("URL of a 1 MiB string with a reference every 19 bytes took %v", took)
+	}
+	// A reference between each two @, after a / or a ?, which every @ is also
+	// read from.
+	for _, head := range []string{"/", "?"} {
+		s := head + strings.Repeat("${vault://k},a:b@", 1<<20/17)
+		start := time.Now()
+		URL(s)
+		if took := time.Since(start); took > 5*time.Second {
+			t.Errorf("URL of a 1 MiB string with a reference between each two @ after a %s took %v", head, took)
+		}
 	}
 }
 
@@ -754,6 +797,70 @@ func TestSensitiveData_OrdersValuesThatWriteThemselvesTheSame(t *testing.T) {
 	twoNaNs := map[float64]sameGoString{}
 	twoNaNs[math.NaN()] = sameGoString{"a"}
 	twoNaNs[math.NaN()] = sameGoString{"b"}
+	var first any
+	for i := range 50 {
+		got := SensitiveData(twoNaNs)
+		if i == 0 {
+			first = got
+		}
+		if !reflect.DeepEqual(got, first) {
+			t.Fatalf("Expected the same order at every run, got %v, then %v", first, got)
+		}
+	}
+	if got := fmt.Sprint(first.(map[string]any)["NaN"]); !strings.Contains(got, "a") {
+		t.Errorf("Expected the value holding a first, got %v", first)
+	}
+}
+
+// TestSensitiveData_OrdersKeysAtEveryLevelInLineWithTheirDepth orders NaN
+// keys at each of 1,000 levels in about the time the levels take alone.
+func TestSensitiveData_OrdersKeysAtEveryLevelInLineWithTheirDepth(t *testing.T) {
+	var v any = "leaf"
+	for range 1000 {
+		level := map[any]any{}
+		level[math.NaN()] = v
+		level[math.NaN()] = "x"
+		v = level
+	}
+	start := time.Now()
+	SensitiveData(map[string]any{"backends": v})
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("Expected 1,000 levels in under 1 s, took %v", took)
+	}
+}
+
+// TestSensitiveData_OrdersValuesNoneOfWhoseTypesWritesThem orders two NaN
+// keys whose values are channels, or functions, the same way at every run.
+func TestSensitiveData_OrdersValuesNoneOfWhoseTypesWritesThem(t *testing.T) {
+	for name, values := range map[string][2]any{
+		"channels":  {make(chan int), make(chan int)},
+		"functions": {func() {}, strings.ToUpper},
+	} {
+		twoNaNs := map[float64]any{}
+		twoNaNs[math.NaN()] = values[0]
+		twoNaNs[math.NaN()] = values[1]
+		first := fmt.Sprint(SensitiveData(twoNaNs))
+		for range 50 {
+			if got := fmt.Sprint(SensitiveData(twoNaNs)); got != first {
+				t.Fatalf("Expected the %s in the same order at every run, got %v, then %v", name, first, got)
+			}
+		}
+	}
+}
+
+// TestSensitiveData_OrdersValuesThatDifferDeepInside orders two NaN keys
+// whose values differ only many levels down, the same way at every run.
+func TestSensitiveData_OrdersValuesThatDifferDeepInside(t *testing.T) {
+	deep := func(leaf string) any {
+		var v any = leaf
+		for range 18 {
+			v = []any{v}
+		}
+		return v
+	}
+	twoNaNs := map[float64]any{}
+	twoNaNs[math.NaN()] = deep("a")
+	twoNaNs[math.NaN()] = deep("b")
 	var first any
 	for i := range 50 {
 		got := SensitiveData(twoNaNs)

@@ -1,13 +1,13 @@
 package redact
 
 import (
+	"cmp"
 	"fmt"
+	"math"
 	"net/url"
 	"reflect"
 	"regexp"
 	"slices"
-	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -171,107 +171,143 @@ func redactMap(val reflect.Value) any {
 	}
 
 	keys := newMaskedKeys(val.Len())
-	for _, entry := range sortedEntries(val) {
-		keyStr := mapKey(entry.key)
-		// Redact the value, passing the field name for sensitive field detection
-		keys.put(keyStr, redactValue(entry.value, keyStr))
+	// Redact each value, passing the field name for sensitive field detection
+	for _, entry := range sortedEntries(val, func(keyStr string, value reflect.Value) any {
+		return redactValue(value, keyStr)
+	}) {
+		keys.put(entry.name, entry.value)
 	}
 
 	return keys.result
 }
 
-// mapEntry is a key of a map and its value.
-type mapEntry struct{ key, value reflect.Value }
+// mapEntry is a key of a map, its name as mapKey writes it, and its value,
+// redacted.
+type mapEntry struct {
+	key   reflect.Value
+	name  string
+	value any
+}
 
-// sortedEntries returns the entries of the map val, in the order of their
-// keys' strings, then of their keys' types, then of their values as
-// valueRepr writes them, for keys written the same. It takes each value as it
+// sortedEntries returns the entries of the map val, each value as redact
+// returns it for its key's name, in the order of their keys' names, then of
+// their keys' types, then of their redacted values as compareRedacted orders
+// them, for keys written the same: two entries whose redacted values are the
+// same give the same result in either order. It takes each value as it
 // ranges the map: a key not equal to itself, as a NaN, finds no value when
 // looked up again.
-func sortedEntries(val reflect.Value) []mapEntry {
+func sortedEntries(val reflect.Value, redact func(name string, value reflect.Value) any) []mapEntry {
 	entries := make([]mapEntry, 0, val.Len())
 	iter := val.MapRange()
 	for iter.Next() {
-		entries = append(entries, mapEntry{iter.Key(), iter.Value()})
+		name := mapKey(iter.Key())
+		entries = append(entries, mapEntry{iter.Key(), name, redact(name, iter.Value())})
 	}
 	slices.SortFunc(entries, func(a, b mapEntry) int {
-		if c := strings.Compare(mapKey(a.key), mapKey(b.key)); c != 0 {
+		if c := strings.Compare(a.name, b.name); c != 0 {
 			return c
 		}
 		if c := strings.Compare(fmt.Sprintf("%T", keyValue(a.key)), fmt.Sprintf("%T", keyValue(b.key))); c != 0 {
 			return c
 		}
-		return strings.Compare(valueRepr(a.value), valueRepr(b.value))
+		return compareRedacted(reflect.ValueOf(a.value), reflect.ValueOf(b.value))
 	})
 	return entries
 }
 
-// valueRepr returns v written with its types, nested ones included, by
-// reflection alone: no method of v's types, as a String or a GoString that
-// writes two values the same, is called.
-func valueRepr(v reflect.Value) string {
-	var b strings.Builder
-	writeRepr(&b, v, 0)
-	return b.String()
-}
-
-// writeRepr writes v to b as valueRepr does, as deep as maxReprDepth.
-func writeRepr(b *strings.Builder, v reflect.Value, depth int) {
-	if !v.IsValid() || depth > maxReprDepth {
-		b.WriteString("<>")
-		return
+// compareRedacted orders a and b, two values as they are redacted, by their
+// types, nested ones included, then by what they hold, and stops at the
+// first part that differs. It reads them by reflection alone: no method of a
+// type, as a String that writes two values the same, is called. A redacted
+// value is a tree of maps, slices and what they hold, which no pointer leads
+// back into; a channel in it is ordered by its address, the same for the
+// same channel at every call, and a function by its code's, which two
+// closures of one function literal share and print the same.
+func compareRedacted(a, b reflect.Value) int {
+	if !a.IsValid() || !b.IsValid() {
+		return cmp.Compare(boolOrder(a.IsValid()), boolOrder(b.IsValid()))
 	}
-	b.WriteString(v.Type().String())
-	b.WriteByte('{')
-	switch v.Kind() {
-	case reflect.Pointer, reflect.Interface:
-		if !v.IsNil() {
-			writeRepr(b, v.Elem(), depth+1)
-		}
-	case reflect.Struct:
-		for i := range v.NumField() {
-			writeRepr(b, v.Field(i), depth+1)
-			b.WriteByte(',')
-		}
+	if c := strings.Compare(a.Type().String(), b.Type().String()); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Kind(), b.Kind()); c != 0 {
+		return c
+	}
+	switch a.Kind() {
+	case reflect.Interface:
+		return compareRedacted(a.Elem(), b.Elem())
 	case reflect.Slice, reflect.Array:
-		for i := range v.Len() {
-			writeRepr(b, v.Index(i), depth+1)
-			b.WriteByte(',')
+		for i := range min(a.Len(), b.Len()) {
+			if c := compareRedacted(a.Index(i), b.Index(i)); c != 0 {
+				return c
+			}
 		}
+		return cmp.Compare(a.Len(), b.Len())
 	case reflect.Map:
-		entries := make([]string, 0, v.Len())
-		iter := v.MapRange()
-		for iter.Next() {
-			entries = append(entries, valueReprAt(iter.Key(), depth+1)+":"+valueReprAt(iter.Value(), depth+1))
+		as, bs := sortedPairs(a), sortedPairs(b)
+		for i := range min(len(as), len(bs)) {
+			if c := compareRedacted(as[i][0], bs[i][0]); c != 0 {
+				return c
+			}
+			if c := compareRedacted(as[i][1], bs[i][1]); c != 0 {
+				return c
+			}
 		}
-		slices.Sort(entries)
-		b.WriteString(strings.Join(entries, ","))
+		return cmp.Compare(len(as), len(bs))
 	case reflect.String:
-		b.WriteString(strconv.Quote(v.String()))
+		return strings.Compare(a.String(), b.String())
 	case reflect.Bool:
-		b.WriteString(strconv.FormatBool(v.Bool()))
+		return cmp.Compare(boolOrder(a.Bool()), boolOrder(b.Bool()))
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		b.WriteString(strconv.FormatInt(v.Int(), 10))
+		return cmp.Compare(a.Int(), b.Int())
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		b.WriteString(strconv.FormatUint(v.Uint(), 10))
+		return cmp.Compare(a.Uint(), b.Uint())
 	case reflect.Float32, reflect.Float64:
-		b.WriteString(strconv.FormatFloat(v.Float(), 'g', -1, 64))
+		return compareFloats(a.Float(), b.Float())
 	case reflect.Complex64, reflect.Complex128:
-		b.WriteString(strconv.FormatComplex(v.Complex(), 'g', -1, 128))
+		if c := compareFloats(real(a.Complex()), real(b.Complex())); c != 0 {
+			return c
+		}
+		return compareFloats(imag(a.Complex()), imag(b.Complex()))
+	case reflect.Chan, reflect.Func, reflect.Pointer, reflect.UnsafePointer:
+		return cmp.Compare(a.Pointer(), b.Pointer())
 	}
-	b.WriteByte('}')
+	return 0
 }
 
-// valueReprAt returns v written as writeRepr writes it at depth.
-func valueReprAt(v reflect.Value, depth int) string {
-	var b strings.Builder
-	writeRepr(&b, v, depth)
-	return b.String()
+// sortedPairs returns the keys and values of the map m, in the order
+// compareRedacted puts its keys in, then its values.
+func sortedPairs(m reflect.Value) [][2]reflect.Value {
+	pairs := make([][2]reflect.Value, 0, m.Len())
+	iter := m.MapRange()
+	for iter.Next() {
+		pairs = append(pairs, [2]reflect.Value{iter.Key(), iter.Value()})
+	}
+	slices.SortFunc(pairs, func(a, b [2]reflect.Value) int {
+		if c := compareRedacted(a[0], b[0]); c != 0 {
+			return c
+		}
+		return compareRedacted(a[1], b[1])
+	})
+	return pairs
 }
 
-// maxReprDepth bounds how deep valueRepr follows a value, as through a
-// pointer that leads back to it.
-const maxReprDepth = 16
+// compareFloats orders a and b as numbers, then by their bits, which tell
+// -0 from 0 and one NaN from another.
+func compareFloats(a, b float64) int {
+	if c := cmp.Compare(a, b); c != 0 {
+		return c
+	}
+	return cmp.Compare(math.Float64bits(a), math.Float64bits(b))
+}
+
+// boolOrder returns 1 for true and 0 for false.
+func boolOrder(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
 
 // keyValue returns what key, a map's key or value, holds behind its
 // interface.
@@ -419,12 +455,56 @@ func spansOf(t string) []span {
 	}
 	// A user and a password right before an @, from the /, separator or @
 	// before them, as a URL written without // in another's path holds them,
-	// or a user before git's scp-like host:path.
-	from := 0
+	// or a user before git's scp-like host:path. They are also read:
+	//   - from the last / before them, in a path, through the @ and the
+	//     separators a user info can hold;
+	//   - in a query or a fragment, from the first = after the last ?, # or &
+	//     before them, which ends a parameter's name, or from that ?, # or &
+	//     when no such = follows it, through the same but &, which separates
+	//     values there;
+	//   - in a flag's value, as in -Dhttp.proxy=user:pa==@host, from the first
+	//     = after the last other separator before them, or after the start
+	//     of the text, which ends the flag's name, or from that separator when
+	//     a : comes before that =, through the = that base64's padding ends a
+	//     password with.
+	// Where each reading starts, and the last :, are kept from one @ to the
+	// next, so the text is read in time in line with its length.
+	from, inPath, inQuery, inFlag, colon := 0, -1, -1, -1, -1
 	for at := strings.IndexByte(t, '@'); at >= 0; {
-		begin := from + strings.LastIndexAny(t[from:at], "/@"+urlSeparators) + 1
-		if strings.IndexByte(t[begin:at], ':') >= 0 || begin < at && scpHost(t[at+1:]) {
-			spans = append(spans, span{begin, at})
+		seg := t[from:at]
+		if i := strings.LastIndexByte(seg, ':'); i >= 0 {
+			colon = from + i
+		}
+		if i := strings.LastIndexAny(seg, "/"+pathSeparators); i >= 0 {
+			inPath = -1
+			if seg[i] == '/' {
+				inPath = from + i + 1
+			}
+		}
+		if i := strings.LastIndexAny(seg, "/&"+pathSeparators); i >= 0 {
+			inQuery = -1
+			if strings.IndexByte("?#&", seg[i]) >= 0 {
+				inQuery = from + i + 1
+				if eq, named := valueAt(seg[i+1:]); named {
+					inQuery += eq + 1
+				}
+			}
+		}
+		if i := strings.LastIndexAny(seg, "/,;&'()"+pathSeparators); i >= 0 || from == 0 {
+			inFlag = -1
+			if eq, named := valueAt(seg[i+1:]); eq >= 0 && (i < 0 || seg[i] != '/') {
+				inFlag = from + i + 1
+				if named {
+					inFlag += eq + 1
+				}
+			}
+		}
+		scp := scpHost(t[at+1:])
+		begin := from + strings.LastIndexAny(seg, "/@"+urlSeparators) + 1
+		for _, head := range [...]int{begin, inPath, inQuery, inFlag} {
+			if head >= 0 && head <= begin && (colon >= head || head < at && scp) {
+				spans = append(spans, span{head, at})
+			}
 		}
 		from = at + 1
 		next := strings.IndexByte(t[from:], '@')
@@ -434,6 +514,15 @@ func spansOf(t string) []span {
 		at = from + next
 	}
 	return spans
+}
+
+// valueAt returns where the first = of s, a query's parameter or a flag, is,
+// or -1, and whether it ends a name: no : comes before it, as a name holds
+// none, where a user and a password before an = in the password hold one.
+func valueAt(s string) (int, bool) {
+	eq := strings.IndexByte(s, '=')
+	colon := strings.IndexByte(s, ':')
+	return eq, eq >= 0 && (colon < 0 || eq < colon)
 }
 
 // scpHost reports whether s, what follows an @, starts as git's scp-like
@@ -450,7 +539,11 @@ func isSchemeByte(c byte) bool {
 
 // urlSeparators are the bytes that can come between the URLs of a list, or
 // after another URL's query, fragment or a value of its query.
-const urlSeparators = " \t\r\n,;|=&?#\"'`<>()[]{}"
+const urlSeparators = pathSeparators + ",;=&'()"
+
+// pathSeparators are the urlSeparators that a path or a user info can't hold:
+// RFC 3986 lets both hold a , ; = & ' ( or ).
+const pathSeparators = " \t\r\n|?#\"`<>[]{}"
 
 // span is the bytes [from, to) of a text.
 type span struct{ from, to int }
@@ -561,17 +654,20 @@ func references(s string) [][]int {
 
 // withoutReferences returns spans with the secret references refs, in order,
 // taken out of them: a reference is not its value, and is kept as written.
+// The spans are merged first, so that each reference is taken out of the few
+// it overlaps, however many spans cover it.
 func withoutReferences(refs [][]int, spans []span) []span {
 	if len(refs) == 0 {
 		return spans
 	}
 	var kept []span
-	for _, sp := range spans {
+	r := 0
+	for _, sp := range merged(spans) {
+		for r < len(refs) && refs[r][1] <= sp.from {
+			r++
+		}
 		from := sp.from
-		// The references a span overlaps start at the first that ends after it
-		// starts.
-		first := sort.Search(len(refs), func(i int) bool { return refs[i][1] > sp.from })
-		for _, ref := range refs[first:] {
+		for _, ref := range refs[r:] {
 			if ref[0] >= sp.to {
 				break
 			}
@@ -587,26 +683,36 @@ func withoutReferences(refs [][]int, spans []span) []span {
 	return kept
 }
 
+// merged returns spans in order, those that overlap or touch made one, and
+// those that cover no byte left out.
+func merged(spans []span) []span {
+	slices.SortFunc(spans, func(a, b span) int { return a.from - b.from })
+	var runs []span
+	for _, sp := range spans {
+		switch {
+		case sp.from >= sp.to:
+		case len(runs) > 0 && sp.from <= runs[len(runs)-1].to:
+			runs[len(runs)-1].to = max(runs[len(runs)-1].to, sp.to)
+		default:
+			runs = append(runs, sp)
+		}
+	}
+	return runs
+}
+
 // maskSpans returns s with each run of bytes the spans cover replaced by
 // ********.
 func maskSpans(s string, spans []span) string {
-	if len(spans) == 0 {
+	runs := merged(spans)
+	if len(runs) == 0 {
 		return s
 	}
-	slices.SortFunc(spans, func(a, b span) int { return a.from - b.from })
 	var b strings.Builder
 	last := 0
-	for i := 0; i < len(spans); {
-		from, to := spans[i].from, spans[i].to
-		for i++; i < len(spans) && spans[i].from <= to; i++ {
-			to = max(to, spans[i].to)
-		}
-		if from >= to {
-			continue
-		}
-		b.WriteString(s[last:from])
+	for _, run := range runs {
+		b.WriteString(s[last:run.from])
 		b.WriteString(MaskedSecret)
-		last = to
+		last = run.to
 	}
 	b.WriteString(s[last:])
 	return b.String()
@@ -695,14 +801,14 @@ func redactContainer(val reflect.Value, keep []string) any {
 	}
 
 	keys := newMaskedKeys(val.Len())
-	for _, entry := range sortedEntries(val) {
-		keyStr := mapKey(entry.key)
+	for _, entry := range sortedEntries(val, func(keyStr string, value reflect.Value) any {
 		// A login reads a field under its exact name, and as a string.
-		if slices.Contains(keep, keyStr) && isString(entry.value) {
-			keys.put(keyStr, redactValue(entry.value, keyStr))
-		} else {
-			keys.put(keyStr, maskLeaves(entry.value))
+		if slices.Contains(keep, keyStr) && isString(value) {
+			return redactValue(value, keyStr)
 		}
+		return maskLeaves(value)
+	}) {
+		keys.put(entry.name, entry.value)
 	}
 
 	return keys.result
@@ -733,8 +839,8 @@ func maskLeaves(val reflect.Value) any {
 			return nil
 		}
 		keys := newMaskedKeys(val.Len())
-		for _, entry := range sortedEntries(val) {
-			keys.put(mapKey(entry.key), maskLeaves(entry.value))
+		for _, entry := range sortedEntries(val, func(_ string, value reflect.Value) any { return maskLeaves(value) }) {
+			keys.put(entry.name, entry.value)
 		}
 		return keys.result
 	case reflect.Slice, reflect.Array:
