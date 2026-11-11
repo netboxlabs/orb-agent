@@ -725,24 +725,39 @@ func TestURL_KeepsAReferenceWithNoAtSignAsWritten(t *testing.T) {
 }
 
 // TestURL_TakesTimeInLineWithTheString masks a long string with many
-// references in about the time a short one takes per byte.
+// references in about the time a short one takes per byte: 8 times the
+// length takes about 8 times as long, where a time that grows with the
+// square of the length takes 64 times as long. The times are compared with
+// each other, not with a deadline, so a slower machine or -race does not
+// change the result.
 func TestURL_TakesTimeInLineWithTheString(t *testing.T) {
-	s := strings.Repeat("${vault://a} u:p@h ", 1<<20/19)
-	start := time.Now()
-	URL(s)
-	if took := time.Since(start); took > 5*time.Second {
-		t.Errorf("URL of a 1 MiB string with a reference every 19 bytes took %v", took)
-	}
-	// A reference between each two @, after a / or a ?, which every @ is also
-	// read from.
-	for _, head := range []string{"/", "?"} {
-		s := head + strings.Repeat("${vault://k},a:b@", 1<<20/17)
-		start := time.Now()
-		URL(s)
-		if took := time.Since(start); took > 5*time.Second {
-			t.Errorf("URL of a 1 MiB string with a reference between each two @ after a %s took %v", head, took)
+	for name, build := range map[string]func(n int) string{
+		// It took 38 s on 1 MiB when references were taken out of the masks
+		// one by one.
+		"a reference every 19 bytes": func(n int) string { return strings.Repeat("${vault://a} u:p@h ", n/19) },
+		// A reference between each two @, after a / or a ?, which every @ is
+		// also read from.
+		"a reference between each two @ after a /": func(n int) string { return "/" + strings.Repeat("${vault://k},a:b@", n/17) },
+		"a reference between each two @ after a ?": func(n int) string { return "?" + strings.Repeat("${vault://k},a:b@", n/17) },
+	} {
+		short, long := fastest(build(32<<10)), fastest(build(256<<10))
+		if growth := float64(long) / float64(short); growth > 24 {
+			t.Errorf("URL of %s took %.0f times as long on 8 times the length: %v, then %v", name, growth, short, long)
 		}
 	}
+}
+
+// fastest returns the shortest of three times URL takes on s.
+func fastest(s string) time.Duration {
+	var best time.Duration
+	for i := range 3 {
+		start := time.Now()
+		URL(s)
+		if took := time.Since(start); i == 0 || took < best {
+			best = took
+		}
+	}
+	return best
 }
 
 // TestSensitiveData_KeepsEveryKeyMaskedIntoAnother keeps both entries of two
