@@ -406,7 +406,7 @@ How NetBox and Diode handle a placement:
 #### Authentication Parameters
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
-| protocol_version | string | yes | SNMP protocol version ("SNMPv1", "SNMPv2c", or "SNMPv3") |
+| protocol_version | string | yes | SNMP protocol version ("SNMPv1", "SNMPv2c", or "SNMPv3"). The short forms 1, v1, 2, v2, 2c, v2c, 3 and v3 are accepted too, in any letter case; the full names must be written as shown. |
 | community | string | yes* | SNMP community string for v1/v2c authentication |
 | username | string | no | SNMPv3 username |
 | security_level | string | no | SNMPv3 security level ("noAuthNoPriv", "authNoPriv", "authPriv") |

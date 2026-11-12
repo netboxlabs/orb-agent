@@ -570,6 +570,72 @@ func TestManagerParsePolicies_ContextName(t *testing.T) {
 	})
 }
 
+func TestManagerParsePolicies_ProtocolVersionAliases(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+
+	credentials := map[string]string{
+		snmp.ProtocolVersion1:  "community: public",
+		snmp.ProtocolVersion2c: "community: public",
+		snmp.ProtocolVersion3:  "security_level: noAuthNoPriv",
+	}
+	tests := []struct {
+		version string // as written in the YAML
+		want    string
+	}{
+		{`1`, snmp.ProtocolVersion1},
+		{`"1"`, snmp.ProtocolVersion1},
+		{`v1`, snmp.ProtocolVersion1},
+		{`2`, snmp.ProtocolVersion2c},
+		{`v2`, snmp.ProtocolVersion2c},
+		{`2c`, snmp.ProtocolVersion2c},
+		{`v2c`, snmp.ProtocolVersion2c},
+		{`V2C`, snmp.ProtocolVersion2c},
+		{`3`, snmp.ProtocolVersion3},
+		{`"3"`, snmp.ProtocolVersion3},
+		{`v3`, snmp.ProtocolVersion3},
+		{`SNMPv2c`, snmp.ProtocolVersion2c},
+	}
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			yamlData := fmt.Sprintf(`
+policies:
+  policy1:
+    scope:
+      targets:
+        - host: 192.0.2.1
+        - host: 192.0.2.2
+          authentication:
+            protocol_version: %[1]s
+            %[2]s
+      authentication:
+        protocol_version: %[1]s
+        %[2]s
+`, tt.version, credentials[tt.want])
+
+			policies, err := manager.ParsePolicies([]byte(yamlData))
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, policies["policy1"].Scope.Authentication.ProtocolVersion)
+			assert.Equal(t, tt.want, policies["policy1"].Scope.Targets[1].Authentication.ProtocolVersion)
+		})
+	}
+
+	t.Run("unknown version is still rejected", func(t *testing.T) {
+		yamlData := []byte(`
+policies:
+  policy1:
+    scope:
+      targets:
+        - host: 192.0.2.1
+      authentication:
+        protocol_version: v4
+        community: public
+`)
+		_, err := manager.ParsePolicies(yamlData)
+		assert.ErrorContains(t, err, "unsupported protocol version")
+	})
+}
+
 func TestManagerPolicyLifecycle(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 	manager, err := policy.NewManager(context.Background(), logger, nil, nil)
