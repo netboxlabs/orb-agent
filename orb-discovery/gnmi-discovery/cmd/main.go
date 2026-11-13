@@ -111,7 +111,7 @@ func main() {
 			logger.Error("failed to setup metrics export", "error", err)
 			os.Exit(1)
 		}
-		logger.Info("metrics export configured", "endpoint", resolvedOtel, "period_seconds", *otelExportPeriod)
+		logger.Info("metrics export configured", "endpoint", metrics.MaskedEndpoint(resolvedOtel), "period_seconds", *otelExportPeriod)
 	}
 
 	dialer := &gnmi.GnmicDialer{}

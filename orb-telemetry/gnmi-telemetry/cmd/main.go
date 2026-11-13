@@ -149,7 +149,7 @@ func main() {
 			logger.Error("Failed to setup metrics export", "error", err)
 			os.Exit(1)
 		}
-		logger.Info("Metrics export configured", "endpoint", endpoint, "period_seconds", *otelExportPeriod)
+		logger.Info("Metrics export configured", "endpoint", metrics.MaskedEndpoint(endpoint), "period_seconds", *otelExportPeriod)
 	}
 
 	profilesDir := env.ResolveEnvOrExit(*profilesDirFlag)

@@ -59,6 +59,8 @@ in flight rather than waiting out `snmp_timeout`.
 `--otel-endpoint` accepts either a bare `host:port` (e.g. `localhost:4317`)
 or a full URL with a scheme (e.g. `grpc://collector:4317`,
 `https://collector.example.com:4317`). Both forms dial the given address.
+A URL can carry a login, as `grpc://user:password@collector:4317`: the startup
+line writes it masked, as `grpc://********@collector:4317`.
 
 The scheme decides transport security. `https://` and `grpcs://` connect over
 TLS, verified against the host's root CAs; `http://` and `grpc://` connect in
