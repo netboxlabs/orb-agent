@@ -155,32 +155,64 @@ func TestAFailedFirstApplyMakesTheNextApplyAnUpdate(t *testing.T) {
 	}
 }
 
-// A restart removes the backend's policies and replays them once the
-// backend runs again. A policy an apply already reached is still replayed as
-// an update, as is an edit of it that arrived during the restart: the
-// backend may still hold the policy if the removal failed.
-func TestReplayStillUpdatesAPolicyAnApplyReached(t *testing.T) {
+// replayAfterRestartRemoval applies two policies to a backend, removes them
+// for a restart whose removal returns removeErr, edits one while the restart
+// is in flight, and replays them with the backend's process kept, as a
+// restart whose configure failed does. It reports whether the replay
+// applied each as an update.
+func replayAfterRestartRemoval(t *testing.T, beName string, removeErr error) (keptUpdated, editedUpdated bool) {
+	t.Helper()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	be := &mockBackend{name: "first_apply_restart"}
+	be := &mockBackend{name: beName}
 	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
-	be.On("RemovePolicy", mock.Anything).Return(nil).Maybe()
-	backend.Register("first_apply_restart", be)
+	be.On("RemovePolicy", mock.Anything).Return(removeErr).Times(2)
+	backend.Register(beName, be)
 	mgr, err := policymgr.New(logger, &mockSecretsManager{passthrough: true}, config.Config{})
 	require.NoError(t, err)
 	for _, id := range []string{"kept", "edited"} {
 		be.On("ApplyPolicy", isPolicy(id, 1), false).Return(nil).Once()
-		mgr.ManagePolicy(config.PolicyPayload{Action: "manage", ID: id, Name: id, Backend: "first_apply_restart", DatasetID: "ds", Version: 1, Data: map[string]any{}})
+		mgr.ManagePolicy(config.PolicyPayload{Action: "manage", ID: id, Name: id, Backend: beName, DatasetID: "ds", Version: 1, Data: map[string]any{}})
 	}
 
-	require.NoError(t, mgr.RemoveBackendPolicies("first_apply_restart", be, false))
-	mgr.ManagePolicy(config.PolicyPayload{Action: "manage", ID: "edited", Name: "edited", Backend: "first_apply_restart", Version: 2, Data: map[string]any{}})
+	require.NoError(t, mgr.RemoveBackendPolicies(beName, be, false))
+	mgr.ManagePolicy(config.PolicyPayload{Action: "manage", ID: "edited", Name: "edited", Backend: beName, Version: 2, Data: map[string]any{}})
 	stored, err := mgr.GetRepo().Get("edited")
 	require.NoError(t, err)
 	require.Equal(t, policymgr.ReasonBackendStarting, stored.BackendErr, "the edit must wait for the replay")
 
-	be.On("ApplyPolicy", isPolicy("kept", 1), true).Return(nil).Once()
-	be.On("ApplyPolicy", isPolicy("edited", 2), true).Return(nil).Once()
-	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "first_apply_restart", be))
-
+	updated := map[string]bool{}
+	be.On("ApplyPolicy", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		pd, _ := args.Get(0).(policies.PolicyData)
+		updated[pd.ID], _ = args.Get(1).(bool)
+	}).Return(nil).Times(2)
+	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), beName, be))
 	be.AssertExpectations(t)
+	return updated["kept"], updated["edited"]
+}
+
+// A restart removes the backend's policies before it resets the backend. A
+// removal the backend confirmed, or answered that it has no such policy,
+// leaves nothing of the policy there: the replay applies it, and an edit of
+// it that arrived during the restart, without removing it again, even when
+// the restart kept the backend's process because its configure failed.
+func TestReplayAfterAConfirmedRestartRemovalAppliesWithoutRemoving(t *testing.T) {
+	for name, removeErr := range map[string]error{
+		"removed":      nil,
+		"already gone": &backend.HTTPError{StatusCode: 404, Message: "404 policy does not exists"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			kept, edited := replayAfterRestartRemoval(t, "restart_removal_confirmed_"+map[string]string{"removed": "a", "already gone": "b"}[name], removeErr)
+			assert.False(t, kept, "the policy the restart removed is applied fresh")
+			assert.False(t, edited, "the edit deferred during the restart is applied fresh")
+		})
+	}
+}
+
+// A removal that failed may have left the policy on the backend: the replay
+// still applies it, and an edit of it deferred during the restart, as an
+// update, which removes whatever is left before applying.
+func TestReplayAfterAFailedRestartRemovalStillUpdates(t *testing.T) {
+	kept, edited := replayAfterRestartRemoval(t, "restart_removal_failed", errors.New("connection refused"))
+	assert.True(t, kept, "the policy the restart failed to remove is updated")
+	assert.True(t, edited, "the edit deferred during the restart is updated")
 }

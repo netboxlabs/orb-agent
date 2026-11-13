@@ -1252,7 +1252,8 @@ func TestManageAppliesDirectlyOnceTheReplayConfirmedTheBackend(t *testing.T) {
 
 	require.NoError(t, mgr.RemoveBackendPolicies("marker_confirmed_backend", be, false))
 
-	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "seed" }), true).Return(nil).Once()
+	// The removal succeeded, so the replay applies the policy fresh.
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "seed" }), false).Return(nil).Once()
 	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "marker_confirmed_backend", be))
 
 	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "after-replay" }), false).Return(nil).Once()
@@ -1299,9 +1300,10 @@ func TestManageStaysDeferredWhileTheReplayGateFails(t *testing.T) {
 	assert.Equal(t, policymgr.ReasonBackendStarting, deferredAfterFailedGate.BackendErr)
 
 	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe() // the successful replay: entry gate, then one per-policy probe each
-	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "seed" }), true).Return(nil).Once()
-	// The deferred manage is a policy no apply has reached yet: the replay
-	// applies it fresh rather than removing it first.
+	// The removal of the seeded policy succeeded, and the deferred manage is
+	// a policy no apply has reached yet: the replay applies both fresh rather
+	// than removing them first.
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "seed" }), false).Return(nil).Once()
 	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "deferred-manage" }), false).Return(nil).Once()
 
 	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "marker_gate_fail_backend", be))

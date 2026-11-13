@@ -175,15 +175,17 @@ func TestARefusalBeforeTheBackendSentThePolicyKeepsWhatTheAgentKnew(t *testing.T
 	}
 }
 
-// A backend restart removes the backend's policies, and once a new process
-// has replaced the backend's, that process holds none of them: the replay
-// applies each fresh, the policy the backend ran and an edit of it deferred
-// during the restart alike. Another backend's policies are left as they are.
+// A backend restart removes the backend's policies first. Here the removal
+// fails, as it does for a process that crashed, so the policies may still be
+// on the backend. Once a new process has replaced the backend's, that
+// process holds none of them: the replay applies each fresh, the policy the
+// backend ran and an edit of it deferred during the restart alike. Another
+// backend's policies are left as they are.
 func TestReplayAfterTheBackendProcessIsReplacedAppliesWithoutRemoving(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	be := &mockBackend{name: "replaced_process"}
 	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
-	be.On("RemovePolicy", mock.Anything).Return(nil).Maybe()
+	be.On("RemovePolicy", mock.Anything).Return(errors.New("backend is offline")).Maybe()
 	backend.Register("replaced_process", be)
 	other := &mockBackend{name: "replaced_process_other"}
 	other.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()

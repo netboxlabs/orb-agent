@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -308,11 +309,85 @@ func TestRestartDoesNotRetryAPolicyItFailed(t *testing.T) {
 	assert.Equal(t, 1, be.calls, "the replay must not retry a policy it already failed to apply")
 }
 
+// configureOnceBackend configures at agent start and refuses every configure
+// after, as a backend whose new configuration is bad does on a restart, and
+// answers each removal with removeErr.
+type configureOnceBackend struct {
+	restartableBackend
+	configured bool
+	removeErr  error
+}
+
+func (b *configureOnceBackend) Configure(*slog.Logger, policies.PolicyRepo, map[string]any, config.BackendCommons, filesmgr.Manager) error {
+	*b.events = append(*b.events, "configure")
+	if b.configured {
+		return errors.New("bad configuration")
+	}
+	b.configured = true
+	return nil
+}
+
+func (b *configureOnceBackend) RemovePolicy(pd policies.PolicyData) error {
+	*b.events = append(*b.events, "remove-policy:"+pd.ID)
+	return b.removeErr
+}
+
+// End to end with the real policy manager: a restart whose configure fails
+// keeps the backend's process and hands back at once the policies it
+// removed. A removal the backend confirmed left nothing of the policy, so it
+// is applied without a second removal; one that failed may have left it, so
+// it is applied as an update.
+func TestRestartWhoseConfigureFailsReappliesWhatItRemoved(t *testing.T) {
+	for name, removeErr := range map[string]error{"removed": nil, "removal failed": errors.New("connection refused")} {
+		t.Run(name, func(t *testing.T) {
+			events := []string{}
+			be := &configureOnceBackend{restartableBackend: restartableBackend{events: &events}, removeErr: removeErr}
+			beName := "e2e_configure_fails_" + map[string]string{"removed": "a", "removal failed": "b"}[name]
+			a, sup := newTestAgent(t, testAgentOptions{name: beName, be: be})
+			require.NoError(t, a.policyManager.GetRepo().Update(policies.PolicyData{ID: "kept", Name: "Kept", Backend: beName, Version: 1, Data: map[string]any{"k": "v"}, State: policies.Running}))
+			events = events[:0]
+
+			require.Error(t, sup.Restart(context.Background(), beName, "test"))
+
+			assert.Equal(t, []string{"remove-policy:kept", "configure", fmt.Sprintf("apply-policy:kept:update=%t", removeErr != nil)}, events)
+			stored, err := a.policyManager.GetRepo().Get("kept")
+			require.NoError(t, err)
+			assert.Equal(t, policies.Running, stored.State)
+		})
+	}
+}
+
+// failingRemovalBackend answers every removal with an error, as a backend
+// whose process crashed does.
+type failingRemovalBackend struct {
+	restartableBackend
+}
+
+func (b *failingRemovalBackend) RemovePolicy(pd policies.PolicyData) error {
+	*b.events = append(*b.events, "remove-policy:"+pd.ID)
+	return errors.New("backend is offline")
+}
+
+// End to end with the real policy manager: a restart whose removal failed
+// may have left the policy on the backend's old process, but the reset
+// started a new one, which holds none of the backend's policies, so the
+// replay still applies the policy without removing it first.
+func TestRestartReappliesAPolicyItFailedToRemoveToTheNewProcessFresh(t *testing.T) {
+	events := []string{}
+	be := &failingRemovalBackend{restartableBackend: restartableBackend{events: &events}}
+	a, sup := newTestAgent(t, testAgentOptions{name: "e2e_removal_failed_reset", be: be})
+	require.NoError(t, a.policyManager.GetRepo().Update(policies.PolicyData{ID: "kept", Name: "Kept", Backend: "e2e_removal_failed_reset", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Running}))
+	events = events[:0]
+
+	require.NoError(t, sup.Restart(context.Background(), "e2e_removal_failed_reset", "test"))
+
+	assert.Equal(t, []string{"remove-policy:kept", "configure", "reset", "apply-policy:kept:update=false"}, events)
+}
+
 // End to end with the real policy manager: a policy the backend ran before
 // the restart is still in the repo afterwards, running, and was handed to
-// the backend once more. The reset started a new process, which holds none
-// of the backend's policies, so the replay applies it without removing it
-// first.
+// the backend once more. The restart removed it from the backend before the
+// reset, so the replay applies it without removing it again.
 func TestRestartReappliesPoliciesEndToEnd(t *testing.T) {
 	events := []string{}
 	be := &restartableBackend{events: &events}
