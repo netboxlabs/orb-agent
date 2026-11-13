@@ -530,3 +530,90 @@ func TestDSVStart_DefaultURLs(t *testing.T) {
 	require.NoError(t, d.Start(context.Background()))
 	assert.Equal(t, "https://acme.secretsvaultcloud.eu/v1/secrets/servers/prod-db", d.urlFor("secrets", "/servers/prod-db"))
 }
+
+// One timeout bounds the whole read, not each request: a DSV whose token and
+// secret requests each answer within the timeout, but take longer than it
+// together, fails the read once the timeout passes.
+func TestDSVFetch_TimeoutBoundsTheWholeRead(t *testing.T) {
+	const (
+		timeout = 600 * time.Millisecond
+		stage   = 400 * time.Millisecond // each under timeout, both over it
+	)
+	srv := newFakeDSVServerWith(func(endpoints http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case <-time.After(stage):
+				endpoints.ServeHTTP(w, r)
+			case <-r.Context().Done():
+			}
+		})
+	})
+	t.Cleanup(srv.Close)
+	srv.setSecret("servers/prod-db", map[string]any{"password": "s3cr3t"})
+
+	d := &dsvManager{
+		preLogger: newTestLogger(),
+		config:    config.DSVManager{Tenant: "t", ClientID: "cid", ClientSecret: "csecret", URLTemplate: srv.urlTemplate()},
+		timeout:   timeout,
+	}
+	require.NoError(t, d.Start(context.Background()))
+
+	took, err := dsvFetchWithin(t, d, "servers/prod-db/password", 5*time.Second)
+	require.Error(t, err, "two requests of %s each take longer than the read's %s", stage, timeout)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, took, 2*stage-100*time.Millisecond)
+}
+
+// Cancelling the context the manager started with, as the agent does when it
+// stops, ends a read in flight.
+func TestDSVFetch_StopEndsAHungRead(t *testing.T) {
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	srv := newFakeDSVServerWith(func(endpoints http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/token" {
+				endpoints.ServeHTTP(w, r)
+				return
+			}
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			select {
+			case <-r.Context().Done():
+			case <-release:
+			}
+		})
+	})
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs before srv.Close
+
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	d := &dsvManager{
+		preLogger: newTestLogger(),
+		config:    config.DSVManager{Tenant: "t", ClientID: "cid", ClientSecret: "csecret", URLTemplate: srv.urlTemplate()},
+		timeout:   30 * time.Second,
+	}
+	require.NoError(t, d.Start(ctx))
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := d.fetch("servers/prod-db/password")
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the secret request did not arrive")
+	}
+	stop()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the read did not end when the agent stopped")
+	}
+}

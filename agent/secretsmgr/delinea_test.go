@@ -613,7 +613,7 @@ func TestDelineaFetch_SilentServerTimesOut(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "timed out")
 	assert.GreaterOrEqual(t, took, timeout)
-	assert.Less(t, took, 3*time.Second, "one read, retries included, stays within the timeout")
+	assert.Less(t, took, 3*time.Second, "the read ends at the timeout")
 }
 
 // The SDK's bearer token is not left in the process environment, which the
@@ -796,4 +796,174 @@ func TestDelineaFetch_NotFoundCarriesTheStatus(t *testing.T) {
 	var httpErr *server.HTTPError
 	require.ErrorAs(t, err, &httpErr)
 	assert.Equal(t, http.StatusNotFound, httpErr.StatusCode)
+}
+
+// waitOrDone waits for d, returning early with false if r's request ends.
+func waitOrDone(r *http.Request, d time.Duration) bool {
+	select {
+	case <-time.After(d):
+		return true
+	case <-r.Context().Done():
+		return false
+	}
+}
+
+// One timeout bounds the whole read, not each request: a Secret Server whose
+// health check, token grant and secret read each answer within the timeout,
+// but take longer than it together, fails the read once the timeout passes.
+func TestDelineaFetch_TimeoutBoundsTheWholeRead(t *testing.T) {
+	t.Parallel()
+	const (
+		timeout = 600 * time.Millisecond
+		stage   = 400 * time.Millisecond // each under timeout, all three over it
+	)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/healthcheck", func(w http.ResponseWriter, r *http.Request) {
+		if waitOrDone(r, stage) {
+			_, _ = w.Write([]byte(`{"healthy":true}`))
+		}
+	})
+	mux.HandleFunc("/oauth2/token", func(w http.ResponseWriter, r *http.Request) {
+		if waitOrDone(r, stage) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"fake-token","token_type":"bearer","expires_in":3600}`))
+		}
+	})
+	mux.HandleFunc("/api/v1/secrets/", func(w http.ResponseWriter, r *http.Request) {
+		if waitOrDone(r, stage) {
+			_, _ = w.Write([]byte(`{"ID":1,"Items":[{"Slug":"password","ItemValue":"v"}]}`))
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	m := &delineaManager{
+		preLogger: newTestLogger(),
+		config:    config.DelineaManager{ServerURL: srv.URL, Username: "u", Password: "p"},
+		timeout:   timeout,
+	}
+	require.NoError(t, m.Start(context.Background()))
+
+	_, took, err := fetchWithin(t, m, "id/1/password", 5*time.Second)
+	require.Error(t, err, "three stages of %s each take longer than the read's %s", stage, timeout)
+	assert.Contains(t, err.Error(), "timed out")
+	assert.Less(t, took, 3*stage-100*time.Millisecond)
+}
+
+// Cancelling the context the manager started with, as the agent does when it
+// stops, ends a read in flight.
+func TestDelineaFetch_StopEndsAHungRead(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	srv := newStubDelineaServer(t, func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	})
+	t.Cleanup(func() { close(release) }) // runs before srv.Close
+
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	m := &delineaManager{
+		preLogger: newTestLogger(),
+		config:    config.DelineaManager{ServerURL: srv.URL, Username: "u", Password: "p"},
+		timeout:   30 * time.Second,
+	}
+	require.NoError(t, m.Start(ctx))
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.fetch("id/1/password")
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the secret request did not arrive")
+	}
+	stop()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the read did not end when the agent stopped")
+	}
+}
+
+// An allowed_vault_hosts entry names a host and, unless it is 443, its port:
+// "host" and "host:443" both trust the host on port 443, whether or not the
+// vault URL spells the port out, and another port must be listed.
+func TestDelineaStart_AllowedVaultHostsPort443(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		vaultURL string
+		allowed  string
+		trusted  bool
+	}{
+		{"https://vault.example.invalid", "vault.example.invalid:443", true},
+		{"https://vault.example.invalid", "vault.example.invalid", true},
+		{"https://vault.example.invalid:443", "vault.example.invalid:443", true},
+		{"https://vault.example.invalid:443", "vault.example.invalid", true},
+		{"https://vault.example.invalid:8443", "vault.example.invalid", false},
+		{"https://vault.example.invalid:8443", "vault.example.invalid:443", false},
+		{"https://vault.example.invalid:8443", "vault.example.invalid:8443", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.vaultURL+" "+tc.allowed, func(t *testing.T) {
+			t.Parallel()
+			platform := newFakeDelineaPlatform(t, tc.vaultURL)
+			m := &delineaManager{
+				preLogger: newTestLogger(),
+				config: config.DelineaManager{
+					ServerURL: platform.URL, Username: "client-id", Password: "client-secret",
+					AllowedVaultHosts: []string{tc.allowed},
+				},
+				timeout: 5 * time.Second,
+			}
+			require.NoError(t, m.Start(context.Background()))
+			_, _, err := fetchWithin(t, m, "id/1/password", 10*time.Second)
+			require.Error(t, err, "nothing answers at the vault")
+			if tc.trusted {
+				assert.NotContains(t, err.Error(), "untrusted vault host")
+			} else {
+				assert.Contains(t, err.Error(), "untrusted vault host")
+			}
+		})
+	}
+}
+
+func TestDelineaVaultHosts(t *testing.T) {
+	t.Parallel()
+	got, err := delineaVaultHosts([]string{"a.example:443", " b.example:8443 ", "c.example:443,d.example", "[::1]:443"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a.example", "b.example:8443", "c.example", "d.example", "::1"}, got)
+
+	for _, bad := range []string{"", " , ", "https://a.example", "a.example/path"} {
+		_, err := delineaVaultHosts([]string{bad})
+		assert.Error(t, err, "entry %q", bad)
+	}
+}
+
+// The startup log masks the user and the password of a server_url, which
+// the SDK then refuses.
+func TestDelineaStart_LogMasksServerURLUserInfo(t *testing.T) {
+	t.Parallel()
+	logger, buf := newCapturingLogger()
+	m := &delineaManager{
+		preLogger: logger,
+		config:    config.DelineaManager{ServerURL: "https://svc:synthetic-sentinel-pw@secrets.example.invalid", Username: "u", Password: "p"},
+	}
+	require.Error(t, m.Start(context.Background()))
+	logs := buf.String()
+	assert.Contains(t, logs, "starting secrets manager")
+	assert.Contains(t, logs, "secrets.example.invalid")
+	assert.NotContains(t, logs, "synthetic-sentinel-pw")
 }

@@ -106,7 +106,7 @@ type DelineaManager struct {
 	Username          string   `yaml:"username"`
 	Password          string   `yaml:"password"`
 	AllowedVaultHosts []string `yaml:"allowed_vault_hosts,omitempty"`
-	Timeout           *int     `yaml:"timeout,omitempty"` // One read's time limit in seconds, retries included (default: 60)
+	Timeout           *int     `yaml:"timeout,omitempty"` // One read's time limit in seconds, sign-in included (default: 60)
 	Schedule          *string  `yaml:"schedule,omitempty"`
 }
 

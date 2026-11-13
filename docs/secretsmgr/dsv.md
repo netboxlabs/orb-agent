@@ -43,7 +43,7 @@ Each string option accepts an environment-variable placeholder of the form `${VA
 
 ## Authentication
 
-The DSV provider uses **client-credential** authentication: for every read, the configured `client_id` / `client_secret` are exchanged for a short-lived access token at `/v1/token`, and the secret is then read with that token. The token is used for that read only: the agent keeps it neither in memory nor in its environment, so the backends it starts cannot inherit it.
+The DSV provider uses **client-credential** authentication: for every read, the configured `client_id` / `client_secret` are exchanged for a short-lived access token at the token endpoint (`/v1/token` under the default URL template), and the secret is then read with that token. The token is used for that read only: the agent keeps it neither in memory nor in its environment, so the backends it starts cannot inherit it.
 
 ## Usage
 

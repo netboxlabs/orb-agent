@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -51,7 +52,7 @@ func (d *delineaManager) Start(ctx context.Context) error {
 		*f.ptr = resolved
 	}
 
-	d.preLogger.Info("starting secrets manager", "active", "delinea", "server_url", d.config.ServerURL, "tenant", d.config.Tenant)
+	d.preLogger.Info("starting secrets manager", "active", "delinea", "server_url", displayURL(d.config.ServerURL), "tenant", d.config.Tenant)
 
 	if (d.config.ServerURL == "" && d.config.Tenant == "") ||
 		(d.config.ServerURL != "" && d.config.Tenant != "") {
@@ -64,10 +65,9 @@ func (d *delineaManager) Start(ctx context.Context) error {
 		return fmt.Errorf("password is required")
 	}
 
-	for _, host := range d.config.AllowedVaultHosts {
-		if strings.TrimSpace(host) == "" || strings.Contains(host, "/") {
-			return fmt.Errorf("delinea: allowed_vault_hosts entry %q must be a host or host:port, without a scheme or path", host)
-		}
+	vaultHosts, err := delineaVaultHosts(d.config.AllowedVaultHosts)
+	if err != nil {
+		return err
 	}
 
 	if d.timeout == 0 {
@@ -93,12 +93,13 @@ func (d *delineaManager) Start(ctx context.Context) error {
 		ServerURL:         d.config.ServerURL,
 		Tenant:            d.config.Tenant,
 		AllowInsecureHTTP: plainHTTP,
-		AllowedVaultHosts: strings.Join(d.config.AllowedVaultHosts, ","),
+		AllowedVaultHosts: strings.Join(vaultHosts, ","),
 		// The SDK bounds each attempt by Timeout, and fetch bounds the whole
-		// read by the same limit. One attempt per read, as before the SDK
-		// learned to retry: a read that fails is read again by the next poll,
-		// and a retry, or a Retry-After wait of up to 30 s, would only hold
-		// the poll for longer.
+		// read by the same limit. No retries, as before the SDK learned to
+		// retry: a read that fails is read again by the next poll, and a
+		// retry, or a Retry-After wait of up to 30 s, would only hold the
+		// poll for longer. The SDK still signs in again and resends a read
+		// once when the server rejects a token it had kept, within the limit.
 		Timeout:        d.timeout,
 		DisableRetries: true,
 	}
@@ -188,4 +189,34 @@ func extractField(secret *server.Secret, field, body string) (string, error) {
 func isPlainHTTP(serverURL string) bool {
 	u, err := url.Parse(strings.TrimSpace(serverURL))
 	return err == nil && strings.EqualFold(u.Scheme, "http")
+}
+
+// delineaVaultHosts checks the allowed_vault_hosts entries and returns them
+// as the SDK matches them. The SDK compares an entry with the vault URL's host
+// as written, port included, and an entry without a port with the host on
+// port 443; so "host:443" is given as "host", which trusts the same vault
+// whether or not its URL spells out the port. An entry may hold several hosts
+// separated by commas, as an ORB_* override sets the list.
+func delineaVaultHosts(entries []string) ([]string, error) {
+	var hosts []string
+	for _, entry := range entries {
+		n := len(hosts)
+		for _, host := range strings.Split(entry, ",") {
+			host = strings.TrimSpace(host)
+			if host == "" {
+				continue
+			}
+			if strings.Contains(host, "/") {
+				return nil, fmt.Errorf("delinea: allowed_vault_hosts entry %q must be a host or host:port, without a scheme or path", entry)
+			}
+			if h, port, err := net.SplitHostPort(host); err == nil && port == "443" {
+				host = h
+			}
+			hosts = append(hosts, host)
+		}
+		if len(hosts) == n {
+			return nil, fmt.Errorf("delinea: allowed_vault_hosts entry %q must be a host or host:port, without a scheme or path", entry)
+		}
+	}
+	return hosts, nil
 }
