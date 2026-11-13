@@ -1300,7 +1300,9 @@ func TestManageStaysDeferredWhileTheReplayGateFails(t *testing.T) {
 
 	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe() // the successful replay: entry gate, then one per-policy probe each
 	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "seed" }), true).Return(nil).Once()
-	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "deferred-manage" }), true).Return(nil).Once()
+	// The deferred manage is a policy no apply has reached yet: the replay
+	// applies it fresh rather than removing it first.
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "deferred-manage" }), false).Return(nil).Once()
 
 	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "marker_gate_fail_backend", be))
 
@@ -1356,9 +1358,12 @@ func TestManageStaysDeferredWhileAReplayExitsOnAPerPolicyProbeFailure(t *testing
 	assert.Equal(t, policymgr.ReasonBackendStarting, deferredManage.BackendErr)
 
 	// A second, successful replay applies the seeded record the first replay
-	// never reached, plus the manage stored as starting, each exactly once.
+	// never reached, plus the manage stored as starting, each exactly once:
+	// the seeded record as an update, the manage, which no apply has reached
+	// yet, fresh.
 	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
-	be.On("ApplyPolicy", mock.Anything, true).Return(nil).Times(2)
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "new-during-retry" }), false).Return(nil).Once()
+	be.On("ApplyPolicy", mock.Anything, true).Return(nil).Once()
 
 	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "midreplay_marker_backend", be))
 	be.AssertExpectations(t) // a third ApplyPolicy call here would panic on the exhausted expectation
@@ -1821,14 +1826,16 @@ func TestManagePolicy_ManageAction_SecretsFailure(t *testing.T) {
 	require.Len(t, state, 1)
 	assert.Equal(t, policies.FailedToApply, state[0].State)
 
-	// Recovery: a manage with WORKING secrets applies normally and clears the error.
+	// Recovery: a manage with WORKING secrets applies normally and clears the
+	// error. No apply reached the backend before it, so it is a fresh apply,
+	// not an update that removes the policy first.
 	payload3 := payload
 	payload3.Version = 3
 	payload3.DatasetID = ""
 	secretsMgr.On("SolvePolicySecrets", payload3).Return(payload3, nil)
 	mockBe.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
 		return pd.ID == "policy-sf1" && pd.Version == 3
-	}), true).Return(nil)
+	}), false).Return(nil)
 	mgr.ManagePolicy(payload3)
 
 	state, err = mgr.GetPolicyState()

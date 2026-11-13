@@ -315,6 +315,7 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 			}
 			pd.Datasets = currentPolicy.Datasets
 			pd.GroupIDs = currentPolicy.GroupIDs
+			pd.NeverApplied = currentPolicy.NeverApplied
 		} else {
 			// new policy we have not seen before, associate with this dataset
 			// on first time we see policy, we *require* dataset
@@ -323,6 +324,8 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 				return
 			}
 			pd.Datasets = map[string]bool{payload.DatasetID: true}
+			// Nothing of it runs on the backend until an apply reaches it.
+			pd.NeverApplied = true
 
 			if payload.AgentGroupID != "" {
 				pd.GroupIDs = map[string]bool{payload.AgentGroupID: true}
@@ -564,6 +567,13 @@ func (a *policyManager) removePolicyDatasetLocked(policyID string, datasetID str
 // already stamped either way. applyBackendPoliciesLocked is the one caller
 // that acts on it, to stop a replay instead of persisting the probe's
 // failure and losing the record from the next one.
+//
+// updatePolicy asks for the backend's update, a removal before the apply.
+// It is not honoured for a policy no apply has reached yet (NeverApplied):
+// the backend holds nothing of it to remove, and would answer the removal
+// with a not-found error. The call to the backend clears NeverApplied,
+// whatever the backend answers: an apply that timed out may still have
+// created the policy, so the next one is an update.
 func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Backend, pd *policies.PolicyData, updatePolicy bool) error {
 	// A name the agent cannot address over a backend's API is refused before
 	// the policy is created rather than when it is removed. Removal is the
@@ -608,6 +618,8 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 	// quote its secrets, resolved in pd.Data; they are kept to mask it.
 	resolved := resolvedValues(payload.Data, pd.Data)
 	a.resolved.remember(pd.ID, pd.Backend, resolved, knownNames(*pd)...)
+	updatePolicy = updatePolicy && !pd.NeverApplied
+	pd.NeverApplied = false
 	err = be.ApplyPolicy(*pd, updatePolicy)
 	if err != nil {
 		// The backend's error can quote the policy's data, which carries its
@@ -715,11 +727,13 @@ var ErrBackendNotRunning = errors.New("backend is not running; its policies are 
 // backend, the way a manage does: secrets solved for the call and the
 // unsolved references persisted, the name checked, and updatePolicy true,
 // the remove-then-apply form every backend implements, which is safe
-// against a name the backend already runs. It gates on the backend running
-// before it touches anything: a backend that does not answer at that moment
-// keeps its policies untouched and the caller learns why. A backend that
-// stops mid-loop is caught by applyPolicy's own check, a second
-// GetRunningStatus call, an HTTP round trip for every policy in the loop,
+// against a name the backend already runs, for every policy an apply has
+// reached before; a policy stored while its backend was starting, which no
+// apply has reached, is applied fresh (see applyPolicy). It gates on the
+// backend running before it touches anything: a backend that does not
+// answer at that moment keeps its policies untouched and the caller learns
+// why. A backend that stops mid-loop is caught by applyPolicy's own check, a
+// second GetRunningStatus call, an HTTP round trip for every policy in the loop,
 // and not redundant with the gate above, so do not remove either thinking
 // the other covers it. Both the entry gate and this per-policy probe map to
 // ErrBackendNotRunning; unlike the entry gate, the per-policy probe leaves
@@ -842,7 +856,8 @@ func (a *policyManager) persistApplyOutcome(policy policies.PolicyData) error {
 
 // applyStoredPolicy applies a policy the repo already holds to its backend:
 // secrets are solved for the call, the policy is applied with updatePolicy
-// true, the unsolved data is put back for the caller to persist, and a
+// true (fresh when no apply has reached it yet, see applyPolicy), the
+// unsolved data is put back for the caller to persist, and a
 // successful apply clears a pending rename. The caller persists the record,
 // except when the returned error matches ErrBackendNotRunning: that record is
 // left exactly as it was stamped by applyPolicy's own running-gate probe, for

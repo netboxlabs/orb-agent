@@ -479,7 +479,9 @@ func TestManageDuringARestartIsAppliedExactlyOnce(t *testing.T) {
 	assert.Equal(t, policies.Running, stored.State, "the re-apply after the restart must apply the policy stored while it was in flight")
 	require.Len(t, be.applied, 1, "the backend must receive the policy exactly once")
 	assert.Equal(t, "during-restart", be.applied[0].ID)
-	assert.Contains(t, events, "apply-policy:during-restart:update=true")
+	// No apply reached the backend before the restart's re-apply, so it
+	// applies the policy fresh rather than removing it first.
+	assert.Contains(t, events, "apply-policy:during-restart:update=false")
 }
 
 // windowStampingBackend writes a policy record directly to the repo from
@@ -732,15 +734,19 @@ func (b *notRunningOnceBackend) GetRunningStatus() (backend.RunningStatus, strin
 // retry delay has elapsed, is stored as starting by the marker the removal
 // set (the failed gate left it set). The retry's next attempt, once the
 // backend answers, applies it exactly like every other record a restart
-// deferred: through the replay's own remove-then-apply form, not a manage
-// applying it directly.
+// deferred, not a manage applying it directly. No apply reached the backend
+// before, so the replay applies it fresh rather than removing it first.
+//
+// The retry delay is long enough for the manage to store its record before
+// the retry runs, so the test can see the record deferred when the manage
+// returns.
 func TestManageDuringTheReplayRetryDelayIsAppliedByTheRetry(t *testing.T) {
 	events := []string{}
 	be := &notRunningOnceBackend{restartableBackend: restartableBackend{events: &events}, notRunningSeen: make(chan struct{})}
 	a, sup := newTestAgent(t, testAgentOptions{
 		name:       "e2e_retry_delay",
 		be:         be,
-		supervisor: supervisor.Options{ReapplyRetryDelay: 50 * time.Millisecond},
+		supervisor: supervisor.Options{ReapplyRetryDelay: 500 * time.Millisecond},
 	})
 	events = events[:0]
 
@@ -770,15 +776,20 @@ func TestManageDuringTheReplayRetryDelayIsAppliedByTheRetry(t *testing.T) {
 	}()
 
 	select {
+	case <-manageDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the manage to finish")
+	}
+	deferred, err := a.policyManager.GetRepo().Get("during-retry-delay")
+	require.NoError(t, err)
+	assert.Equal(t, policies.FailedToApply, deferred.State, "the manage must be deferred, not applied directly")
+	assert.Equal(t, policymgr.ReasonBackendStarting, deferred.BackendErr)
+
+	select {
 	case restartErr := <-restartDone:
 		require.NoError(t, restartErr)
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for the restart to return")
-	}
-	select {
-	case <-manageDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for the manage to finish")
 	}
 
 	stored, err := a.policyManager.GetRepo().Get("during-retry-delay")
@@ -792,8 +803,8 @@ func TestManageDuringTheReplayRetryDelayIsAppliedByTheRetry(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, applies, "applied exactly once")
-	assert.Contains(t, events, "apply-policy:during-retry-delay:update=true",
-		"applied by the replay's remove-then-apply form, not a direct manage")
+	assert.Contains(t, events, "apply-policy:during-retry-delay:update=false",
+		"the policy's first apply does not remove it first")
 }
 
 // Outside a restart, a manage applies the way it always has: no restart has

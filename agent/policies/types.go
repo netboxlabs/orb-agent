@@ -34,6 +34,13 @@ type PolicyData struct {
 	BackendErr         string
 	PreviousPolicyData *PolicyData
 	Runs               []RunData
+	// NeverApplied is set while no apply of the policy has reached its
+	// backend since the agent stored it: a manage that found the backend
+	// starting, unavailable or not answering, or that failed on its secrets
+	// or its name, stores the policy without one. The backend then holds
+	// nothing of the policy, so its first apply is a fresh one rather than an
+	// update, which would remove it first.
+	NeverApplied bool
 }
 
 // GetDatasetIDs returns the dataset IDs

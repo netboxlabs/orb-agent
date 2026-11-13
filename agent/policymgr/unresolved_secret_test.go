@@ -241,7 +241,8 @@ func TestANewPolicyWhoseSecretResolvedWhileItsManageFailedIsApplied(t *testing.T
 	solved := payload
 	solved.Data = map[string]any{"community": "public"}
 	secretsMgr.On("SolvePolicySecrets", payloadByID("unresolved-9")).Return(solved, nil).Once()
-	be.On("ApplyPolicy", byID("unresolved-9"), true).Return(nil).Once()
+	// The retry is the policy's first apply: nothing of it to remove first.
+	be.On("ApplyPolicy", byID("unresolved-9"), false).Return(nil).Once()
 
 	mgr.ManagePolicy(payload)
 

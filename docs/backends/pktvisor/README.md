@@ -211,7 +211,8 @@ the 10 second apply timeout.
 
 ### Edits
 An edit is a remove followed by an apply. A flow listener closes briefly when the edited
-policy is the last one on its listener.
+policy is the last one on its listener. A new policy is applied without a remove, including
+one the agent holds while `pktvisord` starts on demand and applies once it is running.
 
 The agent checks the policy name and the tap before an edit removes the running policy.
 So when the agent refuses an edit:
