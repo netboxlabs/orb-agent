@@ -1253,14 +1253,18 @@ type resolvedValue struct {
 
 // resolvedValues returns the strings in resolved that differ from raw at the
 // same place, with their paths: the values a policy's secret references
-// resolved to, since a reference is resolved as a whole string value.
+// resolved to, since a reference is resolved as a whole string value. Those
+// of the fields that hold a host are left out (see holdsHost): they are no
+// secrets, so nothing masks them.
 func resolvedValues(raw, resolved any) []resolvedValue {
 	var values []resolvedValue
+	// keys lead to the field the walk is at, from the policy's data.
+	var keys []fieldKey
 	var walk func(path string, raw, resolved any)
 	walk = func(path string, raw, resolved any) {
 		switch r := resolved.(type) {
 		case string:
-			if s, ok := raw.(string); !ok || s != r {
+			if s, ok := raw.(string); (!ok || s != r) && !holdsHost(keys, s, r) {
 				values = append(values, resolvedValue{path: path, value: r, ref: s})
 			}
 		case map[string]any:
@@ -1270,7 +1274,9 @@ func resolvedValues(raw, resolved any) []resolvedValue {
 				if path != "" {
 					at = path + "." + k
 				}
+				keys = append(keys, fieldKey{name: k})
 				walk(at, m[k], v)
+				keys = keys[:len(keys)-1]
 			}
 		case []any:
 			s, _ := raw.([]any)
@@ -1279,10 +1285,56 @@ func resolvedValues(raw, resolved any) []resolvedValue {
 				if i < len(s) {
 					at = s[i]
 				}
+				keys = append(keys, fieldKey{item: true})
 				walk(fmt.Sprintf("%s[%d]", path, i), at, v)
+				keys = keys[:len(keys)-1]
 			}
 		}
 	}
 	walk("", raw, resolved)
 	return values
+}
+
+// wholeReference reports whether s is a secret reference and nothing else. A
+// reference's body holds no }, so the first } ends the one s starts with; the
+// secrets manager resolves it and drops whatever follows.
+func wholeReference(s string) bool {
+	return strings.HasPrefix(s, "${") && strings.Count(s, "${") == 1 && strings.IndexByte(s, '}') == len(s)-1
+}
+
+// fieldKey is a step of the path to a field of a policy's data: the key of a
+// map, or an item of a list.
+type fieldKey struct {
+	name string
+	item bool
+}
+
+// holdsHost reports whether value, which the reference ref in the field keys
+// lead to resolved to, is a host, which is no secret, in the policy of any
+// backend: the value of a field named hostname, as device-discovery's scope
+// holds one, or host, as a target of snmp-discovery, gnmi-discovery,
+// snmp-telemetry and gnmi-telemetry does; an item of a list named targets, as
+// network-discovery's scope holds; or the value of a field named target in an
+// entry of a map named targets, as a pktvisor netprobe holds.
+//
+// A value that holds a :// or an @ is not taken for a host: it can be a URL,
+// as a netprobe's target is for an HTTP test, and a URL can carry a token in
+// its user, its path or its query. Nor is the value of a reference written
+// with text around it, which resolves to the secret alone (see
+// wholeReference).
+func holdsHost(keys []fieldKey, ref, value string) bool {
+	n := len(keys)
+	if n == 0 || strings.Contains(value, "://") || strings.Contains(value, "@") || !wholeReference(ref) {
+		return false
+	}
+	named := func(i int, name string) bool { return i >= 0 && !keys[i].item && keys[i].name == name }
+	switch {
+	case named(n-1, "hostname"), named(n-1, "host"):
+		return true
+	case keys[n-1].item:
+		return named(n-2, "targets")
+	case named(n-1, "target"):
+		return n >= 3 && !keys[n-2].item && named(n-3, "targets")
+	}
+	return false
 }

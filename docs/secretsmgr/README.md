@@ -111,6 +111,27 @@ with a digest, as `img:tag@sha256:...`, has its name, and tag, after its last
 written: a secret reference in it, such as one in `backends`, is reported as
 the reference, never as the value it resolves to.
 
+A host is not a secret. A secret reference in a field that holds one resolves
+as any other, but the agent does not mask its value as a secret: a refusal, a
+run's reason and targets, and a line a backend prints show the host as the
+backend writes it. In the policy of any backend, those fields are:
+
+- one named `hostname`, as in device-discovery's `scope`;
+- one named `host`, as in a target of snmp-discovery, gnmi-discovery,
+  snmp-telemetry and gnmi-telemetry;
+- an item of a list named `targets`, as network-discovery's `scope` holds;
+- one named `target` in an entry of a map named `targets`, as a pktvisor
+  netprobe's.
+
+A value there that holds a `://` or an `@` is masked as any other value: it
+can be a URL, as a netprobe's `target` is for an `http` or a `doh` test, and a
+URL can carry a token in its user, its path or its query. So is the value of a
+reference written with text around it, as `https://host/${vault://...}`,
+which resolves to the secret alone, and a host in a field of another name, as
+a worker's `scope` can hold one. A line a backend prints is masked with the
+values of every policy that backend runs, so a host shows masked there where a
+secret of one of them holds it.
+
 A backend that refuses a policy can quote one of its values in the error, as a
 type error does for a reference in a field that takes a number. Before the
 agent logs that error or reports it as the policy's error, it masks each
@@ -179,8 +200,9 @@ the same way, and keeps at most the same 1 KiB of a run's reason, followed by
 the note naming the fields it quotes. A printed line names no policy, so the
 agent masks in it the values of every policy that backend runs. A run's
 targets and driver, which a backend can copy from the policy's scope, are
-masked when one is a value whole, as it is or as a backend writes a host it
-was given: without its line breaks, an address or a prefix in its canonical
+masked when one is a value whole, as it is or, for a host in a field the agent
+does not know holds one, as a backend writes a host it was given: without its
+line breaks, an address or a prefix in its canonical
 form (`2001:db8::1` for `2001:DB8::1`), or with a port added
 (`[2001:db8::1]:9339`). The agent compares the two without their line breaks
 or the spaces around them, and whatever the case of their letters, as host
@@ -191,7 +213,10 @@ addresses a backend expands a range or a prefix into are not masked either.
 
 To mask them, the agent keeps the values of a policy's last two resolutions
 that differ, for as long as it runs the policy: after an edit or a rotation,
-the backend goes on reporting a run it ran with the earlier values. A
+the backend goes on reporting a run it ran with the earlier values. Hosts,
+which are not masked, are not among them: rotating a secret that only fields
+holding a host reference changes none of what follows, as editing a host
+written in the policy does not. A
 discovery backend keeps each target's runs across the policy's re-applies,
 and a policy's runs after it is removed, under the policy's name. So the
 agent stores and reports only the runs a backend started after the agent

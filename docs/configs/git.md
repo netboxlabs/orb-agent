@@ -42,6 +42,8 @@ orb:
 ```
 A password or token can also be written in the URL itself, as in `https://git-user:<token>@host/repo.git`, `https://<token>:x-oauth-basic@github.com/org/repo.git` or `https://<token>@host/repo.git`. The agent masks the URL's user and password together, as `https://********@host/repo.git`, wherever it logs the URL or an error that quotes it. A `/`, `?`, `#` or `%` in the user or the password must be percent-encoded (`%2F`, `%3F`, `%23`, `%25`), and a URL that carries a user or password needs its scheme, as in `https://`. Without that, the credential is read as the host, the port or the path, and the URL cannot reach the repository. The agent refuses such a URL at startup, with an error that quotes it masked, except when a `/` in the credential makes its `@` look like one in a path: that URL is taken, and the part of the credential before the `/` is looked up as the host. A `git` source that is not the active one is still part of the configuration the agent reports, where such a URL, as `<token>:x-oauth-basic@github.com:org/repo.git`, is masked before its last `@`: `********@github.com:org/repo.git`. `${GIT_TOKEN}` is expanded only as the whole value of `url`, not inside it. A URL with an `@` in its path is logged with everything between its `//` and its last `@` masked: the agent cannot tell that `@` from one that ends a token holding a `/`. `auth: basic` with `password: ${GIT_TOKEN}` keeps the token out of the URL.
 
+`username` is not a secret: the configuration the agent reports shows it as written. Write a token in `password`, which is masked, not in `username`. A URL's user is masked with its password only because a URL can carry a token as its user, as `https://<token>@host/repo.git` does, and the agent cannot tell that token from a user name.
+
 **SSH authentication** (private key):
 ```yaml
 orb:
@@ -82,7 +84,7 @@ See [GitHub App Authentication](#github-app-authentication) below for how to cre
 | schedule | cron format | no  |  If defined, it will execute fetch remote changes on cron schedule time. If not defined, it will execute the match and apply policies only once  |
 | branch | string | no  |  the git branch that should be used by the agent. If not specified, the default branch will be used   |
 | auth | string | no | it can be 'basic', 'ssh' or 'github_app'. The basic authentication supports both password or token. If not specified, no auth will be used (public repository) |
-| username | string | no | username used for authentication |
+| username | string | no | username used for authentication; reported as written, not masked |
 | password | string | no | the password used for authentication. If the auth method is 'basic' it should contain the password or auth token. If the method is 'ssh' it should contain the passphrase for the private key file (leave empty for unprotected keys) |
 | private_key | string | no | the path to the SSH private key file |
 | skip_tls | bool | no | skip TLS certificate verification when connecting to the repository (default: false). Useful for self-signed or private CA certificates |

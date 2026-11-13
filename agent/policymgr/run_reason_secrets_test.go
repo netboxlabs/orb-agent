@@ -91,14 +91,17 @@ func TestRunReasonLeavesOutTheResolvedSecret(t *testing.T) {
 	assert.Empty(t, logs.linesWith(0, resolvedSecret), "no log record carries the value")
 }
 
-// TestNoStoredRunCarriesAnEarlierHost points a policy's host at a secret
-// three times, as rotating the secret does, while the backend goes on
-// reporting the runs it ran with each host, as device-discovery keeps a
-// target's runs across the policy's re-applies. The heartbeat sends the
-// stored runs, so none may carry a host: the run of the first, started before
-// the backend took the policy's previous resolution, is not stored, since the
-// agent no longer keeps that host, and the others are stored masked. The
-// last host ends in a new line, which device-discovery leaves out of the
+// TestNoStoredRunCarriesAnEarlierHost points a worker policy's device at a
+// secret three times, as rotating the secret does, while the backend goes on
+// reporting the runs it ran with each one, as device-discovery keeps a
+// target's runs across the policy's re-applies. A worker's scope can name the
+// field of a host anything, so the agent masks a host there as any other
+// value; only a field named as one holds a host it keeps (see
+// TestRunKeepsAHostASecretResolvedTo). The heartbeat sends the stored runs,
+// so none may carry a device: the run of the first, started before the
+// backend took the policy's previous resolution, is not stored, since the
+// agent no longer keeps that value, and the others are stored masked. The
+// last one ends in a new line, which device-discovery leaves out of the
 // target it reports.
 func TestNoStoredRunCarriesAnEarlierHost(t *testing.T) {
 	logs := &renderedLogs{}
@@ -125,7 +128,7 @@ func TestNoStoredRunCarriesAnEarlierHost(t *testing.T) {
 			Name:      policyName,
 			Backend:   "worker",
 			Version:   int32(i + 1),
-			Data:      map[string]any{"scope": []any{map[string]any{"hostname": "${doppler://" + name + "}"}}},
+			Data:      map[string]any{"scope": []any{map[string]any{"device": "${doppler://" + name + "}"}}},
 		})
 		require.Equal(t, policies.Running, storedPolicyByID(t, mgr, policyID).State, "the policy is applied with %s", name)
 
@@ -150,6 +153,48 @@ func TestNoStoredRunCarriesAnEarlierHost(t *testing.T) {
 	for name, host := range hosts {
 		assert.Empty(t, logs.linesWith(0, strings.TrimSuffix(host, "\n")), "no log record carries %s", name)
 	}
+}
+
+// TestRunKeepsAHostASecretResolvedTo points a policy's hostname and password
+// at secrets, and has the backend report a failed run of the host: a host is
+// not a secret, so the run is stored, and sent to Fleet, with the host as
+// reported, in its target and its reason, and only the password masked.
+func TestRunKeepsAHostASecretResolvedTo(t *testing.T) {
+	const host, password = "4a1c-sw1.invalid", "pa55-w0rd-xyz"
+	logs := &renderedLogs{}
+	logger := logs.logger()
+	mgr, err := policymgr.New(logger, startDopplerSecrets(t, logger, map[string]string{"HOST": host, "PASSWORD": password}), config.Config{})
+	require.NoError(t, err)
+
+	const policyID, policyName = "policy-worker", "host_policy"
+	reported := &reportedRun{}
+	startBackendServing(t, logger, mgr, "worker", "orb-worker", worker.Register, reported.answer(policyName))
+	poll := pollingStatus(t, logger, mgr, "worker")
+
+	mgr.ManagePolicy(config.PolicyPayload{
+		Action:    "manage",
+		ID:        policyID,
+		DatasetID: "dataset-1",
+		Name:      policyName,
+		Backend:   "worker",
+		Version:   1,
+		Data: map[string]any{"scope": []any{map[string]any{
+			"hostname": "${doppler://HOST}", "password": "${doppler://PASSWORD}",
+		}}},
+	})
+	require.Equal(t, policies.Running, storedPolicyByID(t, mgr, policyID).State, "the policy is applied")
+
+	reported.set(backend.PolicyStatusRun{
+		ID: "run-1", Status: "failed", Reason: "Cannot log in to " + host + " with " + password, Targets: []string{host},
+		CreatedAt: time.Now().UnixNano(),
+	})
+	poll()
+	run := storedRun(t, mgr, policyID, "run-1")
+	assert.Equal(t, []string{host}, run.Targets, "the host is kept as reported")
+	assert.Equal(t, "Cannot log in to "+host+" with ********"+
+		" (the error quotes the value of the secret reference at scope[0].password, masked as ********)", run.Reason,
+		"the reason keeps the host and masks the password")
+	assert.Empty(t, logs.linesWith(0, password), "no log record carries the password")
 }
 
 // reportedRun is the runs a backend stand-in reports for a policy in its

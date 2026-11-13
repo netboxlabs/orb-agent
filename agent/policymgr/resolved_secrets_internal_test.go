@@ -52,7 +52,7 @@ func TestRemovedPolicyKeepsItsResolvedValuesForAMinute(t *testing.T) {
 func TestRemovedPolicyKeepsMaskingWhileItsRunsRun(t *testing.T) {
 	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
 	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
-	resolved.remember("policy-1", "device_discovery", []resolvedValue{{path: "scope[0].hostname", value: "sw1.s3cret-site.example"}})
+	resolved.remember("policy-1", "device_discovery", []resolvedValue{{path: "scope[0].device", value: "sw1.s3cret-site.example"}})
 	const printed = "Policy policy-1, Hostname sw1.s3cret-site.example: Getting information"
 	started := now.Add(-time.Second)
 	run := func(status string) []policies.RunData {
@@ -570,7 +570,7 @@ func TestRunTargetIsMaskedAsTheBackendWritesIt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			now := time.Now()
 			resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
-			resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].hostname", value: tc.value}})
+			resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].device", value: tc.value}})
 
 			require.NoError(t, repo.UpdateRuns("policy-1", []policies.RunData{{
 				ID:      "run-1",
@@ -589,14 +589,14 @@ func TestRunTargetIsMaskedAsTheBackendWritesIt(t *testing.T) {
 				host = h
 			}
 			assert.NotContains(t, stored.Runs[0].Reason, host)
-			assert.Contains(t, stored.Runs[0].Reason, ": connection refused (the error quotes the value of the secret reference at scope[0].hostname, masked as ********)")
+			assert.Contains(t, stored.Runs[0].Reason, ": connection refused (the error quotes the value of the secret reference at scope[0].device, masked as ********)")
 		})
 	}
 
 	t.Run("part of a value", func(t *testing.T) {
 		now := time.Now()
 		resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
-		resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].hostname", value: "4a1c-host-n.invalid\n"}})
+		resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].device", value: "4a1c-host-n.invalid\n"}})
 
 		require.NoError(t, repo.UpdateRuns("policy-1", []policies.RunData{{ID: "run-1", Status: "completed", Targets: []string{"4a1c-host-n"}}}))
 		stored, err := repo.Get("policy-1")
@@ -612,7 +612,7 @@ func TestRunTargetIsMaskedAsTheBackendWritesIt(t *testing.T) {
 // large range costs no more per poll than before.
 func TestRunTargetCostsNoAllocation(t *testing.T) {
 	for _, value := range []string{"4a1c-host-a.invalid\n", "2001:DB8::A", "10.9.0.0/16"} {
-		m := newRefusalMasks([]resolvedValue{{path: "scope[0].hostname", value: value}})
+		m := newRefusalMasks([]resolvedValue{{path: "scope[0].device", value: value}})
 		runs := make([]policies.RunData, 100)
 		for i := range runs {
 			runs[i] = policies.RunData{ID: fmt.Sprint("run-", i), Status: "completed", Targets: []string{
@@ -639,7 +639,7 @@ func TestRunsFromBeforeThePreviousResolutionAreNotStored(t *testing.T) {
 	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
 	const a, b, c = "4a1c-host-a.invalid", "4a1c-host-b.invalid", "4a1c-host-c.invalid"
 	apply := func(host string) {
-		resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].hostname", value: host}})
+		resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].device", value: host}})
 		now = now.Add(time.Minute)
 	}
 	poll := func(runs ...policies.RunData) []policies.RunData {
@@ -682,7 +682,7 @@ func TestRunsFromBeforeThePreviousResolutionAreNotStored(t *testing.T) {
 func TestRunsOfTheFirstResolutionAreStored(t *testing.T) {
 	now := time.Date(2026, 11, 9, 17, 0, 0, 0, time.UTC)
 	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
-	resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].hostname", value: "4a1c-host-a.invalid"}})
+	resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].device", value: "4a1c-host-a.invalid"}})
 	started := now.Add(time.Millisecond)
 	now = now.Add(time.Second)
 
@@ -699,7 +699,7 @@ func TestRunsOfTheFirstResolutionAreStored(t *testing.T) {
 		// The first resolution's values are the previous ones now, and the
 		// agent began to apply them before the run started.
 		now = now.Add(time.Minute)
-		resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].hostname", value: "4a1c-host-b.invalid"}})
+		resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].device", value: "4a1c-host-b.invalid"}})
 		require.NoError(t, repo.UpdateRuns("policy-1", slices.Clone(runs)))
 		stored, err := repo.Get("policy-1")
 		require.NoError(t, err)
@@ -709,7 +709,10 @@ func TestRunsOfTheFirstResolutionAreStored(t *testing.T) {
 
 // TestOutputIsMaskedAsTheBackendWritesAHost has a backend print a host as it
 // writes it into a run's target, without its line breaks or as an address in
-// its canonical form: the line is masked as the run is.
+// its canonical form: the line is masked as the run is. The tests here keep a
+// host in a field named device, which the agent does not know holds one, as a
+// worker's scope can name it: a host in a field named as one is no secret,
+// and resolvedValues leaves it out (see holdsHost).
 func TestOutputIsMaskedAsTheBackendWritesAHost(t *testing.T) {
 	for _, tc := range []struct{ value, printed string }{
 		{"sw01\n", "Policy dd, Hostname sw01: Cannot connect"},
@@ -717,7 +720,7 @@ func TestOutputIsMaskedAsTheBackendWritesAHost(t *testing.T) {
 		{"Host1.Example.NET", "HTTPSConnectionPool(host='host1.example.net', port=443)"},
 	} {
 		resolved := newResolvedSecrets()
-		resolved.remember("policy-1", "device_discovery", []resolvedValue{{path: "scope[0].hostname", value: tc.value}})
+		resolved.remember("policy-1", "device_discovery", []resolvedValue{{path: "scope[0].device", value: tc.value}})
 		assert.NotContains(t, resolved.maskOutput("device_discovery", tc.printed), strings.TrimSpace(strings.ToLower(tc.value)))
 		assert.Contains(t, resolved.maskOutput("device_discovery", tc.printed), "********")
 	}
@@ -732,7 +735,7 @@ func TestOutputIsMaskedAsTheBackendWritesAHost(t *testing.T) {
 func TestRunsStartedWhileAResolutionIsAppliedAreStored(t *testing.T) {
 	now := time.Date(2026, 11, 9, 17, 0, 0, 0, time.UTC)
 	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
-	host := func(v string) []resolvedValue { return []resolvedValue{{path: "scope[0].hostname", value: v}} }
+	host := func(v string) []resolvedValue { return []resolvedValue{{path: "scope[0].device", value: v}} }
 	const a, b, c = "4a1c-host-a.invalid", "4a1c-host-b.invalid", "4a1c-host-c.invalid"
 	run := func(id, target string, started time.Time) policies.RunData {
 		return policies.RunData{ID: id, Status: "running", CreatedAt: started, Reason: "Cannot connect to " + target, Targets: []string{target}}
@@ -775,7 +778,7 @@ func TestRunsOfAnEarlierPolicyUnderTheNameAreNotStored(t *testing.T) {
 		name: "the policy is removed and added again",
 		then: func(t *testing.T, resolved *resolvedSecrets, repo *maskingRepo) {
 			require.NoError(t, repo.Remove("policy-1"))
-			resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].hostname", value: "4a1c-host-b.invalid"}})
+			resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].device", value: "4a1c-host-b.invalid"}})
 			require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-1", Name: "shared", Backend: "worker"}))
 		},
 	}, {
@@ -796,14 +799,14 @@ func TestRunsOfAnEarlierPolicyUnderTheNameAreNotStored(t *testing.T) {
 	}, {
 		name: "the policy moves to another backend",
 		then: func(_ *testing.T, resolved *resolvedSecrets, _ *maskingRepo) {
-			resolved.remember("policy-1", "device_discovery", []resolvedValue{{path: "scope[0].hostname", value: "4a1c-host-b.invalid"}})
+			resolved.remember("policy-1", "device_discovery", []resolvedValue{{path: "scope[0].device", value: "4a1c-host-b.invalid"}})
 		},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			now := time.Date(2026, 11, 9, 17, 0, 0, 0, time.UTC)
 			resolved, repo := newTestMaskingRepo(t, &now)
 			require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-1", Name: "shared", Backend: "worker"}))
-			resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].hostname", value: host}})
+			resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].device", value: host}})
 			now = now.Add(time.Minute)
 			earlier := policies.RunData{ID: "run-1", Status: "failed", Reason: "Cannot connect to " + host, CreatedAt: now, Targets: []string{host}}
 			require.NoError(t, repo.UpdateRuns("shared", []policies.RunData{earlier}))
@@ -828,7 +831,7 @@ func TestRunsOfAnEarlierPolicyUnderTheNameAreNotStored(t *testing.T) {
 func TestRunsOfAValueARefusalLeftRunningAreMasked(t *testing.T) {
 	now := time.Date(2026, 11, 9, 17, 0, 0, 0, time.UTC)
 	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
-	host := func(v string) []resolvedValue { return []resolvedValue{{path: "scope[0].hostname", value: v}} }
+	host := func(v string) []resolvedValue { return []resolvedValue{{path: "scope[0].device", value: v}} }
 	const a = "4a1c-host-a.invalid"
 	runOfA := func(id string) policies.RunData {
 		return policies.RunData{ID: id, Status: "failed", CreatedAt: now, Reason: "Cannot connect to " + a, Targets: []string{a}}
