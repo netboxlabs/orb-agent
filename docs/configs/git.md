@@ -390,3 +390,17 @@ device_discovery:
         username: admin
         password: ${PASS}
 ```
+
+## How Changes Are Applied
+
+At startup the agent clones the repository and applies every policy the selector matches, each once, as a new policy at version 1.
+
+With `schedule` set, the agent fetches the branch on that schedule. A commit that changes neither `selector.yaml` nor a policy file the selector matches applies nothing. Any other commit is applied this way:
+
+- A policy that is no longer in a matched file, or whose file the selector no longer matches, is removed from its backend.
+- Each policy in a file the selector matches for the first time, or in a matched file the commit changed, is sent once:
+  - A policy the agent does not have yet is applied as a new policy, at version 1. Nothing is removed first.
+  - A policy the agent already has is updated, at its next version: the backend removes the running version, then applies the new one. This includes every policy in a changed file, even one whose own content did not change.
+- Policies in matched files the commit did not change are not sent again.
+
+A backend declared with `start_mode: on_demand` is started by its first policy, and is handed the policies sent to it meanwhile once it is running. Each of them is still applied as a new policy, without a removal first.

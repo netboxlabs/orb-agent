@@ -17,6 +17,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 // TestIsAzureDevOpsURL tests the IsAzureDevOpsURL helper function.
@@ -101,7 +102,7 @@ backend1:
 	repoURL := "file://" + remoteDir
 
 	// Create a fake policy manager.
-	pMgr := new(mockPolicyManager)
+	pMgr := newGitMockPolicyManager(t)
 
 	// Build a minimal config for testing.
 	schedule := "* * * * *"
@@ -322,7 +323,7 @@ backend1:
 	// Confirm URL detection.
 	require.True(t, configmgr.IsAzureDevOpsURL(adoURL), "expected IsAzureDevOpsURL to return true")
 
-	pMgr := new(mockPolicyManager)
+	pMgr := newGitMockPolicyManager(t)
 	cfg := config.Config{
 		OrbAgent: config.OrbAgent{
 			Labels: map[string]string{"env": "test"},
@@ -353,6 +354,18 @@ backend1:
 	err = gc.Start(context.Background(), cfg, backends)
 	require.NoError(t, err, "Start() via system git fallback should succeed")
 	pMgr.AssertCalled(t, "ManagePolicy", mock.Anything)
+}
+
+// newGitMockPolicyManager returns a mock policy manager over an empty policy
+// repo: the git config manager reads a policy's stored version from it to
+// choose the version it sends.
+func newGitMockPolicyManager(t *testing.T) *mockPolicyManager {
+	t.Helper()
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	pMgr := new(mockPolicyManager)
+	pMgr.On("GetRepo").Return(repo)
+	return pMgr
 }
 
 // writeGitRepo creates a one-commit repository containing files and returns its file:// URL.

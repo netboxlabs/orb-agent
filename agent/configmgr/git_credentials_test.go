@@ -22,6 +22,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 const (
@@ -137,9 +138,12 @@ func startGit(t *testing.T, repoURL string) (*gitConfigManager, *recordingHandle
 	h := &recordingHandler{}
 	pMgr := new(mockPolicyManagerForFleet)
 	pMgr.On("ManagePolicy", mock.Anything).Return()
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	pMgr.On("GetRepo").Return(repo)
 	gc := &gitConfigManager{logger: slog.New(h), pMgr: pMgr}
 	cfg := gitConfig(repoURL)
-	err := gc.Start(t.Context(), cfg, map[string]backend.Backend{"backend1": nil})
+	err = gc.Start(t.Context(), cfg, map[string]backend.Backend{"backend1": nil})
 	t.Cleanup(func() { _ = gc.Stop(t.Context()) })
 	return gc, h, err
 }
