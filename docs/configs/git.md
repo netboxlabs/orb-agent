@@ -400,7 +400,7 @@ With `schedule` set, the agent fetches the branch on that schedule. Each poll co
 - A policy that is no longer in a matched file, or whose file the selector no longer matches, is removed from its backend.
 - Each policy in a file the selector matches for the first time, or in a matched file the difference changes, is sent once:
   - A policy the agent does not have yet is applied as a new policy, at version 1. Nothing is removed first.
-  - A policy the agent already has is updated, at its next version. If the policy has reached its backend, the backend removes it, then applies the new version. If it has not reached the backend yet, the new version is applied without a removal. This includes every policy in a changed file, even one whose own content did not change.
+  - A policy the agent already has is updated, at its next version. If the policy is on its backend, or may be, the backend removes it, then applies the new version. If the agent knows the backend holds nothing of it, the new version is applied without a removal: the policy has not reached the backend yet, the agent has stopped it there because a secret it uses no longer resolves, or a restart has taken it off the backend. This includes every policy in a changed file, even one whose own content did not change.
 - Policies in matched files the difference does not change are not sent again.
 
 A backend declared with `start_mode: on_demand` is started by its first policy, and is handed the policies sent to it meanwhile once it is running. Each of them is still applied as a new policy, without a removal first.
