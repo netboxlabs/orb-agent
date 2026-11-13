@@ -338,3 +338,49 @@ def test_mask_login_masks_what_the_exporter_writes_for_a_percent_encoded_login(c
         masked = mask_login(message, endpoint)
         assert "canary" not in masked
         assert "********@127.0.0.1:1" in masked
+
+
+@pytest.mark.parametrize(
+    ("text", "endpoint"),
+    [
+        # A user and a password are masked wherever they come before an @.
+        ("INFO:device_discovery.client:user:pass@h:4317 unreachable", "grpc://user:pass@h:4317"),
+        ("target:user:pass@h:4317", "grpc://user:pass@h:4317"),
+        ("x-user:pass@h", "grpc://user:pass@h:4317"),
+        ("1user:pass@h", "grpc://user:pass@h:4317"),
+        ("\x1b[31muser:pass@h:4317\x1b[0m", "grpc://user:pass@h:4317"),
+        # gRPC strips a resolver's scheme written without //.
+        ("invalid target address user:pass@127.0.0.1:1", "dns:user:pass@127.0.0.1:1"),
+        # The login is read from the authority, whatever follows it.
+        ("dial user:pass@h", "grpc://user:pass@h:4317/%zz@x"),
+        ("dial user:pass@h", "grpc://user:pass@h:4317/x/a:b@c"),
+        # Decoded leniently, an invalid escape kept.
+        ("errors resolving user:pass%zz@x@127.0.0.1:1", "grpc://user:pass%zz%40x@127.0.0.1:1"),
+    ],
+)
+def test_mask_login_masks_a_user_and_a_password_wherever_they_are(text, endpoint):
+    """A user and a password are masked wherever a text writes them before an @."""
+    masked = mask_login(text, endpoint)
+    assert "user:pass" not in masked
+    assert "********@" in masked
+
+
+def test_mask_login_masks_what_the_exporter_writes_for_a_login_decoding_to_bytes_that_are_not_utf8():
+    """
+    The exporter writes a login decoding to bytes that are not UTF-8 as Latin-1.
+
+    A password written with a raw %, as canary%F3pass, decodes to a byte that
+    is not UTF-8: Python's gRPC writes the error that holds it as Latin-1.
+    The line below is one the real exporter logged for this endpoint. gRPC
+    does not always log it, as it can fail an export before the exporter
+    gets the error, so it was captured rather than awaited.
+    """
+    endpoint = "grpc://canary-user:canary%F3pass@127.0.0.1:1"
+    line = (
+        "Failed to export metrics to canary-user:canary%F3pass@127.0.0.1:1, error code: StatusCode.UNAVAILABLE,"
+        " error details: errors resolving canary-user:canary\xf3pass@127.0.0.1:1: [field:hostname lookup error:"
+        "address lookup failed for canary-user:canary\xf3pass@127.0.0.1:1: Misformatted domain name]"
+    )
+    masked = mask_login(line, endpoint)
+    assert "canary" not in masked
+    assert masked.count("********@127.0.0.1:1") == 3
