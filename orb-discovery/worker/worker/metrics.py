@@ -2,8 +2,12 @@
 # Copyright 2025 NetBox Labs Inc
 """Orb Worker Metrics."""
 
+import json
 import logging
+import re
+import string
 from typing import Any
+from urllib.parse import unquote, unquote_plus
 
 from opentelemetry import metrics as otlp_metrics
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
@@ -18,6 +22,14 @@ logger = logging.getLogger(__name__)
 
 # MASKED replaces the login of a collector URL where a log line writes it.
 MASKED = "********"
+
+# _SCHEME matches a URL's scheme and its ://.
+_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+
+# _LOGIN_CHARS are the characters a user or a password can hold as an address
+# writes it: RFC 3986 lets a user info hold them, and ' ( ) , = too, which
+# also separate words in a text.
+_LOGIN_CHARS = frozenset(string.ascii_letters + string.digits + "%-._~!$&*+;:")
 
 # Global variables to store the provider and meter
 _meter_provider = None
@@ -109,19 +121,75 @@ def _login(endpoint: str) -> str:
     """
     Return the login a collector URL carries, as written, or an empty string.
 
-    The login is what comes before the URL's last @, after its scheme's :// or
-    its //, and after the third / of an empty authority, as gRPC's dns:///
-    writes one; or from the start, for a URL written without //, as in
-    user:password@host:port.
+    The URL is read trimmed, as a URL parser reads it. Written from a scheme's
+    :// or from //, its login is what its authority holds before its last @,
+    after the third / of an empty authority, as gRPC's dns:/// writes one; or,
+    when the authority holds no @, as when a password holds an unescaped /,
+    what comes before the URL's last @. Written without //, as in
+    user:password@host:port, it is everything before the last @.
     """
     if not isinstance(endpoint, str):
         return ""
-    start = endpoint.find("//")
-    start = start + 2 if start >= 0 else 0
-    while endpoint.startswith("/", start):
-        start += 1
+    endpoint = endpoint.strip()
+    start = 0
+    scheme = _SCHEME.match(endpoint)
+    if scheme:
+        start = scheme.end()
+    elif endpoint.startswith("//"):
+        start = 2
+    if start:
+        while endpoint.startswith("/", start):
+            start += 1
+        authority = re.split(r"[/?#]", endpoint[start:], maxsplit=1)[0]
+        if "@" in authority:
+            return authority[: authority.rfind("@")]
     at = endpoint.rfind("@")
     return endpoint[start:at] if at > start else ""
+
+
+def _login_forms(endpoint: str) -> list[str]:
+    """
+    Return the forms in which a text can write a collector URL's login.
+
+    They are the login as written; percent-decoded, whole and its user and
+    password each, as the gRPC client decodes the address it is given before
+    it writes it in an error; and each of those escaped as JSON escapes a
+    string. The longest come first.
+    """
+    login = _login(endpoint)
+    if not login:
+        return []
+    user, colon, password = login.partition(":")
+    plain = [login]
+    for unescape in (unquote, unquote_plus):
+        plain += [unescape(login), unescape(user) + colon + unescape(password)]
+    forms = plain + [json.dumps(p)[1:-1] for p in plain] + [json.dumps(p, ensure_ascii=False)[1:-1] for p in plain]
+    return sorted(dict.fromkeys(f for f in forms if f), key=len, reverse=True)
+
+
+def _starts_word(text: str, i: int) -> bool:
+    """Return whether a login found at i in text starts a word, as an address does."""
+    if i == 0 or text[i - 1] not in _LOGIN_CHARS:
+        return True
+    return i >= 2 and text[i - 2] == "\\" and text[i - 1] in "nrt"
+
+
+def _mask_form(text: str, form: str) -> str:
+    """Return text with form masked where it starts a word before an @."""
+    needle = form + "@"
+    parts = []
+    last = 0
+    i = text.find(needle)
+    while i >= 0:
+        if _starts_word(text, i):
+            parts += [text[last:i], MASKED]
+            last = i + len(form)
+            i = text.find(needle, i + len(needle))
+        else:
+            i = text.find(needle, i + 1)
+    if not parts:
+        return text
+    return "".join(parts) + text[last:]
 
 
 def mask_login(text: str, endpoint: str) -> str:
@@ -130,9 +198,11 @@ def mask_login(text: str, endpoint: str) -> str:
 
     A collector URL can carry a login, as grpc://user:password@host:port or
     user:password@host:port, which the exporter is given as written. The
-    login is masked wherever text writes it before an @: in the URL itself,
-    and in the host:port the exporter and the gRPC client write in their own
-    errors.
+    login is masked wherever text writes it as an address does: before an @,
+    at the start of a word, so a user alone is not masked inside a longer
+    user, as ops is in noc-ops@host; as written, percent-decoded, as the gRPC
+    client writes it in its errors, or escaped as JSON escapes it. The
+    longest form is masked first, so no part of one is left.
 
     Args:
     ----
@@ -144,10 +214,9 @@ def mask_login(text: str, endpoint: str) -> str:
         str: text with the login masked.
 
     """
-    login = _login(endpoint)
-    if not login:
-        return text
-    return text.replace(login + "@", MASKED + "@")
+    for form in _login_forms(endpoint):
+        text = _mask_form(text, form)
+    return text
 
 
 def setup_metrics_export(endpoint: str | None, export_period_seconds: int) -> None:

@@ -6,6 +6,8 @@ import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk.metrics.export import MetricsData
 
 from device_discovery.metrics import get_metric, mask_login, setup_metrics_export
 
@@ -272,3 +274,67 @@ def test_setup_metrics_export_masks_the_collector_login_in_its_error(mock_opente
     for message in caplog.messages:
         assert "canary-user" not in message
         assert "canary-pass" not in message
+
+
+@pytest.mark.parametrize(
+    ("text", "endpoint", "want"),
+    [
+        # A login written without a scheme that holds a // or a :// is still
+        # everything before the last @.
+        ("user:pa//ss@collector:4317", "user:pa//ss@collector:4317", "********@collector:4317"),
+        ("user:pa://ss@h:4317", "user:pa://ss@h:4317", "********@h:4317"),
+        ("user:pass@collector:4317//x", "user:pass@collector:4317//x", "********@collector:4317//x"),
+        # With a scheme, the login ends at the last @ of the authority.
+        ("grpc://u:p@h:4317?x=y@z", "grpc://u:p@h:4317?x=y@z", "grpc://********@h:4317?x=y@z"),
+        # A value written with spaces around it, as a URL parser trims it.
+        (
+            " grpc://canary-user:canary-pass@127.0.0.1:4317 ",
+            " grpc://canary-user:canary-pass@127.0.0.1:4317 ",
+            " grpc://********@127.0.0.1:4317 ",
+        ),
+        # A user alone is masked only where it starts a word.
+        (
+            "device contact noc-ops@example.com, ssh ops@10.0.0.1",
+            "grpc://ops@collector:4317",
+            "device contact noc-ops@example.com, ssh ********@10.0.0.1",
+        ),
+        # Percent-decoded, as the gRPC client writes the address, and escaped.
+        (
+            "errors resolving canary-user:canary@pass@127.0.0.1:1",
+            "grpc://canary-user:canary%40pass@127.0.0.1:1",
+            "errors resolving ********@127.0.0.1:1",
+        ),
+        (
+            '{"error": "dial canary-user:canary\\"pass@h:4317"}',
+            'canary-user:canary"pass@h:4317',
+            '{"error": "dial ********@h:4317"}',
+        ),
+    ],
+)
+def test_mask_login_reads_the_login_as_the_agent_does(text, endpoint, want):
+    """The login is read and masked as the agent reads and masks it."""
+    assert mask_login(text, endpoint) == want
+
+
+def test_mask_login_masks_what_the_exporter_writes_for_a_percent_encoded_login(caplog):
+    """
+    The real exporter writes the login as written and percent-decoded.
+
+    A password holding an @ is percent-encoded in a URL. The gRPC client
+    decodes the address it is given and writes it decoded in the error the
+    exporter logs for every export it fails.
+    """
+    endpoint = "grpc://canary-user:canary%40pass@127.0.0.1:1"
+    exporter = OTLPMetricExporter(endpoint=endpoint, timeout=1, insecure=True)
+    try:
+        with caplog.at_level(logging.WARNING):
+            exporter.export(MetricsData(resource_metrics=[]))
+    finally:
+        exporter.shutdown()
+
+    messages = [r.getMessage() for r in caplog.records if r.name.startswith("opentelemetry")]
+    assert any("canary-user:canary@pass@127.0.0.1:1" in m for m in messages)
+    for message in messages:
+        masked = mask_login(message, endpoint)
+        assert "canary" not in masked
+        assert "********@127.0.0.1:1" in masked
