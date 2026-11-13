@@ -338,16 +338,12 @@ func StartProcess(spec StartSpec) error {
 
 	// A collector URL the process is given can carry a login, as
 	// user:password@host. The process's libraries write its address, login
-	// included, in lines of their own, as a gRPC client does for an address it
-	// cannot dial: the login is masked in every line relayed, before the
-	// policies' values are.
+	// included, in lines of their own, as a gRPC client does, decoded, for an
+	// address it cannot dial: the login is masked in every line relayed, in
+	// each form, before the policies' values are.
 	logins := redact.Logins(spec.Args)
 	relay := func(line string) string {
-		line = validUTF8(line)
-		for _, login := range logins {
-			line = redact.MaskLogin(line, login)
-		}
-		return maskOutput(spec.NameUnderscore, line)
+		return maskOutput(spec.NameUnderscore, redact.MaskLogins(validUTF8(line), logins))
 	}
 
 	// log STDOUT and STDERR lines streaming from Cmd

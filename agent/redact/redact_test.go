@@ -1248,6 +1248,16 @@ func TestArgs(t *testing.T) {
 			want:  []string{"--url", "https://" + MaskedSecret + "@example.com", "--flag=grpc://" + MaskedSecret + "@h:4317"},
 		},
 		{
+			name:  "an argument holding an @ but no URL is kept as written",
+			input: []string{"--policy", `{"u":"a:b@h"}`, "--image", "img@sha256:0123abcd"},
+			want:  []string{"--policy", `{"u":"a:b@h"}`, "--image", "img@sha256:0123abcd"},
+		},
+		{
+			name:  "a URL with an empty authority in any other argument keeps its third /",
+			input: []string{"--url", "dns:///canary-user:canary-pass@collector:4317"},
+			want:  []string{"--url", "dns:///" + MaskedSecret + "@collector:4317"},
+		},
+		{
 			name:  "endpoint without a login and an e-mail address are kept",
 			input: []string{"--otel-endpoint", "grpc://127.0.0.1:4317", "--contact", "ops@example.com"},
 			want:  []string{"--otel-endpoint", "grpc://127.0.0.1:4317", "--contact", "ops@example.com"},
@@ -1274,40 +1284,6 @@ func TestArgs(t *testing.T) {
 				t.Error("Original args slice was mutated!")
 			}
 		})
-	}
-}
-
-// TestLogins_ReturnsTheUserInfoOfEachEndpointArgAsWritten returns the login
-// each endpoint or target flag's value carries, as Args masks it, so that a
-// line the process prints can be masked where it writes that login.
-func TestLogins_ReturnsTheUserInfoOfEachEndpointArgAsWritten(t *testing.T) {
-	got := Logins([]string{
-		"--otel-endpoint", "grpc://canary-user:canary-pass@127.0.0.1:4317",
-		"--diode-target", "canary-user:canary%2Fpass@127.0.0.1:4317",
-		"--host", "ops@example.com",
-		"--otel-endpoint", "dns:///Canary-T0ken@collector:4317",
-		"--diode-target", "grpc://127.0.0.1:8080",
-		"--otel-endpoint",
-	})
-	want := []string{"canary-user:canary-pass", "canary-user:canary%2Fpass", "Canary-T0ken"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Logins() = %q, want %q", got, want)
-	}
-	if got := Logins(nil); got != nil {
-		t.Errorf("Logins(nil) = %q, want nil", got)
-	}
-}
-
-// TestMaskLogin_MasksALoginOnlyWhereItComesBeforeAnAt masks a login where a
-// text writes it as a URL or an address does, and nowhere else.
-func TestMaskLogin_MasksALoginOnlyWhereItComesBeforeAnAt(t *testing.T) {
-	text := "dial canary-user:canary-pass@127.0.0.1:4317: user canary-user:canary-pass"
-	want := "dial ********@127.0.0.1:4317: user canary-user:canary-pass"
-	if got := MaskLogin(text, Login("grpc://canary-user:canary-pass@127.0.0.1:4317")); got != want {
-		t.Errorf("MaskLogin() = %q, want %q", got, want)
-	}
-	if got := MaskLogin(text, Login("grpc://127.0.0.1:4317")); got != text {
-		t.Errorf("MaskLogin() with no login = %q, want the text as it is", got)
 	}
 }
 

@@ -308,10 +308,10 @@ func (r *resilientLogExporter) Export(ctx context.Context, records []sdklog.Reco
 
 // masked returns err with the login of the endpoint masked wherever its text
 // writes it. A login written without a scheme reaches the gRPC client as
-// part of the address, which it writes into its errors. The error returned
-// wraps err, so it is still told transient from fatal.
+// part of the address, which it decodes and writes into its errors. The error
+// returned wraps err, so it is still told transient from fatal.
 func (r *resilientLogExporter) masked(err error) error {
-	text := redact.MaskLogin(err.Error(), redact.Login(r.endpoint))
+	text := redact.MaskLogins(err.Error(), redact.LoginForms(r.endpoint))
 	if text == err.Error() {
 		return err
 	}

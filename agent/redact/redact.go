@@ -1033,7 +1033,9 @@ func isSensitiveField(fieldName string) bool {
 // collector's grpc://user:password@host carries a login: the value of a flag
 // that names an endpoint or a target (--otel-endpoint, --diode-target) as
 // Endpoint masks it, so a login written without a scheme is masked too, and
-// every other argument as URL does.
+// any other argument that holds an @ and a // as Endpoint masks it when it
+// starts with the URL, and as URL does otherwise. Every other argument, as
+// JSON or an image digest that holds an @, is kept as written.
 // Returns a new slice - the original is never modified.
 func Args(args []string) []string {
 	if args == nil {
@@ -1055,8 +1057,15 @@ func Args(args []string) []string {
 		case isEndpointArg(result[i]) && i+1 < len(result):
 			result[i+1] = Endpoint(result[i+1])
 			i++
-		default:
-			result[i] = URL(result[i])
+		case strings.Contains(result[i], "@") && strings.Contains(result[i], "//"):
+			// A URL written from its scheme's :// or its //, as Endpoint
+			// masks it, which keeps the third / of an empty authority;
+			// one after a flag's =, as URL does.
+			if startsWithScheme(result[i]) || strings.HasPrefix(result[i], "//") {
+				result[i] = Endpoint(result[i])
+			} else {
+				result[i] = URL(result[i])
+			}
 		}
 	}
 
@@ -1076,51 +1085,6 @@ func isEndpointArg(arg string) bool {
 		}
 	}
 	return false
-}
-
-// Logins returns the user info, as written, that the value of each flag of
-// args naming an endpoint or a target carries: what Args masks of it. A
-// process given such a URL can write its address, login included, in a line
-// of its own, as a gRPC client does for an address it cannot dial; the agent
-// masks each login where a line it relays writes it before an @.
-func Logins(args []string) []string {
-	var logins []string
-	for i := 0; i+1 < len(args); i++ {
-		if !isEndpointArg(args[i]) {
-			continue
-		}
-		i++
-		if login := Login(args[i]); login != "" && !slices.Contains(logins, login) {
-			logins = append(logins, login)
-		}
-	}
-	return logins
-}
-
-// Login returns the user info s, a value its caller knows is a URL or a host
-// address, carries as written: the part of it Endpoint masks, or "" when
-// Endpoint masks none, or more than one.
-func Login(s string) string {
-	masked := Endpoint(s)
-	from := strings.Index(masked, MaskedSecret)
-	if masked == s || from < 0 {
-		return ""
-	}
-	tail := masked[from+len(MaskedSecret):]
-	if strings.Contains(tail, MaskedSecret) {
-		return ""
-	}
-	return s[from : len(s)-len(tail)]
-}
-
-// MaskLogin returns text with login, a user info as Login returns it, masked
-// as ******** wherever text writes it before an @, as a URL or an address
-// that carries it does. text is returned as it is when login is empty.
-func MaskLogin(text, login string) string {
-	if login == "" {
-		return text
-	}
-	return strings.ReplaceAll(text, login+"@", MaskedSecret+"@")
 }
 
 // isSensitiveArg checks if a CLI argument is a sensitive flag
