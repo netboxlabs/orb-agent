@@ -103,11 +103,12 @@ func TestResolvedValuesLeavesOutHosts(t *testing.T) {
 
 			// The agent resolves a reference with text around it to the
 			// secret alone, so the field holds no host.
-			inURL := "https://hc-ping.example.net/" + hostRef
-			assert.ElementsMatch(t, []resolvedValue{
-				{path: tc.hostAt, value: "c4f1-uu1d", ref: inURL},
-				{path: tc.passwordAt, value: password, ref: passwordRef},
-			}, resolvedValues(tc.data(inURL, passwordRef), tc.data("c4f1-uu1d", password)), "a reference inside a text is kept")
+			for _, inText := range []string{"https://hc-ping.example.net/" + hostRef, hostRef + "ignored}", "${x}" + hostRef} {
+				assert.ElementsMatch(t, []resolvedValue{
+					{path: tc.hostAt, value: "c4f1-uu1d", ref: inText},
+					{path: tc.passwordAt, value: password, ref: passwordRef},
+				}, resolvedValues(tc.data(inText, passwordRef), tc.data("c4f1-uu1d", password)), "a reference inside a text is kept: %s", inText)
+			}
 		})
 	}
 

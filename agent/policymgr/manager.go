@@ -1295,6 +1295,13 @@ func resolvedValues(raw, resolved any) []resolvedValue {
 	return values
 }
 
+// wholeReference reports whether s is a secret reference and nothing else. A
+// reference's body holds no }, so the first } ends the one s starts with; the
+// secrets manager resolves it and drops whatever follows.
+func wholeReference(s string) bool {
+	return strings.HasPrefix(s, "${") && strings.Count(s, "${") == 1 && strings.IndexByte(s, '}') == len(s)-1
+}
+
 // fieldKey is a step of the path to a field of a policy's data: the key of a
 // map, or an item of a list.
 type fieldKey struct {
@@ -1313,11 +1320,11 @@ type fieldKey struct {
 // A value that holds a :// or an @ is not taken for a host: it can be a URL,
 // as a netprobe's target is for an HTTP test, and a URL can carry a token in
 // its user, its path or its query. Nor is the value of a reference written
-// with text around it, which resolves to the secret alone.
+// with text around it, which resolves to the secret alone (see
+// wholeReference).
 func holdsHost(keys []fieldKey, ref, value string) bool {
 	n := len(keys)
-	if n == 0 || strings.Contains(value, "://") || strings.Contains(value, "@") ||
-		!strings.HasPrefix(ref, "${") || !strings.HasSuffix(ref, "}") || strings.Count(ref, "${") != 1 {
+	if n == 0 || strings.Contains(value, "://") || strings.Contains(value, "@") || !wholeReference(ref) {
 		return false
 	}
 	named := func(i int, name string) bool { return i >= 0 && !keys[i].item && keys[i].name == name }
