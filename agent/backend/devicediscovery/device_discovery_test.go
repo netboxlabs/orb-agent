@@ -1,6 +1,7 @@
 package devicediscovery_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -391,6 +392,41 @@ func TestDeviceDiscoveryBackendStartPicksAPortWhenUnset(t *testing.T) {
 			version, err := be.Version()
 			require.NoError(t, err)
 			assert.Equal(t, "1.0.0", version, "the API calls reach the process on the picked port")
+		})
+	}
+}
+
+// A collector URL can carry a login, as user:password@host, with a scheme or
+// without one. The process is given it as written, as its OTLP endpoint and
+// as its Diode target, and every line the backend logs writes it with the
+// login masked.
+func TestDeviceDiscoveryMasksTheCollectorLoginInItsLog(t *testing.T) {
+	for _, collector := range mocks.LoginCollectors {
+		t.Run(collector, func(t *testing.T) {
+			host, port := mocks.APIStandIn(t, "127.0.0.1")
+			createExecutable(t, "device-discovery")
+			mockCmd := &mocks.MockCmd{}
+			mocks.SetupSuccessfulProcess(mockCmd, 12399)
+			var args []string
+			overrideNewCmdOptions(t, mockCmd, func(_ backend.CmdOptions, _ string, a []string) { args = a })
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			require.True(t, devicediscovery.Register())
+			be := backend.GetBackend("device_discovery")
+			repo, err := policies.NewMemRepo()
+			require.NoError(t, err)
+			commons := config.BackendCommons{}
+			commons.Otlp.Grpc = collector
+			require.NoError(t, be.Configure(logger, repo, map[string]any{"host": host, "port": port}, commons, nil))
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			require.NoError(t, be.Start(ctx, cancel))
+
+			assert.Equal(t, collector, mocks.FlagValue(args, "--otel-endpoint"), "the process exports to the collector as written")
+			assert.Equal(t, collector, mocks.FlagValue(args, "--diode-target"), "the process ingests through the collector as written")
+			mocks.AssertCollectorLoginMasked(t, logs.String(), "device-discovery using OTLP endpoint", "device-discovery startup")
 		})
 	}
 }

@@ -1,8 +1,10 @@
 package redact
 
 import (
+	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -991,6 +993,32 @@ func TestEndpoint_MasksTheUserInfoOfAValueKnownToBeAURLOrAnAddress(t *testing.T)
 	}
 }
 
+// TestParseError_MasksTheUserInfoOfTheURLItFailedToParse masks the login of a
+// URL that url.Parse refused wherever the error's text writes it: the URL it
+// quotes, and a part of the user info its reason quotes, as the port it reads
+// in a password that holds a /.
+func TestParseError_MasksTheUserInfoOfTheURLItFailedToParse(t *testing.T) {
+	for raw, want := range map[string]string{
+		"grpc://canary-user:canary-pass@[bad:4317": `parse "grpc://********@[bad:4317": missing ']' in host`,
+		"grpc://canary-user:canary/pass@host:4317": `parse "grpc://********@host:4317": invalid user info`,
+		"http://canary-user:canary%zz@host:4318":   `parse "http://********@host:4318": invalid user info`,
+		"http://[::1":                              `parse "http://[::1": missing ']' in host`,
+	} {
+		_, err := url.Parse(raw)
+		if err == nil {
+			t.Fatalf("url.Parse(%q) parsed", raw)
+		}
+		got := ParseError(raw, err)
+		if got.Error() != want {
+			t.Errorf("ParseError(%q) = %q, want %q", raw, got, want)
+		}
+		var uerr *url.Error
+		if !errors.As(got, &uerr) {
+			t.Errorf("ParseError(%q) is no *url.Error", raw)
+		}
+	}
+}
+
 // TestSensitiveData_AuthArgsKeepsOnlyAStringUnderAKeptName keeps a field of
 // a Vault login's auth_args only as its login reads it: under the exact name,
 // and a string. A Vault login matches the names exactly.
@@ -1199,6 +1227,31 @@ func TestArgs(t *testing.T) {
 			input: []string{"--client-secret", "-x-custom-header-value", "--url", "https://example.com"},
 			want:  []string{"--client-secret", MaskedSecret, "--url", "https://example.com"},
 		},
+		{
+			name:  "collector URL carrying a login",
+			input: []string{"--otel-endpoint", "grpc://canary-user:canary-pass@127.0.0.1:4317", "--host", "localhost"},
+			want:  []string{"--otel-endpoint", "grpc://" + MaskedSecret + "@127.0.0.1:4317", "--host", "localhost"},
+		},
+		{
+			name:  "target carrying a login written without a scheme",
+			input: []string{"--diode-target", "canary-user:canary-pass@127.0.0.1:4317"},
+			want:  []string{"--diode-target", MaskedSecret + "@127.0.0.1:4317"},
+		},
+		{
+			name:  "endpoint carrying a token alone, written without a scheme or a port",
+			input: []string{"--otel-endpoint", "Canary-T0ken@collector.example"},
+			want:  []string{"--otel-endpoint", MaskedSecret + "@collector.example"},
+		},
+		{
+			name:  "URL carrying a login in any other argument",
+			input: []string{"--url", "https://canary-user:canary-pass@example.com", "--flag=grpc://canary-user:canary-pass@h:4317"},
+			want:  []string{"--url", "https://" + MaskedSecret + "@example.com", "--flag=grpc://" + MaskedSecret + "@h:4317"},
+		},
+		{
+			name:  "endpoint without a login and an e-mail address are kept",
+			input: []string{"--otel-endpoint", "grpc://127.0.0.1:4317", "--contact", "ops@example.com"},
+			want:  []string{"--otel-endpoint", "grpc://127.0.0.1:4317", "--contact", "ops@example.com"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1221,6 +1274,40 @@ func TestArgs(t *testing.T) {
 				t.Error("Original args slice was mutated!")
 			}
 		})
+	}
+}
+
+// TestLogins_ReturnsTheUserInfoOfEachEndpointArgAsWritten returns the login
+// each endpoint or target flag's value carries, as Args masks it, so that a
+// line the process prints can be masked where it writes that login.
+func TestLogins_ReturnsTheUserInfoOfEachEndpointArgAsWritten(t *testing.T) {
+	got := Logins([]string{
+		"--otel-endpoint", "grpc://canary-user:canary-pass@127.0.0.1:4317",
+		"--diode-target", "canary-user:canary%2Fpass@127.0.0.1:4317",
+		"--host", "ops@example.com",
+		"--otel-endpoint", "dns:///Canary-T0ken@collector:4317",
+		"--diode-target", "grpc://127.0.0.1:8080",
+		"--otel-endpoint",
+	})
+	want := []string{"canary-user:canary-pass", "canary-user:canary%2Fpass", "Canary-T0ken"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Logins() = %q, want %q", got, want)
+	}
+	if got := Logins(nil); got != nil {
+		t.Errorf("Logins(nil) = %q, want nil", got)
+	}
+}
+
+// TestMaskLogin_MasksALoginOnlyWhereItComesBeforeAnAt masks a login where a
+// text writes it as a URL or an address does, and nowhere else.
+func TestMaskLogin_MasksALoginOnlyWhereItComesBeforeAnAt(t *testing.T) {
+	text := "dial canary-user:canary-pass@127.0.0.1:4317: user canary-user:canary-pass"
+	want := "dial ********@127.0.0.1:4317: user canary-user:canary-pass"
+	if got := MaskLogin(text, Login("grpc://canary-user:canary-pass@127.0.0.1:4317")); got != want {
+		t.Errorf("MaskLogin() = %q, want %q", got, want)
+	}
+	if got := MaskLogin(text, Login("grpc://127.0.0.1:4317")); got != text {
+		t.Errorf("MaskLogin() with no login = %q, want the text as it is", got)
 	}
 }
 

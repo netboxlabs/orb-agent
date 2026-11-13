@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
 // readinessBackoffCount is the number of readiness attempts. The per-iteration
@@ -334,6 +336,20 @@ func StartProcess(spec StartSpec) error {
 	// loop so ReadinessCheck (usually d.Version) observes a live, running proc.
 	spec.SetProc(proc, statusChan)
 
+	// A collector URL the process is given can carry a login, as
+	// user:password@host. The process's libraries write its address, login
+	// included, in lines of their own, as a gRPC client does for an address it
+	// cannot dial: the login is masked in every line relayed, before the
+	// policies' values are.
+	logins := redact.Logins(spec.Args)
+	relay := func(line string) string {
+		line = validUTF8(line)
+		for _, login := range logins {
+			line = redact.MaskLogin(line, login)
+		}
+		return maskOutput(spec.NameUnderscore, line)
+	}
+
 	// log STDOUT and STDERR lines streaming from Cmd
 	go func() {
 		stdout := proc.GetStdout()
@@ -345,13 +361,13 @@ func StartProcess(spec StartSpec) error {
 					stdout = nil
 					continue
 				}
-				spec.LogLine(maskOutput(spec.NameUnderscore, validUTF8(line)), false)
+				spec.LogLine(relay(line), false)
 			case line, open := <-stderr:
 				if !open {
 					stderr = nil
 					continue
 				}
-				spec.LogLine(maskOutput(spec.NameUnderscore, validUTF8(line)), true)
+				spec.LogLine(relay(line), true)
 			}
 		}
 	}()

@@ -282,7 +282,9 @@ func (d *snmpTelemetryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	d.profilesRoot = st.profilesRoot
 	d.profilesDir = st.profilesDir
 
-	d.logger.Info("snmp-telemetry using OTLP endpoint", "endpoint", d.otelEndpoint)
+	// A collector URL can carry a login, as user:password@host, with or
+	// without a scheme: it is logged with its user info masked.
+	d.logger.Info("snmp-telemetry using OTLP endpoint", "endpoint", redact.Endpoint(d.otelEndpoint))
 
 	return nil
 }

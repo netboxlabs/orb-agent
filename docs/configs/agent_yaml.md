@@ -146,6 +146,8 @@ Optional OpenTelemetry export for backend metrics.
 | `http` | string | No | HTTP endpoint for OTLP export, e.g. `http://collector:4318` (used by pktvisor) |
 | `agent_labels` | map | No | Extra key/value labels attached to all exported telemetry |
 
+A `grpc` or `http` URL can carry a login, as `grpc://user:password@collector:4317`, or `user:password@collector:4317` without a scheme. Each backend is given the URL as written. Wherever the agent or a backend logs the URL, or an error quotes it, the user and the password are masked together as `********`, as in `grpc://********@collector:4317`: in each backend's startup lines, in the lines a backend's process prints, which the agent relays, and in the errors of the agent's own log export. The backend's command line still carries the URL as written, and any user of the host can read it there, with `ps` for example.
+
 ### Backend keys
 
 Each backend key enables that backend. An empty value (no sub-keys) uses all defaults. All discovery backends, `snmp_telemetry` and `gnmi_telemetry` accept optional `host` and `port` overrides.

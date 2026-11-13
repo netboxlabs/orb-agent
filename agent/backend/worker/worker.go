@@ -124,8 +124,10 @@ func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
+		// A collector URL can carry a login, as user:password@host, with or
+		// without a scheme: it is logged with its user info masked.
 		d.logger.Info("orb-worker using OTLP endpoint",
-			"endpoint", d.diodeOtelEndpoint)
+			"endpoint", redact.Endpoint(d.diodeOtelEndpoint))
 	}
 	if d.diodeTarget == "" && d.diodeOtelEndpoint != "" {
 		d.diodeTarget = d.diodeOtelEndpoint
