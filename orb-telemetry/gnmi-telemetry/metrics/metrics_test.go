@@ -214,6 +214,8 @@ func TestEndpointOptions_MasksTheLoginInARefusal(t *testing.T) {
 		"canary-user:canary-pass@127.0.0.1:4317":        `otel endpoint "********@127.0.0.1:4317" is neither host:port nor a URL with a scheme`,
 		"canary-user:canary-pass@collector":             `otel endpoint "********@collector" is neither host:port nor a URL with a scheme`,
 		"Canary-T0ken@collector:4317":                   `otel endpoint "********@collector:4317" is neither host:port nor a URL with a scheme`,
+		"canary-user:canary://pass@h:4317":              `otel endpoint "********@h:4317" names no host`,
+		"canary-user:canary//pass@collector:4317":       `otel endpoint "********@collector:4317" is neither host:port nor a URL with a scheme`,
 	} {
 		_, err := endpointOptions(endpoint)
 		require.Error(t, err, endpoint)
