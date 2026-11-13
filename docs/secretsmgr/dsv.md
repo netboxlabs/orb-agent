@@ -2,7 +2,7 @@
 
 The Orb Agent can integrate with [Delinea DevOps Secrets Vault (DSV)](https://delinea.com/products/devops-secrets-management-vault) to resolve sensitive values — passwords, tokens, API keys — referenced from your policy and config values, without hardcoding them.
 
-> **DSV is a different product from Delinea Secret Server.** If you use Secret Server, see [the `delinea` provider](./delinea.md) instead. This page documents the `dsv` provider, which targets DevOps Secrets Vault via the official `dsv-sdk-go` SDK.
+> **DSV is a different product from Delinea Secret Server.** If you use Secret Server, see [the `delinea` provider](./delinea.md) instead. This page documents the `dsv` provider, which reads from DevOps Secrets Vault through its REST API.
 
 > **Note:** The DSV provider is read-only and supports client-credential authentication only.
 
@@ -21,6 +21,7 @@ orb:
         client_secret: "${DSV_CLIENT_SECRET}"
         tld: "com"                              # Optional, default "com"
         url_template: ""                        # Optional, advanced override
+        timeout: 60                             # Optional, seconds one read may take (default 60)
         schedule: "*/5 * * * *"                 # Optional, cron for polling interval
 ```
 
@@ -34,16 +35,15 @@ The provider does not eagerly authenticate at startup — the first secret fetch
 | `client_id` | string | Yes | Client-credential ID (from a DSV client credential). |
 | `client_secret` | string | Yes | Client-credential secret. |
 | `tld` | string | No | Region top-level domain for the DSV endpoint (`com`, `eu`, `com.au`, …). Defaults to `com`. |
-| `url_template` | string | No | Advanced override of the SDK URL template (for a regional proxy or gateway). When empty, the SDK default `https://%s.secretsvaultcloud.%s/v1/%s%s` is used. |
+| `url_template` | string | No | Advanced override of the URL template (for a regional proxy or gateway), filled in with the tenant, the TLD, the resource (`token` or `secrets`) and the secret path, in that order. When empty, the default `https://%s.secretsvaultcloud.%s/v1/%s%s` is used. |
+| `timeout` | int | No | Seconds one read may take, its token request and its secret request together, before it fails. Defaults to `60`. A value of `0` or less means the default. See [Timeouts and failures](#timeouts-and-failures). |
 | `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, a secret is read when a policy that references it is applied, and not checked again while it resolves. |
 
 Each string option accepts an environment-variable placeholder of the form `${VAR_NAME}`. The placeholder is resolved at agent startup; an unset referenced variable causes the agent to fail startup with a clear error.
 
-> **No request timeout option.** The DSV SDK performs its HTTP calls with a client that exposes no timeout hook, so — unlike the Vault, Doppler, and CyberArk providers — `dsv` has no `timeout` setting. This matches the `delinea` (Secret Server) provider.
-
 ## Authentication
 
-The DSV provider uses **client-credential** authentication: the configured `client_id` / `client_secret` are exchanged for a short-lived access token on the first lookup, and the token is reused until it expires.
+The DSV provider uses **client-credential** authentication: for every read, the configured `client_id` / `client_secret` are exchanged for a short-lived access token at `/v1/token`, and the secret is then read with that token. The token is used for that read only: the agent keeps it neither in memory nor in its environment, so the backends it starts cannot inherit it.
 
 ## Usage
 
@@ -92,6 +92,19 @@ If a poll fetch fails for a secret, every policy that references it is stopped o
 If a policy references multiple DSV secrets, a single failed fetch is sticky: that policy is stopped even if another referenced secret merely changed value in the same poll cycle.
 
 This is useful for credential-rotation scenarios: rotate a credential in DSV without restarting the Orb Agent or manually updating policies.
+
+## Timeouts and failures
+
+One read, its token request and its secret request together, fails once `timeout` seconds have passed. A read makes one attempt: a read that fails is read again by the next poll, or when the policy is next applied. So a DSV that accepts the connection and never answers costs a poll `timeout` seconds for each secret it reads, as a poll reads its secrets one after another; keep `timeout` times the number of secrets read under the `schedule` interval, or a poll still running when the next is due skips that one.
+
+A failed read reports why, for example:
+
+- `fetching token: 401 Unauthorized: {"code":401,"message":"..."}`: DSV refused the client credentials.
+- `404 Not Found: {"code":404,"message":"..."}`: DSV has no secret at that path.
+- `no answer within 1m0s: Get "https://...": context deadline exceeded`: DSV did not answer within `timeout`.
+- `fetching token: Post "https://.../v1/token": dial tcp ...: connect: connection refused`: DSV could not be reached.
+
+The error gives the HTTP status of a non-2xx answer and up to 200 characters of its body, or none of the body when it is an HTML page.
 
 ## Verifying the integration
 

@@ -143,6 +143,7 @@ type DSVManager struct {
 	ClientSecret string  `yaml:"client_secret"`
 	TLD          string  `yaml:"tld,omitempty"`
 	URLTemplate  string  `yaml:"url_template,omitempty"`
+	Timeout      *int    `yaml:"timeout,omitempty"` // One read's time limit in seconds, token request included (default: 60)
 	Schedule     *string `yaml:"schedule,omitempty"`
 }
 
