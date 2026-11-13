@@ -112,6 +112,49 @@ func TestSecretsRefreshAppliesAPolicyNoApplyReachedYetWithoutRemovingIt(t *testi
 	assert.Equal(t, policies.Running, stored.State)
 }
 
+// A first apply the backend answered with an error may still have created
+// the policy: one that timed out, or half succeeded, leaves that unknown. The
+// next apply is therefore an update, which removes whatever the first one
+// left before applying the new version, whether the first apply came from a
+// manage or from the replay after an on-demand start.
+func TestAFailedFirstApplyMakesTheNextApplyAnUpdate(t *testing.T) {
+	timedOut := errors.New("Post \"http://127.0.0.1/api/v1/policies\": context deadline exceeded")
+	for name, deferred := range map[string]bool{"manage": false, "replay": true} {
+		t.Run(name, func(t *testing.T) {
+			logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+			beName := "first_apply_failed_" + name
+			be := &mockBackend{name: beName}
+			be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+			backend.Register(beName, be)
+			mgr, err := policymgr.New(logger, &mockSecretsManager{passthrough: true}, config.Config{})
+			require.NoError(t, err)
+			starter := &fakeStarter{state: policymgr.StartRunning}
+			if deferred {
+				starter.state = policymgr.StartStarting
+			}
+			mgr.SetStarter(starter)
+			payload := config.PolicyPayload{Action: "manage", ID: "failed-1", Name: "failed", Backend: beName, DatasetID: "ds", Version: 1, Data: map[string]any{}}
+
+			be.On("ApplyPolicy", isPolicy("failed-1", 1), false).Return(timedOut).Once()
+			mgr.ManagePolicy(payload)
+			if deferred {
+				require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), beName, be))
+			}
+			stored, err := mgr.GetRepo().Get("failed-1")
+			require.NoError(t, err)
+			require.Equal(t, policies.FailedToApply, stored.State)
+
+			starter.state = policymgr.StartRunning
+			be.On("ApplyPolicy", isPolicy("failed-1", 2), true).Return(nil).Once()
+			edit := payload
+			edit.Version = 2
+			mgr.ManagePolicy(edit)
+
+			be.AssertExpectations(t)
+		})
+	}
+}
+
 // A restart removes the backend's policies and replays them once the
 // backend runs again. A policy an apply already reached is still replayed as
 // an update, as is an edit of it that arrived during the restart: the
