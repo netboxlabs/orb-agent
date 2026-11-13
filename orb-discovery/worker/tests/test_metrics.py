@@ -2,11 +2,12 @@
 # Copyright 2025 NetBox Labs Inc
 """NetBox Labs - Metrics Unit Tests."""
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from worker.metrics import get_metric, setup_metrics_export
+from worker.metrics import get_metric, mask_login, setup_metrics_export
 
 
 @pytest.fixture
@@ -209,3 +210,63 @@ def test_setup_metrics_export_meter_provider_error(mock_opentelemetry, reset_met
         # Verify metrics are not enabled and get_metric returns None
         metric = get_metric("api_requests")
         assert metric is None
+
+
+@pytest.mark.parametrize(
+    ("text", "endpoint", "want"),
+    [
+        (
+            "grpc://canary-user:canary-pass@127.0.0.1:4317",
+            "grpc://canary-user:canary-pass@127.0.0.1:4317",
+            "grpc://********@127.0.0.1:4317",
+        ),
+        (
+            "canary-user:canary-pass@127.0.0.1:4317",
+            "canary-user:canary-pass@127.0.0.1:4317",
+            "********@127.0.0.1:4317",
+        ),
+        ("dns:///Canary-T0ken@collector:4317", "dns:///Canary-T0ken@collector:4317", "dns:///********@collector:4317"),
+        (
+            "exporting to canary-user:canary-pass@127.0.0.1:4317 failed",
+            "grpc://canary-user:canary-pass@127.0.0.1:4317",
+            "exporting to ********@127.0.0.1:4317 failed",
+        ),
+        ("grpc://127.0.0.1:4317", "grpc://127.0.0.1:4317", "grpc://127.0.0.1:4317"),
+        ("", "", ""),
+    ],
+)
+def test_mask_login(text, endpoint, want):
+    """The login a collector URL carries is masked wherever a text writes it before an @."""
+    assert mask_login(text, endpoint) == want
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["grpc://canary-user:canary-pass@127.0.0.1:4317", "canary-user:canary-pass@127.0.0.1:4317"],
+)
+def test_setup_metrics_export_masks_the_collector_login(mock_opentelemetry, reset_metrics_cache, caplog, endpoint):
+    """The exporter is given a collector URL as written, and the log writes its login masked."""
+    with caplog.at_level(logging.DEBUG, logger="worker.metrics"):
+        setup_metrics_export(endpoint, 30)
+
+    _, kwargs = mock_opentelemetry["exporter"].call_args
+    assert kwargs["endpoint"] == endpoint
+    masked = endpoint.replace("canary-user:canary-pass@", "********@")
+    assert f"OTLP metrics exporter configured with endpoint: {masked}" in caplog.messages
+    for message in caplog.messages:
+        assert "canary-user" not in message
+        assert "canary-pass" not in message
+
+
+def test_setup_metrics_export_masks_the_collector_login_in_its_error(mock_opentelemetry, reset_metrics_cache, caplog):
+    """An error building the exporter that writes the collector's address writes its login masked."""
+    endpoint = "grpc://canary-user:canary-pass@127.0.0.1:4317"
+    mock_opentelemetry["exporter"].side_effect = ValueError("cannot dial canary-user:canary-pass@127.0.0.1:4317")
+
+    with caplog.at_level(logging.DEBUG, logger="worker.metrics"):
+        setup_metrics_export(endpoint, 30)
+
+    assert "Failed to setup metrics export: cannot dial ********@127.0.0.1:4317" in caplog.messages
+    for message in caplog.messages:
+        assert "canary-user" not in message
+        assert "canary-pass" not in message

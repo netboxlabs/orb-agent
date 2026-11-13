@@ -19,6 +19,9 @@ from device_discovery.version import version_semver
 configure_default_logging()
 logger = logging.getLogger(__name__)
 
+# MASKED replaces the login of a collector URL where a log line writes it.
+MASKED = "********"
+
 # Global variables to store the provider and meter
 _meter_provider = None
 _meter = None
@@ -134,6 +137,51 @@ def get_metric(metric_name: str) -> Any:
     raise ValueError(f"Unknown metric: {metric_name}")
 
 
+def _login(endpoint: str) -> str:
+    """
+    Return the login a collector URL carries, as written, or an empty string.
+
+    The login is what comes before the URL's last @, after its scheme's :// or
+    its //, and after the third / of an empty authority, as gRPC's dns:///
+    writes one; or from the start, for a URL written without //, as in
+    user:password@host:port.
+    """
+    if not isinstance(endpoint, str):
+        return ""
+    start = endpoint.find("//")
+    start = start + 2 if start >= 0 else 0
+    while endpoint.startswith("/", start):
+        start += 1
+    at = endpoint.rfind("@")
+    return endpoint[start:at] if at > start else ""
+
+
+def mask_login(text: str, endpoint: str) -> str:
+    """
+    Return text with the login a collector URL carries masked as ********.
+
+    A collector URL can carry a login, as grpc://user:password@host:port or
+    user:password@host:port, which the exporter is given as written. The
+    login is masked wherever text writes it before an @: in the URL itself,
+    and in the host:port the exporter and the gRPC client write in their own
+    errors.
+
+    Args:
+    ----
+        text (str): the text to mask, such as a log message or an error.
+        endpoint (str): the collector URL.
+
+    Returns:
+    -------
+        str: text with the login masked.
+
+    """
+    login = _login(endpoint)
+    if not login:
+        return text
+    return text.replace(login + "@", MASKED + "@")
+
+
 def setup_metrics_export(endpoint: str | None, export_period_seconds: int) -> None:
     """
     Setup metrics exporter with the proper endpoint.
@@ -160,7 +208,7 @@ def setup_metrics_export(endpoint: str | None, export_period_seconds: int) -> No
         # Set up the exporter with the provided endpoint and timeouts
         insecure = True if endpoint.startswith("grpc://") else None
         exporter = OTLPMetricExporter(endpoint=endpoint, timeout=10, insecure=insecure)
-        logger.info(f"OTLP metrics exporter configured with endpoint: {endpoint}")
+        logger.info(f"OTLP metrics exporter configured with endpoint: {mask_login(endpoint, endpoint)}")
 
         export_period_millis = export_period_seconds * 1000
         reader = PeriodicExportingMetricReader(
@@ -181,5 +229,5 @@ def setup_metrics_export(endpoint: str | None, export_period_seconds: int) -> No
             logger.warning(f"Could not set meter provider: {e}")
             return
     except Exception as e:
-        logger.error(f"Failed to setup metrics export: {e}")
+        logger.error(f"Failed to setup metrics export: {mask_login(str(e), endpoint)}")
         return
