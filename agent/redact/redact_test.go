@@ -107,10 +107,12 @@ func TestSensitiveData_FleetManager(t *testing.T) {
 	}
 }
 
-// TestSensitiveData_GitManager tests GitManager with multiple secrets
+// TestSensitiveData_GitManager tests GitManager with multiple secrets. The
+// username is no secret and stays readable, though the user of the URL is
+// masked with its password: a URL can carry a token as its user.
 func TestSensitiveData_GitManager(t *testing.T) {
 	original := config.GitManager{
-		URL:        "https://git.example.com",
+		URL:        "https://gituser:t0ken-in-url@git.example.com/org/repo.git",
 		Username:   "gituser",
 		Password:   "gitpass123",
 		PrivateKey: "-----BEGIN RSA PRIVATE KEY-----",
@@ -126,6 +128,10 @@ func TestSensitiveData_GitManager(t *testing.T) {
 	}
 	if redactedMap["private_key"] != MaskedSecret {
 		t.Errorf("Expected private_key to be masked, got %v", redactedMap["private_key"])
+	}
+
+	if redactedMap["url"] != "https://"+MaskedSecret+"@git.example.com/org/repo.git" {
+		t.Errorf("Expected the URL's user and password to be masked, got %v", redactedMap["url"])
 	}
 
 	// Verify non-sensitive fields are preserved (using yaml tag names)

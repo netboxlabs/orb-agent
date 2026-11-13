@@ -44,6 +44,91 @@ func TestResolvedValues(t *testing.T) {
 	assert.Empty(t, resolvedValues(raw, raw), "data with nothing resolved")
 }
 
+// TestResolvedValuesLeavesOutHosts leaves out the values of the fields that
+// hold a host, in every backend's policy: a host is not a secret, so what a
+// backend reports or prints about one is kept as it is. A value there that
+// holds an @ can carry a user and a password, as a URL does, and is kept.
+func TestResolvedValuesLeavesOutHosts(t *testing.T) {
+	const host, hostRef = "sw1.example.net", "${vault://secret/devices/host}"
+	const password, passwordRef = "pa55-w0rd-xyz", "${vault://secret/devices/password}"
+	for _, tc := range []struct {
+		name               string
+		data               func(host, password string) map[string]any
+		hostAt, passwordAt string
+	}{
+		{
+			name: "device-discovery's hostname",
+			data: func(h, p string) map[string]any {
+				return map[string]any{"scope": []any{map[string]any{"driver": "ios", "hostname": h, "password": p}}}
+			},
+			hostAt: "scope[0].hostname", passwordAt: "scope[0].password",
+		},
+		{
+			name: "the host of a target, as snmp-discovery, gnmi-discovery and the telemetry backends take it",
+			data: func(h, p string) map[string]any {
+				return map[string]any{"scope": map[string]any{"targets": []any{
+					map[string]any{"host": h, "authentication": map[string]any{"community": p}},
+				}}}
+			},
+			hostAt: "scope.targets[0].host", passwordAt: "scope.targets[0].authentication.community",
+		},
+		{
+			name: "an item of network-discovery's targets",
+			data: func(h, p string) map[string]any {
+				return map[string]any{"scope": map[string]any{"targets": []any{"192.0.2.0/24", h}}, "config": map[string]any{"token": p}}
+			},
+			hostAt: "scope.targets[1]", passwordAt: "config.token",
+		},
+		{
+			name: "the target of a pktvisor netprobe's targets",
+			data: func(h, p string) map[string]any {
+				return map[string]any{"input": map[string]any{"config": map[string]any{
+					"targets": map[string]any{"core": map[string]any{"target": h}},
+				}}, "config": map[string]any{"token": p}}
+			},
+			hostAt: "input.config.targets.core.target", passwordAt: "config.token",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := tc.data(hostRef, passwordRef)
+			assert.Equal(t, []resolvedValue{{path: tc.passwordAt, value: password, ref: passwordRef}},
+				resolvedValues(raw, tc.data(host, password)), "only the password")
+
+			for _, url := range []string{"admin:s3cret@" + host, "https://" + host + "/health?api_key=t0k3n-in-query", "https://dns.example.net/c0nfig-1d"} {
+				assert.ElementsMatch(t, []resolvedValue{
+					{path: tc.hostAt, value: url, ref: hostRef},
+					{path: tc.passwordAt, value: password, ref: passwordRef},
+				}, resolvedValues(raw, tc.data(url, password)), "a URL, which can carry a token, is kept: %s", url)
+			}
+
+			// The agent resolves a reference with text around it to the
+			// secret alone, so the field holds no host.
+			inURL := "https://hc-ping.example.net/" + hostRef
+			assert.ElementsMatch(t, []resolvedValue{
+				{path: tc.hostAt, value: "c4f1-uu1d", ref: inURL},
+				{path: tc.passwordAt, value: password, ref: passwordRef},
+			}, resolvedValues(tc.data(inURL, passwordRef), tc.data("c4f1-uu1d", password)), "a reference inside a text is kept")
+		})
+	}
+
+	t.Run("a field of another name is kept, whatever it holds", func(t *testing.T) {
+		raw := map[string]any{
+			"config": map[string]any{"target": hostRef, "hosts": []any{hostRef}},
+			"scope":  map[string]any{"targets": []any{map[string]any{"address": hostRef}}, "devices": map[string]any{"core": map[string]any{"target": hostRef}}},
+		}
+		resolved := map[string]any{
+			"config": map[string]any{"target": host, "hosts": []any{host}},
+			"scope":  map[string]any{"targets": []any{map[string]any{"address": host}}, "devices": map[string]any{"core": map[string]any{"target": host}}},
+		}
+		assert.ElementsMatch(t, []resolvedValue{
+			{path: "config.target", value: host, ref: hostRef},
+			{path: "config.hosts[0]", value: host, ref: hostRef},
+			{path: "scope.targets[0].address", value: host, ref: hostRef},
+			{path: "scope.devices.core.target", value: host, ref: hostRef},
+		}, resolvedValues(raw, resolved))
+	})
+}
+
 // TestBackendRefusal masks a policy's resolved values in a backend's error,
 // names the fields whose values the error quotes, and bounds the text it logs
 // and the reason it stores.
