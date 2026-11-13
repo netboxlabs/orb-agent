@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
@@ -338,6 +339,7 @@ func TestApplyRefusesAFleetNamedTapItDidNotCreate(t *testing.T) {
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "not one the agent manages")
+			assert.True(t, backend.PolicyNotSent(err), "the policy was never sent to pktvisor")
 			assert.NotContains(t, f.log(), "POST /api/v1/policies 201")
 			_, ok := f.policyNamed("p1")
 			assert.False(t, ok)
@@ -364,7 +366,9 @@ func TestApplyLeavesNoTapWhenPktvisorRefusesThePolicy(t *testing.T) {
 	be := startAgainst(t, f)
 	f.with(func() { f.refusePolicies = true })
 
-	require.Error(t, apply(be, "p1", netprobeBody("192.0.2.1"), false))
+	err := apply(be, "p1", netprobeBody("192.0.2.1"), false)
+	require.Error(t, err)
+	assert.False(t, backend.PolicyNotSent(err), "pktvisor was sent the policy and refused it")
 
 	assert.Equal(t, []string{
 		"POST /api/v1/taps 201",
@@ -382,7 +386,9 @@ func TestApplyKeepsTheTapWhenThePolicyPostTimesOut(t *testing.T) {
 	be := startAgainst(t, f)
 	f.with(func() { f.stallPolicyPost = true })
 
-	require.Error(t, apply(be, "p1", netprobeBody("192.0.2.1"), false))
+	err := apply(be, "p1", netprobeBody("192.0.2.1"), false)
+	require.Error(t, err)
+	assert.False(t, backend.PolicyNotSent(err), "pktvisor may have created the policy it was sent")
 
 	assert.Equal(t, []string{"POST /api/v1/taps 201", "POST /api/v1/policies stalled"}, f.log())
 	f.clearLog()
@@ -424,16 +430,19 @@ func TestApplyRefusesABadNameBeforeCallingPktvisor(t *testing.T) {
 	err := apply(be, "Edge ping", netprobeBody("192.0.2.1"), false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must match")
+	assert.True(t, backend.PolicyNotSent(err))
 
 	err = apply(be, "Edge ping", netprobeBody("192.0.2.1"), true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must match")
+	assert.True(t, backend.PolicyNotSent(err))
 
 	f.addPolicy("p1", "elsewhere")
 	pcapNoTap := map[string]any{"input": map[string]any{"input_type": "pcap"}}
 	err = apply(be, "p1", pcapNoTap, true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must name a tap")
+	assert.True(t, backend.PolicyNotSent(err))
 
 	assert.Empty(t, f.log())
 	_, ok := f.policyNamed("p1")

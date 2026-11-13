@@ -63,6 +63,8 @@ func (m *mockPolicyManagerForFleet) RemovePolicy(policyID string, policyName str
 
 func (m *mockPolicyManagerForFleet) SetStarter(_ policymgr.BackendStarter) {}
 
+func (m *mockPolicyManagerForFleet) BackendProcessReplaced(string) {}
+
 type mockBackendState struct {
 	backendState map[string]*backend.State
 }

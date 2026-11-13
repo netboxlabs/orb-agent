@@ -455,15 +455,17 @@ func Register() bool {
 	return true
 }
 
+// ApplyPolicy marks an error it returns before posting the policy with
+// backend.NotSent: pktvisord was not sent the policy.
 func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
 	// Check before the update removes the running policy: a refused edit
 	// leaves it alone.
 	if err := checkPolicyName(data.Name); err != nil {
-		return err
+		return backend.NotSent(err)
 	}
 	tapType, err := managedTapType(data.Data)
 	if err != nil {
-		return err
+		return backend.NotSent(err)
 	}
 
 	if updatePolicy {
@@ -481,7 +483,7 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 	body := data.Data
 	if tapType != "" {
 		if err := p.ensureTap(tapType); err != nil {
-			return err
+			return backend.NotSent(err)
 		}
 		// managedTapType accepted the body, so it is a map.
 		doc, _ := data.Data.(map[string]any)
@@ -500,7 +502,7 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 	policyYaml, err := yaml.Marshal(fullPolicy)
 	if err != nil {
 		p.logger.Warn("yaml policy marshal failure", "policy_id", data.ID, "policy_name", data.Name)
-		return err
+		return backend.NotSent(err)
 	}
 
 	var resp map[string]any

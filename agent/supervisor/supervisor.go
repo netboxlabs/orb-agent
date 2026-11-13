@@ -50,10 +50,12 @@ import (
 var ErrStopped = errors.New("backend is stopped")
 
 // PolicyApplier is what the supervisor needs from the policy manager: mark a
-// backend's policies for a restart, hand them back after it, and the repo
-// each backend is configured with.
+// backend's policies for a restart, say when a new process replaced the
+// backend's, hand the policies back after it, and the repo each backend is
+// configured with.
 type PolicyApplier interface {
 	RemoveBackendPolicies(name string, be backend.Backend, permanently bool) error
+	BackendProcessReplaced(name string)
 	ApplyBackendPolicies(ctx context.Context, name string, be backend.Backend) error
 	GetRepo() policies.PolicyRepo
 }

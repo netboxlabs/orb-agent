@@ -26,6 +26,7 @@ func (noopPM) ApplyBackendPolicies(_ context.Context, _ string, _ backend.Backen
 func (noopPM) RemoveBackendPolicies(_ string, _ backend.Backend, _ bool) error           { return nil }
 func (noopPM) RemovePolicy(_ string, _ string, _ string) error                           { return nil }
 func (noopPM) SetStarter(_ policymgr.BackendStarter)                                     {}
+func (noopPM) BackendProcessReplaced(string)                                             {}
 
 type noopBackendState struct{}
 

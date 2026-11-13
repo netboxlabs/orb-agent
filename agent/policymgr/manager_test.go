@@ -1436,24 +1436,22 @@ func TestRemovePolicyDoesNotCallABackendThatIsNotRunning(t *testing.T) {
 
 	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
 	require.NoError(t, err)
-	payload := config.PolicyPayload{Action: "manage", ID: "policy-cold", Name: "Cold Policy", Backend: "cold_backend", Version: 1, Data: map[string]any{}, DatasetID: "ds-cold"}
-	secretsMgr.On("SolvePolicySecrets", payload).Return(payload, nil)
-	mgr.ManagePolicy(payload)
-	state, err := mgr.GetPolicyState()
-	require.NoError(t, err)
-	require.Contains(t, policyIDs(state), "policy-cold", "the policy is kept as failed to apply")
+	// A record an apply reached, so the removal does not skip the backend
+	// for a policy it holds nothing of, and the not-started gate decides.
+	reached := policies.PolicyData{ID: "policy-cold", Name: "Cold Policy", Backend: "cold_backend", Version: 1, Data: map[string]any{}, Datasets: map[string]bool{"ds-cold": true}, State: policies.Running}
+	require.NoError(t, mgr.GetRepo().Update(reached))
 
 	require.NoError(t, mgr.RemovePolicy("policy-cold", "Cold Policy", "cold_backend"))
 
 	cold.AssertNotCalled(t, "RemovePolicy", mock.Anything)
-	state, err = mgr.GetPolicyState()
+	state, err := mgr.GetPolicyState()
 	require.NoError(t, err)
 	assert.NotContains(t, policyIDs(state), "policy-cold")
 	assert.NotContains(t, logs.String(), "level=ERROR", "an expected condition is not an error")
 	assert.Contains(t, logs.String(), "treating policy as already removed")
 
 	// The dataset path removes through the same gate.
-	mgr.ManagePolicy(payload)
+	require.NoError(t, mgr.GetRepo().Update(reached))
 	mgr.RemovePolicyDataset("policy-cold", "ds-cold", "cold_backend", cold)
 	cold.AssertNotCalled(t, "RemovePolicy", mock.Anything)
 	state, err = mgr.GetPolicyState()
@@ -1474,9 +1472,8 @@ func TestRemovePolicyStillAsksABackendWhoseStatusProbeFailed(t *testing.T) {
 
 	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
 	require.NoError(t, err)
-	payload := config.PolicyPayload{Action: "manage", ID: "policy-flaky", Name: "Flaky Policy", Backend: "flaky_backend", Version: 1, Data: map[string]any{}, DatasetID: "ds-flaky"}
-	secretsMgr.On("SolvePolicySecrets", payload).Return(payload, nil)
-	mgr.ManagePolicy(payload)
+	// A record an apply reached before the status probe began failing.
+	require.NoError(t, mgr.GetRepo().Update(policies.PolicyData{ID: "policy-flaky", Name: "Flaky Policy", Backend: "flaky_backend", Version: 1, Data: map[string]any{}, Datasets: map[string]bool{"ds-flaky": true}, State: policies.Running}))
 
 	require.NoError(t, mgr.RemovePolicy("policy-flaky", "Flaky Policy", "flaky_backend"))
 

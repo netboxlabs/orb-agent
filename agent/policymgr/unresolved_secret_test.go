@@ -176,7 +176,8 @@ func TestARemovedPolicyIsForgottenByTheSecretsManager(t *testing.T) {
 }
 
 // Once the secret resolves again, the secrets manager's report re-applies the
-// policy it stopped, with no restart and no update.
+// policy it stopped, with no restart and no update. The stop removed the
+// policy from the backend, so it is applied without a removal first.
 func TestAPolicyStoppedForAnUnresolvedSecretIsReappliedWhenItResolves(t *testing.T) {
 	be, secretsMgr, mgr := newUnresolvedSecretFixture(t, "unresolved_recover")
 	require.NoError(t, mgr.GetRepo().Update(storedPolicy("unresolved-3", "unresolved_recover", policies.Running)))
@@ -185,7 +186,7 @@ func TestAPolicyStoppedForAnUnresolvedSecretIsReappliedWhenItResolves(t *testing
 
 	solved := config.PolicyPayload{ID: "unresolved-3", Data: map[string]any{"community": "public"}}
 	secretsMgr.On("SolvePolicySecrets", payloadByID("unresolved-3")).Return(solved, nil).Once()
-	be.On("ApplyPolicy", byID("unresolved-3"), true).Return(nil).Once()
+	be.On("ApplyPolicy", byID("unresolved-3"), false).Return(nil).Once()
 	secretsMgr.TriggerCallbacks(map[string]error{"unresolved-3": nil})
 
 	stored, err := mgr.GetRepo().Get("unresolved-3")
@@ -197,7 +198,8 @@ func TestAPolicyStoppedForAnUnresolvedSecretIsReappliedWhenItResolves(t *testing
 
 // Fleet re-delivers a policy on an update without its dataset ID. A policy
 // stopped for a secret that no longer resolves is still the agent's, so the
-// re-delivery applies it rather than being skipped as unseen.
+// re-delivery applies it rather than being skipped as unseen, without a
+// removal first, since the stop removed it from the backend.
 func TestAPolicyStoppedForAnUnresolvedSecretIsAppliedOnItsNextDelivery(t *testing.T) {
 	be, secretsMgr, mgr := newUnresolvedSecretFixture(t, "unresolved_redeliver")
 	require.NoError(t, mgr.GetRepo().Update(storedPolicy("unresolved-4", "unresolved_redeliver", policies.Running)))
@@ -215,7 +217,7 @@ func TestAPolicyStoppedForAnUnresolvedSecretIsAppliedOnItsNextDelivery(t *testin
 	solved := update
 	solved.Data = map[string]any{"community": "public"}
 	secretsMgr.On("SolvePolicySecrets", payloadByID("unresolved-4")).Return(solved, nil).Once()
-	be.On("ApplyPolicy", byID("unresolved-4"), true).Return(nil).Once()
+	be.On("ApplyPolicy", byID("unresolved-4"), false).Return(nil).Once()
 	mgr.ManagePolicy(update)
 
 	stored, err := mgr.GetRepo().Get("unresolved-4")

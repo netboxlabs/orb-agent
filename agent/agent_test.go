@@ -225,6 +225,8 @@ func (m *mockPolicyManager) RemovePolicy(_ string, _ string, _ string) error {
 
 func (m *mockPolicyManager) SetStarter(_ policymgr.BackendStarter) {}
 
+func (m *mockPolicyManager) BackendProcessReplaced(string) {}
+
 // restartableBackend records, into the shared slice, the calls a restart
 // makes. It reports Running unconditionally and no-ops Start and Stop: the
 // supervisor starts it through ConfigureAll and stops it through StopAll
@@ -308,7 +310,9 @@ func TestRestartDoesNotRetryAPolicyItFailed(t *testing.T) {
 
 // End to end with the real policy manager: a policy the backend ran before
 // the restart is still in the repo afterwards, running, and was handed to
-// the backend once more in the remove-then-apply form.
+// the backend once more. The reset started a new process, which holds none
+// of the backend's policies, so the replay applies it without removing it
+// first.
 func TestRestartReappliesPoliciesEndToEnd(t *testing.T) {
 	events := []string{}
 	be := &restartableBackend{events: &events}
@@ -322,7 +326,7 @@ func TestRestartReappliesPoliciesEndToEnd(t *testing.T) {
 	require.NoError(t, err, "the policy survives the restart")
 	assert.Equal(t, policies.Running, stored.State)
 	assert.Equal(t, int32(3), stored.Version)
-	assert.Equal(t, []string{"remove-policy:kept", "configure", "reset", "apply-policy:kept:update=true"}, events,
+	assert.Equal(t, []string{"remove-policy:kept", "configure", "reset", "apply-policy:kept:update=false"}, events,
 		"the backend is asked to drop the policy before the reset and handed it again after")
 	require.Len(t, be.applied, 1)
 	assert.Equal(t, int32(3), be.applied[0].Version)
