@@ -101,11 +101,13 @@ type FleetSecretsManager struct {
 
 // DelineaManager represents the configuration for the Delinea Secret Server manager
 type DelineaManager struct {
-	ServerURL string  `yaml:"server_url"`
-	Tenant    string  `yaml:"tenant"`
-	Username  string  `yaml:"username"`
-	Password  string  `yaml:"password"`
-	Schedule  *string `yaml:"schedule,omitempty"`
+	ServerURL         string   `yaml:"server_url"`
+	Tenant            string   `yaml:"tenant"`
+	Username          string   `yaml:"username"`
+	Password          string   `yaml:"password"`
+	AllowedVaultHosts []string `yaml:"allowed_vault_hosts,omitempty"`
+	Timeout           *int     `yaml:"timeout,omitempty"` // One read's time limit in seconds, sign-in included (default: 60)
+	Schedule          *string  `yaml:"schedule,omitempty"`
 }
 
 // DopplerManager represents the configuration for the Doppler secrets manager
@@ -141,6 +143,7 @@ type DSVManager struct {
 	ClientSecret string  `yaml:"client_secret"`
 	TLD          string  `yaml:"tld,omitempty"`
 	URLTemplate  string  `yaml:"url_template,omitempty"`
+	Timeout      *int    `yaml:"timeout,omitempty"` // One read's time limit in seconds, token request included (default: 60)
 	Schedule     *string `yaml:"schedule,omitempty"`
 }
 
