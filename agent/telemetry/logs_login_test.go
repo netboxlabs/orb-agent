@@ -9,6 +9,8 @@ import (
 	"time"
 
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+
+	"github.com/netboxlabs/orb-agent/agent/config"
 )
 
 // A password holding an @ is percent-encoded in a URL. Written without a
@@ -50,5 +52,25 @@ func TestResilientLogExporterMasksALoginPercentDecodedInARealGRPCError(t *testin
 	mu.Unlock()
 	if strings.Contains(out, "canary") {
 		t.Errorf("the log writes the login:\n%s", out)
+	}
+}
+
+// A login written without a scheme that holds an invalid %XX makes the gRPC
+// client refuse the address when the exporter is built, with an error that
+// quotes it: the agent logs that error and exits with it, the login masked.
+// The error is a real one.
+func TestBuildOTLPLogExporterMasksTheLoginWhenTheClientRefusesTheAddress(t *testing.T) {
+	commons := config.BackendCommons{}
+	commons.Otlp.Grpc = "canary-user:canary%zz%40pass@127.0.0.1:1"
+
+	_, _, err := BuildOTLPLogExporter(context.Background(), slog.New(slog.DiscardHandler), commons)
+	if err == nil {
+		t.Fatal("expected the gRPC client to refuse the address")
+	}
+	if strings.Contains(err.Error(), "canary") {
+		t.Errorf("the error writes the login: %v", err)
+	}
+	if !strings.Contains(err.Error(), "********@127.0.0.1:1") {
+		t.Errorf("the error does not write the address masked: %v", err)
 	}
 }

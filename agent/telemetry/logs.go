@@ -105,7 +105,9 @@ func BuildOTLPLogExporter(ctx context.Context, logger *slog.Logger, commons conf
 
 	exporter, err := newLogExporter(ctx, endpoint)
 	if err != nil {
-		return logger, nil, err
+		// The gRPC client refuses an address it cannot parse, as a login
+		// written without a scheme that holds an invalid %XX, quoting it.
+		return logger, nil, maskedLoginError(err, endpoint)
 	}
 	exporter = newResilientLogExporter(exporter, logger, endpoint)
 
@@ -311,7 +313,14 @@ func (r *resilientLogExporter) Export(ctx context.Context, records []sdklog.Reco
 // part of the address, which it decodes and writes into its errors. The error
 // returned wraps err, so it is still told transient from fatal.
 func (r *resilientLogExporter) masked(err error) error {
-	text := redact.MaskLogins(err.Error(), redact.LoginForms(r.endpoint))
+	return maskedLoginError(err, r.endpoint)
+}
+
+// maskedLoginError returns err with the login endpoint carries masked
+// wherever its text writes it, wrapping err, or err when its text writes
+// none.
+func maskedLoginError(err error, endpoint string) error {
+	text := redact.MaskLogins(err.Error(), redact.LoginForms(endpoint))
 	if text == err.Error() {
 		return err
 	}
