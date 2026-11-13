@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -14,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DelineaXPM/tss-sdk-go/v3/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -514,4 +517,283 @@ func TestDelineaSolveConfigSecrets(t *testing.T) {
 	assert.Equal(t, "be-secret", gotCM.Sources.Git.Password)
 	// config-time secrets should not be tracked
 	assert.Empty(t, m.usedVars)
+}
+
+// newStubDelineaServer answers the health check and the token grant the SDK
+// performs before its first read, and hands every secret request to secrets.
+func newStubDelineaServer(t *testing.T, secrets http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/healthcheck", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"healthy":true}`))
+	})
+	mux.HandleFunc("/oauth2/token", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"fake-token","token_type":"bearer","expires_in":3600}`))
+	})
+	mux.HandleFunc("/api/v1/secrets/", secrets)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// fetchWithin runs m.fetch(body) and fails the test if it has not returned
+// within limit, so a read that hangs fails instead of stalling the suite.
+func fetchWithin(t *testing.T, m *delineaManager, body string, limit time.Duration) (string, time.Duration, error) {
+	t.Helper()
+	type result struct {
+		val string
+		err error
+	}
+	done := make(chan result, 1)
+	began := time.Now()
+	go func() {
+		val, err := m.fetch(body)
+		done <- result{val, err}
+	}()
+	select {
+	case r := <-done:
+		return r.val, time.Since(began), r.err
+	case <-time.After(limit):
+		t.Fatalf("read of %q did not return within %s", body, limit)
+		return "", 0, nil
+	}
+}
+
+// A connection reset while the secret is read is an error, not a panic.
+func TestDelineaFetch_ConnectionResetReturnsAnError(t *testing.T) {
+	t.Parallel()
+	srv := newStubDelineaServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "no hijacker", http.StatusInternalServerError)
+			return
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			return
+		}
+		if tcp, ok := conn.(*net.TCPConn); ok {
+			_ = tcp.SetLinger(0) // close with a RST
+		}
+		_ = conn.Close()
+	})
+
+	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: srv.URL, Username: "u", Password: "p"}}
+	require.NoError(t, m.Start(context.Background()))
+
+	_, _, err := fetchWithin(t, m, "id/1/password", 10*time.Second)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get secret id=1")
+}
+
+// A Secret Server that accepts the read and never answers fails it after the
+// configured timeout.
+func TestDelineaFetch_SilentServerTimesOut(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	srv := newStubDelineaServer(t, func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	})
+	t.Cleanup(func() { close(release) }) // runs before srv.Close
+
+	const timeout = 300 * time.Millisecond
+	m := &delineaManager{
+		preLogger: newTestLogger(),
+		config:    config.DelineaManager{ServerURL: srv.URL, Username: "u", Password: "p"},
+		timeout:   timeout,
+	}
+	require.NoError(t, m.Start(context.Background()))
+
+	_, took, err := fetchWithin(t, m, "id/1/password", 5*time.Second)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timed out")
+	assert.GreaterOrEqual(t, took, timeout)
+	assert.Less(t, took, 3*time.Second, "one read, retries included, stays within the timeout")
+}
+
+// The SDK's bearer token is not left in the process environment, which the
+// backends the agent starts inherit.
+func TestDelineaFetch_LeavesNoTokenInTheEnvironment(t *testing.T) {
+	t.Parallel()
+	fake := newFakeDelineaServer()
+	t.Cleanup(fake.Close)
+	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v"}}})
+
+	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	require.NoError(t, m.Start(context.Background()))
+
+	val, err := m.fetch("id/1/password")
+	require.NoError(t, err)
+	assert.Equal(t, "v", val)
+
+	prefix := "SS_AT_" + url.QueryEscape(fake.URL)
+	for _, kv := range os.Environ() {
+		assert.False(t, strings.HasPrefix(kv, prefix), "the token cache must not be in the environment: %s", strings.SplitN(kv, "=", 2)[0])
+	}
+}
+
+func TestDelineaStart_Timeout(t *testing.T) {
+	t.Parallel()
+	seconds := func(n int) *int { return &n }
+	cases := []struct {
+		name    string
+		timeout *int
+		want    time.Duration
+	}{
+		{"unset", nil, 60 * time.Second},
+		{"set", seconds(5), 5 * time.Second},
+		{"zero", seconds(0), 60 * time.Second},
+		{"negative", seconds(-1), 60 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := &delineaManager{
+				preLogger: newTestLogger(),
+				config:    config.DelineaManager{ServerURL: "https://secrets.example.invalid", Username: "u", Password: "p", Timeout: tc.timeout},
+			}
+			require.NoError(t, m.Start(context.Background()))
+			assert.Equal(t, tc.want, m.timeout, "the limit of one read")
+			assert.Equal(t, tc.want, m.client.Timeout, "the SDK's limit of one attempt")
+			assert.True(t, m.client.DisableRetries, "one attempt per read")
+		})
+	}
+}
+
+// A server_url over plain HTTP keeps working, as it did before the SDK began
+// refusing one to a host other than the loopback, and the agent warns once.
+func TestDelineaStart_PlainHTTPServerURL(t *testing.T) {
+	t.Parallel()
+	fake := newFakeDelineaServer()
+	t.Cleanup(fake.Close)
+	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v"}}})
+
+	// The SDK does not take 0.0.0.0 for a loopback address, but Go dials it on
+	// this host, so the read reaches the fake server.
+	u, err := url.Parse(fake.URL)
+	require.NoError(t, err)
+	logger, buf := newCapturingLogger()
+	m := &delineaManager{
+		preLogger: logger,
+		config:    config.DelineaManager{ServerURL: "HTTP://0.0.0.0:" + u.Port(), Username: "svc_orb", Password: "synthetic-password-42"},
+	}
+	require.NoError(t, m.Start(context.Background()))
+
+	val, err := m.fetch("id/1/password")
+	require.NoError(t, err)
+	assert.Equal(t, "v", val)
+
+	logs := buf.String()
+	assert.Equal(t, 1, strings.Count(logs, `"level":"WARN"`), logs)
+	assert.Contains(t, logs, "plain HTTP")
+	assert.NotContains(t, logs, "synthetic-password-42")
+}
+
+func TestDelineaStart_HTTPSServerURLDoesNotWarn(t *testing.T) {
+	t.Parallel()
+	logger, buf := newCapturingLogger()
+	m := &delineaManager{
+		preLogger: logger,
+		config:    config.DelineaManager{ServerURL: "https://secrets.example.invalid", Username: "u", Password: "p"},
+	}
+	require.NoError(t, m.Start(context.Background()))
+	assert.False(t, m.client.AllowInsecureHTTP)
+	assert.NotContains(t, buf.String(), `"level":"WARN"`)
+}
+
+// newFakeDelineaPlatform emulates the Delinea Platform: its health check, its
+// client-credentials grant, and a vault broker naming vaultURL as the default
+// vault, where the SDK sends the secret requests.
+func newFakeDelineaPlatform(t *testing.T, vaultURL string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/healthcheck", http.NotFound)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"healthy":true}`))
+	})
+	mux.HandleFunc("/identity/api/oauth2/token/xpmplatform", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"platform-token","token_type":"Bearer","expires_in":3600}`))
+	})
+	mux.HandleFunc("/vaultbroker/api/vaults", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"vaults": []map[string]any{{
+			"vaultId": "vault-1", "name": "main", "type": "SecretServer",
+			"isDefault": true, "isActive": true,
+			"connection": map[string]any{"url": vaultURL},
+		}}})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// allowed_vault_hosts reaches the SDK: a vault on a host the Platform does not
+// share is refused unless it is listed.
+func TestDelineaStart_AllowedVaultHosts(t *testing.T) {
+	t.Parallel()
+	// A port nothing listens on: a read routed to the vault fails to connect.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	vaultHost := l.Addr().String()
+	require.NoError(t, l.Close())
+	platform := newFakeDelineaPlatform(t, "https://"+vaultHost)
+
+	read := func(t *testing.T, allowed []string) error {
+		t.Helper()
+		m := &delineaManager{
+			preLogger: newTestLogger(),
+			config: config.DelineaManager{
+				ServerURL: platform.URL, Username: "client-id", Password: "client-secret",
+				AllowedVaultHosts: allowed,
+			},
+			timeout: 5 * time.Second,
+		}
+		require.NoError(t, m.Start(context.Background()))
+		_, _, err := fetchWithin(t, m, "id/1/password", 10*time.Second)
+		require.Error(t, err)
+		return err
+	}
+
+	err = read(t, nil)
+	assert.Contains(t, err.Error(), "untrusted vault host")
+
+	err = read(t, []string{"vault.example.invalid", vaultHost})
+	assert.NotContains(t, err.Error(), "untrusted vault host")
+	assert.Contains(t, err.Error(), "connection refused", "the read was sent to the vault")
+}
+
+func TestDelineaStart_AllowedVaultHostsRejectsAURL(t *testing.T) {
+	t.Parallel()
+	m := &delineaManager{
+		preLogger: newTestLogger(),
+		config: config.DelineaManager{
+			ServerURL: "https://secrets.example.invalid", Username: "u", Password: "p",
+			AllowedVaultHosts: []string{"https://vault.example.invalid"},
+		},
+	}
+	err := m.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "allowed_vault_hosts")
+}
+
+// A secret Secret Server reports missing carries the HTTP status in a typed error.
+func TestDelineaFetch_NotFoundCarriesTheStatus(t *testing.T) {
+	t.Parallel()
+	fake := newFakeDelineaServer()
+	t.Cleanup(fake.Close)
+
+	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	require.NoError(t, m.Start(context.Background()))
+
+	_, err := m.fetch("id/99/password")
+	var httpErr *server.HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusNotFound, httpErr.StatusCode)
 }

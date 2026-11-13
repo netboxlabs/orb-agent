@@ -18,6 +18,8 @@ orb:
         tenant: "<your-tenant>"         # Subdomain, *.secretservercloud.com only (XOR with server_url)
         username: "svc_orb"
         password: "${DELINEA_PASSWORD}"
+        timeout: 60                     # Optional, seconds one read may take (default 60)
+        allowed_vault_hosts: []         # Optional, Delinea Platform only
         schedule: "*/5 * * * *"         # Optional, cron format for polling interval
 ```
 
@@ -27,17 +29,43 @@ Exactly one of `server_url` or `tenant` must be set. `tenant` is a shorthand tha
 
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
-| `server_url` | string | Cond. | Full URL of the Secret Server, including the scheme and with no trailing path. Use this for on-prem and Delinea Platform deployments, and for any cloud tenant whose hostname is not `<tenant>.secretservercloud.com`, such as a `delinea.app` tenant or a regional `secretservercloud.eu` one. Mutually exclusive with `tenant`. |
+| `server_url` | string | Cond. | Full URL of the Secret Server, including the scheme and with no trailing path. Use this for on-prem and Delinea Platform deployments, and for any cloud tenant whose hostname is not `<tenant>.secretservercloud.com`, such as a `delinea.app` tenant or a regional `secretservercloud.eu` one. It must not carry a user, a password, a query or a fragment. An `http://` URL works, but sends the service user's password and every secret read unencrypted, and the agent logs a warning at startup when it is set: see [Plain HTTP](#plain-http). Mutually exclusive with `tenant`. |
 | `tenant` | string | Cond. | Subdomain of a Secret Server Cloud tenant on `secretservercloud.com`, for example `acme` for `acme.secretservercloud.com`. The rest of the hostname is fixed, so any other domain needs `server_url` instead. Mutually exclusive with `server_url`. |
 | `username` | string | Yes | Service-user username with `View Secret` permission on the referenced secrets. |
 | `password` | string | Yes | Password for the service user. |
+| `timeout` | int | No | Seconds one read may take, from the first request to the last byte of the answer, before it fails. Defaults to `60`. A value of `0` or less means the default. See [Timeouts and failures](#timeouts-and-failures). |
+| `allowed_vault_hosts` | list of strings | No | Delinea Platform only. Hosts, as `host` or `host:port`, that the agent may send its reads to when the Platform names a vault on a host of its own. Empty by default, which trusts a vault on the Platform's own host and port, and one on a Delinea Cloud domain (`secretservercloud.com` and its regional domains) on port 443. See [Delinea Platform vaults](#delinea-platform-vaults). |
 | `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, a secret is read when a policy that references it is applied, and not checked again while it resolves. |
 
 Each of `server_url`, `tenant`, `username`, and `password` accepts an environment-variable placeholder of the form `${VAR_NAME}`. The placeholder is resolved at agent startup; an unset referenced variable causes the agent to fail startup with a clear error.
 
+### Plain HTTP
+
+A `server_url` beginning with `http://` is used as given, but the service user's password and every secret read then cross the network unencrypted. When the agent starts with such a URL, it logs one warning:
+
+```
+delinea: Secret Server is reached over plain HTTP; the service user's password and the secrets read cross the network unencrypted
+```
+
+Use `https://` wherever the Secret Server offers it.
+
+### Delinea Platform vaults
+
+On the Delinea Platform, the agent asks the Platform's vault broker for its default vault and reads secrets from the vault's URL. That URL must use `https`. The agent trusts a vault on the Platform's own host and port, and one on a Delinea Cloud domain on port 443. A vault on any other host, such as an on-premises Secret Server the Platform fronts, is refused with `untrusted vault host "<host>"` until its host is listed in `allowed_vault_hosts`:
+
+```yaml
+        allowed_vault_hosts:
+          - "vault.corp.example.com"        # port 443
+          - "vault2.corp.example.com:8443"  # another port
+```
+
+An entry without a port matches the host on port 443 only. An entry must not carry a scheme or a path.
+
 ## Authentication
 
-The Delinea SDK supports username/password authentication only. The Orb Agent uses the same set of credentials for both Secret Server Cloud and on-prem/Platform deployments — the SDK selects the correct endpoint based on whether `tenant` or `server_url` is set.
+The Delinea SDK supports username/password authentication only. The Orb Agent uses the same set of credentials for both Secret Server Cloud and on-prem/Platform deployments. On its first read, the agent asks the server at `server_url` whether it is a Secret Server or the Delinea Platform, and signs in accordingly: on the Platform, `username` and `password` are the client ID and secret of a Platform service account.
+
+The access token is kept in the agent's memory, and requested again when it expires or the server rejects it. It is not written to the agent's environment, so the backends the agent starts do not inherit it.
 
 ## Usage
 
@@ -101,6 +129,19 @@ If a poll fetch fails for a secret, every policy that references it is stopped o
 If a policy references multiple Delinea secrets, a single failed fetch is sticky: that policy is stopped even if another referenced secret merely changed value in the same poll cycle.
 
 This is useful for credential rotation scenarios, where you want to rotate credentials in Delinea without restarting the Orb Agent or manually updating policies.
+
+## Timeouts and failures
+
+One read of a secret, from the first request to the last byte of the answer, fails once `timeout` seconds have passed. On the first read, that includes asking the server what it is and signing in. Each read makes one attempt: a read that fails is not retried at once, but is read again by the next poll, or when the policy is next applied. So a Secret Server that accepts the connection and never answers costs a poll `timeout` seconds for each secret it reads, as a poll reads its secrets one after another; keep `timeout` times the number of secrets read under the `schedule` interval, or a poll still running when the next is due skips that one.
+
+A failed read reports why, for example:
+
+- `transport error: ... connection refused` or `... connection reset by peer`: the server could not be reached, or dropped the connection.
+- `timed out: ... context deadline exceeded`: the server did not answer within `timeout`.
+- `access denied: token endpoint returned 400 Bad Request: ...`: the server refused the service user's credentials.
+- `404 Not Found: (response body withheld because the request contained sensitive data)`: the server answered with an error status.
+
+When Secret Server answers a read with an error status, the error gives the status but not the body of the answer, which the SDK withholds since it may echo part of the request. Failure reasons are therefore shorter than in agent releases before the SDK withheld them.
 
 ## Verifying the integration
 

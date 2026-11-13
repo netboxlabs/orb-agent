@@ -4,7 +4,7 @@ go 1.26.10
 
 require (
 	github.com/DelineaXPM/dsv-sdk-go/v2 v2.2.0
-	github.com/DelineaXPM/tss-sdk-go/v3 v3.0.2
+	github.com/DelineaXPM/tss-sdk-go/v3 v3.1.0
 	github.com/eclipse/paho.golang v0.23.0
 	github.com/go-cmd/cmd v1.4.3
 	github.com/go-co-op/gocron/v2 v2.20.0
@@ -52,6 +52,7 @@ require (
 	github.com/Azure/go-autorest/autorest/date v0.3.0 // indirect
 	github.com/Azure/go-autorest/logger v0.2.1 // indirect
 	github.com/Azure/go-autorest/tracing v0.6.0 // indirect
+	github.com/DelineaXPM/delinea-common v1.0.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.33.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.55.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.55.0 // indirect
