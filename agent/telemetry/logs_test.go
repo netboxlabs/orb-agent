@@ -213,6 +213,110 @@ func TestNormalizeEndpoint(t *testing.T) {
 	}
 }
 
+// A collector URL can carry a login, as user:password@host. One that parses
+// is still exported to as before, and an error about one that does not
+// writes it with its login masked: url.Parse's own error quotes the URL
+// whole, and can quote a part of the password.
+func TestNormalizeEndpointMasksTheLoginInItsErrors(t *testing.T) {
+	t.Parallel()
+
+	for raw, wantAddr := range map[string]string{
+		"grpc://canary-user:canary-pass@127.0.0.1:4317": "127.0.0.1:4317",
+		"canary-user:canary-pass@127.0.0.1:4317":        "canary-user:canary-pass@127.0.0.1:4317",
+	} {
+		addr, insecure, err := normalizeEndpoint(raw)
+		if err != nil || addr != wantAddr || !insecure {
+			t.Errorf("normalizeEndpoint(%q) = %q, %v, %v, want %q, true, nil", raw, addr, insecure, err, wantAddr)
+		}
+	}
+
+	for raw, want := range map[string]string{
+		"grpc://canary-user:canary-pass@[bad:4317":      `parse OTLP endpoint "grpc://********@[bad:4317": parse "grpc://********@[bad:4317": missing ']' in host`,
+		"grpc://canary-user:canary/pass@collector:4317": `parse OTLP endpoint "grpc://********@collector:4317": parse "grpc://********@collector:4317": invalid user info`,
+		"grpc://canary-user:canary-pass@":               `invalid OTLP endpoint "grpc://********@": missing host`,
+		"  grpc://canary-user:canary-pass@[bad:4317   ": `parse OTLP endpoint "grpc://********@[bad:4317": parse "grpc://********@[bad:4317": missing ']' in host`,
+	} {
+		_, _, err := normalizeEndpoint(raw)
+		if err == nil {
+			t.Fatalf("normalizeEndpoint(%q) returned no error", raw)
+		}
+		if err.Error() != want {
+			t.Errorf("normalizeEndpoint(%q) error = %q, want %q", raw, err, want)
+		}
+	}
+}
+
+// The error the agent logs, and exits with, when it cannot build its log
+// exporter writes the collector URL with its login masked.
+func TestBuildOTLPLogExporterMasksTheLoginInItsError(t *testing.T) {
+	commons := config.BackendCommons{}
+	commons.Otlp.Grpc = "grpc://canary-user:canary-pass@[bad:4317"
+
+	_, _, err := BuildOTLPLogExporter(context.Background(), slog.New(slog.DiscardHandler), commons)
+	if err == nil {
+		t.Fatal("expected an error for a URL that does not parse")
+	}
+	if strings.Contains(err.Error(), "canary") {
+		t.Errorf("the error writes the login: %v", err)
+	}
+	if !strings.Contains(err.Error(), "grpc://********@[bad:4317") {
+		t.Errorf("the error does not write the URL masked: %v", err)
+	}
+}
+
+// A login written without a scheme reaches the gRPC client as part of the
+// address, which it cannot dial and writes, login included, into the error
+// of every export. The log line and the error returned to the SDK, which
+// logs it too, write it masked; the failure is still told transient from
+// fatal by what the client returned.
+func TestResilientLogExporterMasksTheLoginInWhatItReports(t *testing.T) {
+	t.Parallel()
+
+	endpoint := "canary-user:canary-pass@127.0.0.1:4317"
+	exportErr := status.Error(codes.Unavailable, "invalid target address "+endpoint+
+		", error info: address "+endpoint+":443: too many colons in address")
+	exp := &mockExporter{exportErr: exportErr}
+	var logs strings.Builder
+	var mu sync.Mutex
+	logger := slog.New(slog.NewTextHandler(&lockedWriter{w: &logs, mu: &mu}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	resilient := newResilientLogExporter(exp, logger, endpoint)
+
+	err := resilient.Export(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected the export error to propagate")
+	}
+	if !errors.Is(err, exportErr) {
+		t.Errorf("the error returned does not wrap the export's: %v", err)
+	}
+	want := "rpc error: code = Unavailable desc = invalid target address ********@127.0.0.1:4317" +
+		", error info: address ********@127.0.0.1:4317:443: too many colons in address"
+	if err.Error() != want {
+		t.Errorf("the error returned = %q, want %q", err, want)
+	}
+
+	mu.Lock()
+	out := logs.String()
+	mu.Unlock()
+	if strings.Contains(out, "canary") {
+		t.Errorf("the log writes the login:\n%s", out)
+	}
+	if !strings.Contains(out, "level=DEBUG") || !strings.Contains(out, "endpoint=********@127.0.0.1:4317") {
+		t.Errorf("the log does not report the transient failure with the endpoint masked:\n%s", out)
+	}
+}
+
+// lockedWriter writes to w under mu.
+type lockedWriter struct {
+	w  io.Writer
+	mu *sync.Mutex
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
 func TestNewMultiHandlerCases(t *testing.T) {
 	t.Parallel()
 

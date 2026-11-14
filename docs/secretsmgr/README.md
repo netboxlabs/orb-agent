@@ -51,7 +51,11 @@ credentials in the agent's configuration, such as a token, a password, a client
 secret or any value of a Vault login's `auth_args` but its mount path, user
 name, role and service account file, are masked as `********` wherever the
 agent reports or logs its configuration, as are the user and the password of
-a URL in it, such as a Vault address's, together. So are those of each URL of
+a URL in it, such as a Vault address's, together. Those of a collector URL in
+`common.otlp` are masked in the configuration as those of any URL are, as
+below, and also in the lines the agent and its backends log about it, and in
+the errors that quote it: see
+[`common.otlp`](../configs/agent_yaml.md#commonotlp). So are those of each URL of
 a list, as `https://u:p@a.example,https://u:p@b.example`, of a URL in another
 one's path, query or fragment, with its scheme or from its `//`, as after a
 `/`, `?`, `&` or `#`, which is also read as it is alone, up to the next

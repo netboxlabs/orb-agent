@@ -23,6 +23,12 @@ or a full URL with a scheme (e.g. `grpc://collector:4317`,
 URL written without a port dials the OTLP gRPC default, 4317, whatever its
 scheme.
 
+A URL can carry a login, as `grpc://user:password@collector:4317`, which the
+exporter does not send: it dials the host and the port alone. The startup
+line and the errors about the endpoint write the login masked, as
+`grpc://********@collector:4317`. A bare `host:port` carries none, so
+`user:password@collector:4317` is refused.
+
 The scheme decides transport security. `https://` and `grpcs://` connect over
 TLS, verified against the host's root CAs; `http://` and `grpc://` connect in
 plaintext. A bare `host:port` carries no scheme and connects in plaintext, the

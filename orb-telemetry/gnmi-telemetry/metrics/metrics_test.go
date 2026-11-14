@@ -200,6 +200,30 @@ func TestEndpointOptions_MalformedURLRejected(t *testing.T) {
 	assert.Error(t, err, "setup refuses the endpoint rather than exporting to the default")
 }
 
+// A collector URL can carry a login, as user:password@host. One the exporter
+// can dial is still accepted, and a refusal writes it with its login masked:
+// url.Parse's and net.SplitHostPort's own errors quote the address whole, and
+// the parts they read in it can be parts of the password.
+func TestEndpointOptions_MasksTheLoginInARefusal(t *testing.T) {
+	_, err := endpointOptions("grpc://canary-user:canary-pass@127.0.0.1:4317")
+	require.NoError(t, err, "a URL carrying a login is still exported to")
+	for endpoint, want := range map[string]string{
+		"grpc://canary-user:canary-pass@[bad:4317":      `otel endpoint "grpc://********@[bad:4317" is not a valid URL: parse "grpc://********@[bad:4317": missing ']' in host`,
+		"grpc://canary-user:canary/pass@collector:4317": `otel endpoint "grpc://********@collector:4317" is not a valid URL: parse "grpc://********@collector:4317": invalid user info`,
+		"grpc://canary-user:canary-pass@":               `otel endpoint "grpc://********@" names no host`,
+		"canary-user:canary-pass@127.0.0.1:4317":        `otel endpoint "********@127.0.0.1:4317" is neither host:port nor a URL with a scheme`,
+		"canary-user:canary-pass@collector":             `otel endpoint "********@collector" is neither host:port nor a URL with a scheme`,
+		"Canary-T0ken@collector:4317":                   `otel endpoint "********@collector:4317" is neither host:port nor a URL with a scheme`,
+		"canary-user:canary://pass@h:4317":              `otel endpoint "********@h:4317" names no host`,
+		"canary-user:canary//pass@collector:4317":       `otel endpoint "********@collector:4317" is neither host:port nor a URL with a scheme`,
+	} {
+		_, err := endpointOptions(endpoint)
+		require.Error(t, err, endpoint)
+		assert.Equal(t, want, err.Error(), endpoint)
+		assert.NotContains(t, strings.ToLower(err.Error()), "canary", endpoint)
+	}
+}
+
 // A URL without a port takes the OTLP gRPC default, whatever the scheme: the
 // resolver would otherwise supply 443 to a plaintext URL.
 func TestEndpointURLDefaultsThePort(t *testing.T) {

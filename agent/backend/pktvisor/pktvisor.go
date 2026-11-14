@@ -23,6 +23,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
 var _ backend.Backend = (*pktvisorBackend)(nil)
@@ -395,7 +396,9 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 	if common.Otlp.HTTP != "" {
 		uri, err := neturl.Parse(common.Otlp.HTTP)
 		if err != nil {
-			return fmt.Errorf("failed to parse otlp receiver http url: %w", err)
+			// The URL can carry a login, as user:password@host, which the
+			// parser's error would quote.
+			return fmt.Errorf("failed to parse otlp receiver http url: %w", redact.ParseError(common.Otlp.HTTP, err))
 		}
 		p.otelReceiverHost = uri.Hostname()
 		port, err := strconv.Atoi(uri.Port())

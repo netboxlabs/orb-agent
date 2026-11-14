@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
@@ -104,7 +105,9 @@ func BuildOTLPLogExporter(ctx context.Context, logger *slog.Logger, commons conf
 
 	exporter, err := newLogExporter(ctx, endpoint)
 	if err != nil {
-		return logger, nil, err
+		// The gRPC client refuses an address it cannot parse, as a login
+		// written without a scheme that holds an invalid %XX, quoting it.
+		return logger, nil, maskedLoginError(err, endpoint)
 	}
 	exporter = newResilientLogExporter(exporter, logger, endpoint)
 
@@ -173,6 +176,8 @@ func newLogExporter(ctx context.Context, endpoint string) (sdklog.Exporter, erro
 }
 
 // normalizeEndpoint converts URLs such as https://host:port into host:port and infers TLS usage.
+// A URL can carry a login, as user:password@host: its errors write it with
+// the user info masked.
 func normalizeEndpoint(raw string) (string, bool, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -186,7 +191,7 @@ func normalizeEndpoint(raw string) (string, bool, error) {
 
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", false, fmt.Errorf("parse OTLP endpoint %q: %w", raw, err)
+		return "", false, fmt.Errorf("parse OTLP endpoint %q: %w", redact.Endpoint(raw), redact.ParseError(raw, err))
 	}
 
 	host := u.Host
@@ -194,7 +199,7 @@ func normalizeEndpoint(raw string) (string, bool, error) {
 		host = u.Path
 	}
 	if host == "" {
-		return "", false, fmt.Errorf("invalid OTLP endpoint %q: missing host", raw)
+		return "", false, fmt.Errorf("invalid OTLP endpoint %q: missing host", redact.Endpoint(raw))
 	}
 
 	switch strings.ToLower(u.Scheme) {
@@ -271,8 +276,8 @@ func (r *resilientLogExporter) logExportFailure(ctx context.Context, err error) 
 	level := r.exportFailureLogLevel(err)
 	log := func() {
 		r.logger.Log(ctx, level, "OTLP gRPC log export failed",
-			"endpoint", r.endpoint,
-			"error", err)
+			"endpoint", redact.Endpoint(r.endpoint),
+			"error", r.masked(err))
 	}
 
 	switch level {
@@ -296,11 +301,41 @@ func (r *resilientLogExporter) Export(ctx context.Context, records []sdklog.Reco
 
 	if err := exp.Export(ctx, records); err != nil {
 		r.logExportFailure(ctx, err)
-		return err
+		// The SDK logs the error it is returned too.
+		return r.masked(err)
 	}
 
 	return nil
 }
+
+// masked returns err with the login of the endpoint masked wherever its text
+// writes it. A login written without a scheme reaches the gRPC client as
+// part of the address, which it decodes and writes into its errors. The error
+// returned wraps err, so it is still told transient from fatal.
+func (r *resilientLogExporter) masked(err error) error {
+	return maskedLoginError(err, r.endpoint)
+}
+
+// maskedLoginError returns err with the login endpoint carries masked
+// wherever its text writes it, wrapping err, or err when its text writes
+// none.
+func maskedLoginError(err error, endpoint string) error {
+	text := redact.MaskLogins(err.Error(), redact.LoginForms(endpoint))
+	if text == err.Error() {
+		return err
+	}
+	return &maskedError{err: err, text: text}
+}
+
+// maskedError is an error whose text is that of err with a login masked.
+type maskedError struct {
+	err  error
+	text string
+}
+
+func (e *maskedError) Error() string { return e.text }
+
+func (e *maskedError) Unwrap() error { return e.err }
 
 func (r *resilientLogExporter) ForceFlush(ctx context.Context) error {
 	r.mu.RLock()
