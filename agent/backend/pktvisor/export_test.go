@@ -18,3 +18,11 @@ func SetApplyPolicyTimeout(t *testing.T, seconds int32) {
 	applyPolicyTimeout = seconds
 	t.Cleanup(func() { applyPolicyTimeout = old })
 }
+
+// SetTapsTimeout overrides the tap request timeout for one test.
+func SetTapsTimeout(t *testing.T, seconds int32) {
+	t.Helper()
+	old := tapsTimeout
+	tapsTimeout = seconds
+	t.Cleanup(func() { tapsTimeout = old })
+}

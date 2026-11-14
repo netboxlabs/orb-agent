@@ -213,7 +213,19 @@ the 10 second apply timeout.
 An edit is a remove followed by an apply. A flow listener closes briefly when the edited
 policy is the last one on its listener.
 
-The agent checks the policy name and the tap before an edit removes the running policy.
+The agent applies a policy without a remove when it knows `pktvisord` holds nothing of it:
+
+- a new policy, including one the agent holds while `pktvisord` starts on demand, and one the
+  agent refused for its name, its tap or its encoding before sending `pktvisord` anything;
+- a policy a restart has removed from `pktvisord`, or hands to a new `pktvisord`;
+- a policy the agent stopped because a secret it uses no longer resolves.
+
+Any other apply removes first, including the next version of a policy whose previous apply
+reached `pktvisord` and failed, such as one `pktvisord` refused or whose tap creation failed. A
+remove of a policy `pktvisord` does not run gets a 404, which the agent logs as a warning.
+
+The agent checks the policy name, the tap and the policy's encoding before an edit removes
+the running policy.
 So when the agent refuses an edit:
 
 - The old version keeps running, and the policy shows `failed_to_apply`.

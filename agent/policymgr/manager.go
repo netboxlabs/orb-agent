@@ -29,6 +29,7 @@ type PolicyManager interface {
 	GetRepo() policies.PolicyRepo
 	ApplyBackendPolicies(ctx context.Context, name string, be backend.Backend) error
 	RemoveBackendPolicies(name string, be backend.Backend, permanently bool) error
+	BackendProcessReplaced(name string)
 	RemovePolicy(policyID string, policyName string, beName string) error
 	SetStarter(starter BackendStarter)
 }
@@ -315,6 +316,7 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 			}
 			pd.Datasets = currentPolicy.Datasets
 			pd.GroupIDs = currentPolicy.GroupIDs
+			pd.NotOnBackend = currentPolicy.NotOnBackend
 		} else {
 			// new policy we have not seen before, associate with this dataset
 			// on first time we see policy, we *require* dataset
@@ -323,6 +325,8 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 				return
 			}
 			pd.Datasets = map[string]bool{payload.DatasetID: true}
+			// Nothing of it runs on the backend until an apply reaches it.
+			pd.NotOnBackend = true
 
 			if payload.AgentGroupID != "" {
 				pd.GroupIDs = map[string]bool{payload.AgentGroupID: true}
@@ -564,6 +568,15 @@ func (a *policyManager) removePolicyDatasetLocked(policyID string, datasetID str
 // already stamped either way. applyBackendPoliciesLocked is the one caller
 // that acts on it, to stop a replay instead of persisting the probe's
 // failure and losing the record from the next one.
+//
+// updatePolicy asks for the backend's update, a removal before the apply.
+// It is not honoured for a policy the backend holds nothing of
+// (NotOnBackend): there is nothing to remove, and the backend would answer
+// the removal with a not-found error. The call to the backend clears NotOnBackend,
+// whatever the backend answers: an apply that timed out may still have
+// created the policy, so the next one is an update. The one exception is an
+// error the backend marked backend.NotSent, returned before it sent its
+// process anything: NotOnBackend keeps the value it had before the call.
 func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Backend, pd *policies.PolicyData, updatePolicy bool) error {
 	// A name the agent cannot address over a backend's API is refused before
 	// the policy is created rather than when it is removed. Removal is the
@@ -608,7 +621,15 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 	// quote its secrets, resolved in pd.Data; they are kept to mask it.
 	resolved := resolvedValues(payload.Data, pd.Data)
 	a.resolved.remember(pd.ID, pd.Backend, resolved, knownNames(*pd)...)
+	notOnBackend := pd.NotOnBackend
+	updatePolicy = updatePolicy && !notOnBackend
+	pd.NotOnBackend = false
 	err = be.ApplyPolicy(*pd, updatePolicy)
+	if backend.PolicyNotSent(err) {
+		// The backend refused the policy before sending its process
+		// anything: it holds no more of the policy than it did before.
+		pd.NotOnBackend = notOnBackend
+	}
 	if err != nil {
 		// The backend's error can quote the policy's data, which carries its
 		// secrets resolved here: a field of the wrong type is quoted in a
@@ -637,14 +658,29 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 // there.
 var errBackendNeverStarted = errors.New("backend never started; nothing to remove from")
 
+// removedFromBackend reports whether a removal's outcome leaves nothing of
+// the policy on the backend: it succeeded, the backend answered that it has
+// no such policy, or the agent never started the backend.
+func removedFromBackend(err error) bool {
+	var httpErr *backend.HTTPError
+	return err == nil ||
+		errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound ||
+		errors.Is(err, errBackendNeverStarted)
+}
+
 // removeFromBackend asks the backend to remove a policy, unless the agent
 // never started it. Every bundled backend is registered, but only the ones
 // the configuration names are configured and started; one never started has
 // no process to ask and no logger to log the call with. A backend that was
 // started is asked whatever its state, since a live process whose status
 // probe timed out may still hold the policy, and the request's own timeout
-// bounds the wait.
+// bounds the wait. A policy the backend holds nothing of (NotOnBackend) is
+// already removed: the backend is not asked, since it would answer that it
+// has no such policy.
 func removeFromBackend(be backend.Backend, pd policies.PolicyData) error {
+	if pd.NotOnBackend {
+		return nil
+	}
 	if state, _, _ := be.GetRunningStatus(); state == backend.Unknown {
 		return errBackendNeverStarted
 	}
@@ -689,6 +725,12 @@ func (a *policyManager) removeBackendPoliciesLocked(name string, be backend.Back
 			a.logger.Error("failed to remove policy from backend", "policy_id", plcy.ID, "policy_name", plcy.Name, "error", err)
 			// note we continue here: even if the backend failed to remove, we update our policy repo to remove it
 		}
+		if removedFromBackend(err) {
+			// Nothing of the policy is left on the backend, even when the
+			// restart keeps its process: the replay applies it without
+			// removing it again. A removal that failed may have left it.
+			plcy.NotOnBackend = true
+		}
 		if permanently {
 			err = a.repo.Remove(plcy.ID)
 			if err != nil {
@@ -705,6 +747,35 @@ func (a *policyManager) removeBackendPoliciesLocked(name string, be backend.Back
 	return nil
 }
 
+// BackendProcessReplaced marks every policy of the named backend as not on
+// it: a new process replaced the backend's, and a backend's process starts
+// with no policies, since every backend keeps them in its process's memory.
+// The replay that follows then applies each of them fresh instead of
+// removing it first. The supervisor calls it once the new process has
+// started and before the replay, while the restart's marker still defers
+// every manage for the backend, so no apply reaches the new process in
+// between.
+func (a *policyManager) BackendProcessReplaced(name string) {
+	mu := a.applyLock(name)
+	mu.Lock()
+	defer mu.Unlock()
+	plcies, err := a.repo.GetAll()
+	if err != nil {
+		a.logger.Error("failed to retrieve list of policies", "error", err)
+		return
+	}
+	for _, plcy := range plcies {
+		if plcy.Backend != name || plcy.NotOnBackend {
+			continue
+		}
+		plcy.NotOnBackend = true
+		if err := a.persistApplyOutcome(plcy); err != nil {
+			a.logger.Error("got error in update last status", "error", err)
+			return
+		}
+	}
+}
+
 // ErrBackendNotRunning is returned by ApplyBackendPolicies when the backend
 // cannot take an apply at that moment; its policies are left as they are,
 // for the next start or restart, rather than stamped failed. Its intended
@@ -715,11 +786,14 @@ var ErrBackendNotRunning = errors.New("backend is not running; its policies are 
 // backend, the way a manage does: secrets solved for the call and the
 // unsolved references persisted, the name checked, and updatePolicy true,
 // the remove-then-apply form every backend implements, which is safe
-// against a name the backend already runs. It gates on the backend running
-// before it touches anything: a backend that does not answer at that moment
-// keeps its policies untouched and the caller learns why. A backend that
-// stops mid-loop is caught by applyPolicy's own check, a second
-// GetRunningStatus call, an HTTP round trip for every policy in the loop,
+// against a name the backend already runs; a policy the backend holds
+// nothing of (NotOnBackend), such as one stored while the backend was
+// starting, one the restart's removal took off it, or any once a new process
+// replaced the backend's, is applied fresh (see applyPolicy). It gates on the
+// backend running before it touches anything: a backend that does not
+// answer at that moment keeps its policies untouched and the caller learns
+// why. A backend that stops mid-loop is caught by applyPolicy's own check, a
+// second GetRunningStatus call, an HTTP round trip for every policy in the loop,
 // and not redundant with the gate above, so do not remove either thinking
 // the other covers it. Both the entry gate and this per-policy probe map to
 // ErrBackendNotRunning; unlike the entry gate, the per-policy probe leaves
@@ -842,7 +916,8 @@ func (a *policyManager) persistApplyOutcome(policy policies.PolicyData) error {
 
 // applyStoredPolicy applies a policy the repo already holds to its backend:
 // secrets are solved for the call, the policy is applied with updatePolicy
-// true, the unsolved data is put back for the caller to persist, and a
+// true (fresh when the backend holds nothing of it, see applyPolicy), the
+// unsolved data is put back for the caller to persist, and a
 // successful apply clears a pending rename. The caller persists the record,
 // except when the returned error matches ErrBackendNotRunning: that record is
 // left exactly as it was stamped by applyPolicy's own running-gate probe, for
@@ -959,9 +1034,12 @@ func (a *policyManager) stopUnresolvedLocked(policy policies.PolicyData) {
 		"policy_id", policy.ID, "policy_name", policy.Name, "backend", policy.Backend, "error", unresolved)
 	if backend.HaveBackend(policy.Backend) {
 		err := removeFromBackend(backend.GetBackend(policy.Backend), policy)
-		var httpErr *backend.HTTPError
-		gone := errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound || errors.Is(err, errBackendNeverStarted)
-		if err != nil && !gone {
+		if removedFromBackend(err) {
+			// Nothing of the policy runs on the backend any more: once the
+			// secret resolves, the policy is applied fresh, not removed
+			// first.
+			policy.NotOnBackend = true
+		} else {
 			a.logger.Error("backend failed to stop the policy", "policy_id", policy.ID, "policy_name", policy.Name, "error", err)
 		}
 	}

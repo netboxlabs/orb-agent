@@ -51,6 +51,9 @@ type fakePktvisor struct {
 	// policyListBody, when set, replaces the policy list answer.
 	policyListBody  *string
 	stallPolicyPost bool
+	// stallTapPost creates the taps a POST names, then answers only once
+	// the client has given up, as a pktvisor slower than the agent waits.
+	stallTapPost bool
 
 	// requests logs "METHOD path STATUS" for every request.
 	requests []string
@@ -166,7 +169,7 @@ func (f *fakePktvisor) serve(w http.ResponseWriter, r *http.Request) {
 	case path == tapsPath && r.Method == http.MethodGet:
 		f.with(func() { f.listTaps(w, r) })
 	case path == tapsPath && r.Method == http.MethodPost:
-		f.with(func() { f.createTaps(w, r, body) })
+		f.postTaps(w, r, body)
 	case strings.HasPrefix(path, tapsPath+"/") && r.Method == http.MethodGet:
 		f.with(func() { f.getTap(w, r, strings.TrimPrefix(path, tapsPath+"/")) })
 	case strings.HasPrefix(path, tapsPath+"/") && r.Method == http.MethodDelete:
@@ -237,6 +240,25 @@ func (f *fakePktvisor) createTaps(w http.ResponseWriter, r *http.Request, body [
 		f.taps[name] = fakeTap{inputType: t.InputType, config: t.Config, tags: t.Tags}
 	}
 	f.reply(w, r, http.StatusCreated, doc.Visor.Taps)
+}
+
+// postTaps creates the taps the body names. With stallTapPost set, it
+// creates them and logs the request as stalled, then waits without the lock
+// for the client to give up, or for shutdown, before answering.
+func (f *fakePktvisor) postTaps(w http.ResponseWriter, r *http.Request, body []byte) {
+	f.mu.Lock()
+	if !f.stallTapPost {
+		defer f.mu.Unlock()
+		f.createTaps(w, r, body)
+		return
+	}
+	f.createTaps(httptest.NewRecorder(), r, body)
+	f.requests[len(f.requests)-1] = "POST /api/v1/taps stalled"
+	f.mu.Unlock()
+	select {
+	case <-r.Context().Done():
+	case <-f.release:
+	}
 }
 
 func (f *fakePktvisor) deleteTap(w http.ResponseWriter, r *http.Request, name string) {

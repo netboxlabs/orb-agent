@@ -48,6 +48,7 @@ func TestRestartReappliesItsOwnPolicies(t *testing.T) {
 		"remove:sup_restart_reapply:permanently=false",
 		"configure:discovery",
 		"reset:discovery",
+		"replaced:sup_restart_reapply",
 		"apply:sup_restart_reapply",
 	}, rec.snapshot(), "policies kept, removed before the reset, applied once after")
 }
@@ -177,7 +178,9 @@ func TestRestartDoesNotReapplyAfterShutdownBegan(t *testing.T) {
 		"remove:sup_health_shutdown_began:permanently=false",
 		"configure:shutdown-began",
 		"reset:shutdown-began",
-	}, rec.snapshot(), "shutdown already began, so the policies must stay unknown rather than be reapplied")
+		"replaced:sup_health_shutdown_began",
+	}, rec.snapshot(), "shutdown already began, so the policies must stay unknown rather than be reapplied; "+
+		"the policy manager still learns that the new process holds none of them")
 }
 
 // StopAll cancels the stop context first; a restart that already holds the
@@ -201,7 +204,9 @@ func TestRestartDoesNotReapplyOnceStopBegan(t *testing.T) {
 		"remove:sup_health_stop_began:permanently=false",
 		"configure:stop-began",
 		"reset:stop-began",
-	}, rec.snapshot(), "stop already began, so the policies must stay unknown rather than be reapplied")
+		"replaced:sup_health_stop_began",
+	}, rec.snapshot(), "stop already began, so the policies must stay unknown rather than be reapplied; "+
+		"the policy manager still learns that the new process holds none of them")
 }
 
 // --- replay retry ---
@@ -227,6 +232,7 @@ func TestRestartRetriesTheReplayWhileTheBackendIsNotAnsweringYet(t *testing.T) {
 		"remove:sup_replay_retries:permanently=false",
 		"configure:retries",
 		"reset:retries",
+		"replaced:sup_replay_retries",
 		"apply:sup_replay_retries",
 		"apply:sup_replay_retries",
 		"apply:sup_replay_retries",
@@ -253,6 +259,7 @@ func TestRestartGivesUpTheReplayAfterThreeAttempts(t *testing.T) {
 		"remove:sup_replay_gives_up:permanently=false",
 		"configure:gives-up",
 		"reset:gives-up",
+		"replaced:sup_replay_gives_up",
 		"apply:sup_replay_gives_up",
 		"apply:sup_replay_gives_up",
 		"apply:sup_replay_gives_up",
@@ -287,6 +294,7 @@ func TestRestartDoesNotRetryAReplayThatFailedForAnotherReason(t *testing.T) {
 		"remove:sup_replay_non_transient:permanently=false",
 		"configure:non-transient",
 		"reset:non-transient",
+		"replaced:sup_replay_non_transient",
 		"apply:sup_replay_non_transient",
 	}, rec.snapshot(), "a non-transient failure must not be retried")
 }
@@ -321,6 +329,7 @@ func TestRestartStopsRetryingWhenStopBegins(t *testing.T) {
 		"remove:sup_replay_stops_retrying:permanently=false",
 		"configure:stops-retrying",
 		"reset:stops-retrying",
+		"replaced:sup_replay_stops_retrying",
 		"apply:sup_replay_stops_retrying",
 	}, rec.snapshot(), "the retry wait is cancelled the instant stop begins, not slept out")
 }
@@ -524,6 +533,7 @@ func TestRestartUpgradedReappliesPoliciesAfterSuccessfulStart(t *testing.T) {
 		"remove:sup_upgrade_success:permanently=false",
 		"stop:worker",
 		"start:worker",
+		"replaced:sup_upgrade_success",
 		"apply:sup_upgrade_success",
 	}, rec.snapshot())
 }
@@ -552,6 +562,7 @@ func TestRestartUpgradedReappliesPoliciesAfterRollbackRetry(t *testing.T) {
 		"start:worker",
 		"rollback:orb-worker",
 		"start:worker",
+		"replaced:sup_upgrade_retry",
 		"apply:sup_upgrade_retry",
 	}, rec.snapshot(), "apply runs exactly once, after the successful retry")
 }
@@ -640,7 +651,9 @@ func TestRestartUpgradedDoesNotReapplyAfterShutdownBegan(t *testing.T) {
 		"remove:sup_upgrade_shutdown:permanently=false",
 		"stop:worker",
 		"start:worker",
-	}, rec.snapshot(), "shutdown already began, so the policies must stay unknown rather than be reapplied")
+		"replaced:sup_upgrade_shutdown",
+	}, rec.snapshot(), "shutdown already began, so the policies must stay unknown rather than be reapplied; "+
+		"the policy manager still learns that the new process holds none of them")
 }
 
 // A start the caller itself gave up on (its context was already cancelled,

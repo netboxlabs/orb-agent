@@ -2,6 +2,7 @@ package pktvisor_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -10,8 +11,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
+	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
+	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
 )
 
 // warnRecorder keeps the messages logged at Warn or above.
@@ -338,6 +343,7 @@ func TestApplyRefusesAFleetNamedTapItDidNotCreate(t *testing.T) {
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "not one the agent manages")
+			assert.False(t, backend.PolicyNotSent(err), "the tap requests reached pktvisor")
 			assert.NotContains(t, f.log(), "POST /api/v1/policies 201")
 			_, ok := f.policyNamed("p1")
 			assert.False(t, ok)
@@ -364,7 +370,9 @@ func TestApplyLeavesNoTapWhenPktvisorRefusesThePolicy(t *testing.T) {
 	be := startAgainst(t, f)
 	f.with(func() { f.refusePolicies = true })
 
-	require.Error(t, apply(be, "p1", netprobeBody("192.0.2.1"), false))
+	err := apply(be, "p1", netprobeBody("192.0.2.1"), false)
+	require.Error(t, err)
+	assert.False(t, backend.PolicyNotSent(err), "pktvisor was sent the policy and refused it")
 
 	assert.Equal(t, []string{
 		"POST /api/v1/taps 201",
@@ -382,7 +390,9 @@ func TestApplyKeepsTheTapWhenThePolicyPostTimesOut(t *testing.T) {
 	be := startAgainst(t, f)
 	f.with(func() { f.stallPolicyPost = true })
 
-	require.Error(t, apply(be, "p1", netprobeBody("192.0.2.1"), false))
+	err := apply(be, "p1", netprobeBody("192.0.2.1"), false)
+	require.Error(t, err)
+	assert.False(t, backend.PolicyNotSent(err), "pktvisor may have created the policy it was sent")
 
 	assert.Equal(t, []string{"POST /api/v1/taps 201", "POST /api/v1/policies stalled"}, f.log())
 	f.clearLog()
@@ -424,16 +434,19 @@ func TestApplyRefusesABadNameBeforeCallingPktvisor(t *testing.T) {
 	err := apply(be, "Edge ping", netprobeBody("192.0.2.1"), false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must match")
+	assert.True(t, backend.PolicyNotSent(err))
 
 	err = apply(be, "Edge ping", netprobeBody("192.0.2.1"), true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must match")
+	assert.True(t, backend.PolicyNotSent(err))
 
 	f.addPolicy("p1", "elsewhere")
 	pcapNoTap := map[string]any{"input": map[string]any{"input_type": "pcap"}}
 	err = apply(be, "p1", pcapNoTap, true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must name a tap")
+	assert.True(t, backend.PolicyNotSent(err))
 
 	assert.Empty(t, f.log())
 	_, ok := f.policyNamed("p1")
@@ -494,4 +507,79 @@ func TestCapabilitiesLeaveOutManagedTaps(t *testing.T) {
 	require.True(t, ok)
 	assert.Contains(t, taps, "edge")
 	assert.NotContains(t, taps, "fleet_netprobe")
+}
+
+// A tap request pktvisord answers later than the agent waits may still have
+// created the tap, so the apply does not count as one that sent nothing.
+func TestApplyWhoseTapPostTimedOutIsNotMarkedNotSent(t *testing.T) {
+	pktvisor.SetTapsTimeout(t, 1)
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+	f.with(func() { f.stallTapPost = true })
+
+	err := apply(be, "p1", netprobeBody("192.0.2.1"), false)
+
+	require.Error(t, err)
+	assert.False(t, backend.PolicyNotSent(err), "pktvisor may have created the tap it was sent")
+	assert.Equal(t, []string{"POST /api/v1/taps stalled"}, f.log())
+	assert.True(t, f.hasTap("fleet_netprobe"))
+}
+
+// End to end with the policy manager: a policy whose tap request timed out
+// after pktvisord created the tap is removed from pktvisord when it is
+// deleted, and the removal deletes the tap no policy uses.
+func TestDeletingAPolicyWhoseTapPostTimedOutRemovesItsTap(t *testing.T) {
+	pktvisor.SetTapsTimeout(t, 1)
+	f := newFakePktvisor(t)
+	startAgainst(t, f)
+	logger := slog.New(slog.DiscardHandler)
+	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
+	require.NoError(t, err)
+	mgr, err := policymgr.New(logger, secrets, config.Config{})
+	require.NoError(t, err)
+	f.with(func() { f.stallTapPost = true })
+	mgr.ManagePolicy(config.PolicyPayload{
+		Action: "manage", ID: "id-p1", Name: "p1", Backend: "pktvisor", DatasetID: "ds", Version: 1,
+		Data: netprobeBody("192.0.2.1"),
+	})
+	stored, err := mgr.GetRepo().Get("id-p1")
+	require.NoError(t, err)
+	require.Equal(t, policies.FailedToApply, stored.State)
+	require.True(t, f.hasTap("fleet_netprobe"), "pktvisor created the tap before it answered")
+	f.with(func() { f.stallTapPost = false })
+	f.clearLog()
+
+	require.NoError(t, mgr.RemovePolicy("id-p1", "p1", "pktvisor"))
+
+	assert.Contains(t, f.log(), "DELETE /api/v1/policies/p1 404")
+	assert.Equal(t, []string{"DELETE /api/v1/taps/fleet_netprobe 200"}, tapDeletes(f.log()))
+	assert.False(t, f.hasTap("fleet_netprobe"))
+}
+
+// unencodableValue is a value the YAML encoder reports an error for.
+type unencodableValue struct{}
+
+func (unencodableValue) MarshalYAML() (any, error) {
+	return nil, errors.New("cannot encode this value")
+}
+
+// A policy the agent cannot encode is refused before anything is sent to
+// pktvisord, the edit's removal included: the running version stays.
+func TestApplyRefusesAPolicyItCannotEncodeBeforeRemovingTheRunningOne(t *testing.T) {
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+	f.addTap("edge", "pcap", nil, nil)
+	f.addPolicy("p1", "edge")
+	unencodable := map[string]any{
+		"input":    map[string]any{"input_type": "pcap", "tap": "edge"},
+		"handlers": map[string]any{"modules": map[string]any{"m": unencodableValue{}}},
+	}
+
+	err := apply(be, "p1", unencodable, true)
+
+	require.Error(t, err)
+	assert.True(t, backend.PolicyNotSent(err))
+	assert.Empty(t, f.log(), "nothing reaches pktvisord")
+	_, ok := f.policyNamed("p1")
+	assert.True(t, ok, "a refused edit leaves the running policy alone")
 }

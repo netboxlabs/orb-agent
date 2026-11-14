@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -225,6 +226,8 @@ func (m *mockPolicyManager) RemovePolicy(_ string, _ string, _ string) error {
 
 func (m *mockPolicyManager) SetStarter(_ policymgr.BackendStarter) {}
 
+func (m *mockPolicyManager) BackendProcessReplaced(string) {}
+
 // restartableBackend records, into the shared slice, the calls a restart
 // makes. It reports Running unconditionally and no-ops Start and Stop: the
 // supervisor starts it through ConfigureAll and stops it through StopAll
@@ -306,9 +309,85 @@ func TestRestartDoesNotRetryAPolicyItFailed(t *testing.T) {
 	assert.Equal(t, 1, be.calls, "the replay must not retry a policy it already failed to apply")
 }
 
+// configureOnceBackend configures at agent start and refuses every configure
+// after, as a backend whose new configuration is bad does on a restart, and
+// answers each removal with removeErr.
+type configureOnceBackend struct {
+	restartableBackend
+	configured bool
+	removeErr  error
+}
+
+func (b *configureOnceBackend) Configure(*slog.Logger, policies.PolicyRepo, map[string]any, config.BackendCommons, filesmgr.Manager) error {
+	*b.events = append(*b.events, "configure")
+	if b.configured {
+		return errors.New("bad configuration")
+	}
+	b.configured = true
+	return nil
+}
+
+func (b *configureOnceBackend) RemovePolicy(pd policies.PolicyData) error {
+	*b.events = append(*b.events, "remove-policy:"+pd.ID)
+	return b.removeErr
+}
+
+// End to end with the real policy manager: a restart whose configure fails
+// keeps the backend's process and hands back at once the policies it
+// removed. A removal the backend confirmed left nothing of the policy, so it
+// is applied without a second removal; one that failed may have left it, so
+// it is applied as an update.
+func TestRestartWhoseConfigureFailsReappliesWhatItRemoved(t *testing.T) {
+	for name, removeErr := range map[string]error{"removed": nil, "removal failed": errors.New("connection refused")} {
+		t.Run(name, func(t *testing.T) {
+			events := []string{}
+			be := &configureOnceBackend{restartableBackend: restartableBackend{events: &events}, removeErr: removeErr}
+			beName := "e2e_configure_fails_" + map[string]string{"removed": "a", "removal failed": "b"}[name]
+			a, sup := newTestAgent(t, testAgentOptions{name: beName, be: be})
+			require.NoError(t, a.policyManager.GetRepo().Update(policies.PolicyData{ID: "kept", Name: "Kept", Backend: beName, Version: 1, Data: map[string]any{"k": "v"}, State: policies.Running}))
+			events = events[:0]
+
+			require.Error(t, sup.Restart(context.Background(), beName, "test"))
+
+			assert.Equal(t, []string{"remove-policy:kept", "configure", fmt.Sprintf("apply-policy:kept:update=%t", removeErr != nil)}, events)
+			stored, err := a.policyManager.GetRepo().Get("kept")
+			require.NoError(t, err)
+			assert.Equal(t, policies.Running, stored.State)
+		})
+	}
+}
+
+// failingRemovalBackend answers every removal with an error, as a backend
+// whose process crashed does.
+type failingRemovalBackend struct {
+	restartableBackend
+}
+
+func (b *failingRemovalBackend) RemovePolicy(pd policies.PolicyData) error {
+	*b.events = append(*b.events, "remove-policy:"+pd.ID)
+	return errors.New("backend is offline")
+}
+
+// End to end with the real policy manager: a restart whose removal failed
+// may have left the policy on the backend's old process, but the reset
+// started a new one, which holds none of the backend's policies, so the
+// replay still applies the policy without removing it first.
+func TestRestartReappliesAPolicyItFailedToRemoveToTheNewProcessFresh(t *testing.T) {
+	events := []string{}
+	be := &failingRemovalBackend{restartableBackend: restartableBackend{events: &events}}
+	a, sup := newTestAgent(t, testAgentOptions{name: "e2e_removal_failed_reset", be: be})
+	require.NoError(t, a.policyManager.GetRepo().Update(policies.PolicyData{ID: "kept", Name: "Kept", Backend: "e2e_removal_failed_reset", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Running}))
+	events = events[:0]
+
+	require.NoError(t, sup.Restart(context.Background(), "e2e_removal_failed_reset", "test"))
+
+	assert.Equal(t, []string{"remove-policy:kept", "configure", "reset", "apply-policy:kept:update=false"}, events)
+}
+
 // End to end with the real policy manager: a policy the backend ran before
 // the restart is still in the repo afterwards, running, and was handed to
-// the backend once more in the remove-then-apply form.
+// the backend once more. The restart removed it from the backend before the
+// reset, so the replay applies it without removing it again.
 func TestRestartReappliesPoliciesEndToEnd(t *testing.T) {
 	events := []string{}
 	be := &restartableBackend{events: &events}
@@ -322,7 +401,7 @@ func TestRestartReappliesPoliciesEndToEnd(t *testing.T) {
 	require.NoError(t, err, "the policy survives the restart")
 	assert.Equal(t, policies.Running, stored.State)
 	assert.Equal(t, int32(3), stored.Version)
-	assert.Equal(t, []string{"remove-policy:kept", "configure", "reset", "apply-policy:kept:update=true"}, events,
+	assert.Equal(t, []string{"remove-policy:kept", "configure", "reset", "apply-policy:kept:update=false"}, events,
 		"the backend is asked to drop the policy before the reset and handed it again after")
 	require.Len(t, be.applied, 1)
 	assert.Equal(t, int32(3), be.applied[0].Version)
@@ -479,7 +558,9 @@ func TestManageDuringARestartIsAppliedExactlyOnce(t *testing.T) {
 	assert.Equal(t, policies.Running, stored.State, "the re-apply after the restart must apply the policy stored while it was in flight")
 	require.Len(t, be.applied, 1, "the backend must receive the policy exactly once")
 	assert.Equal(t, "during-restart", be.applied[0].ID)
-	assert.Contains(t, events, "apply-policy:during-restart:update=true")
+	// No apply reached the backend before the restart's re-apply, so it
+	// applies the policy fresh rather than removing it first.
+	assert.Contains(t, events, "apply-policy:during-restart:update=false")
 }
 
 // windowStampingBackend writes a policy record directly to the repo from
@@ -732,15 +813,19 @@ func (b *notRunningOnceBackend) GetRunningStatus() (backend.RunningStatus, strin
 // retry delay has elapsed, is stored as starting by the marker the removal
 // set (the failed gate left it set). The retry's next attempt, once the
 // backend answers, applies it exactly like every other record a restart
-// deferred: through the replay's own remove-then-apply form, not a manage
-// applying it directly.
+// deferred, not a manage applying it directly. No apply reached the backend
+// before, so the replay applies it fresh rather than removing it first.
+//
+// The retry delay is long enough for the manage to store its record before
+// the retry runs, so the test can see the record deferred when the manage
+// returns.
 func TestManageDuringTheReplayRetryDelayIsAppliedByTheRetry(t *testing.T) {
 	events := []string{}
 	be := &notRunningOnceBackend{restartableBackend: restartableBackend{events: &events}, notRunningSeen: make(chan struct{})}
 	a, sup := newTestAgent(t, testAgentOptions{
 		name:       "e2e_retry_delay",
 		be:         be,
-		supervisor: supervisor.Options{ReapplyRetryDelay: 50 * time.Millisecond},
+		supervisor: supervisor.Options{ReapplyRetryDelay: 500 * time.Millisecond},
 	})
 	events = events[:0]
 
@@ -770,15 +855,20 @@ func TestManageDuringTheReplayRetryDelayIsAppliedByTheRetry(t *testing.T) {
 	}()
 
 	select {
+	case <-manageDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the manage to finish")
+	}
+	deferred, err := a.policyManager.GetRepo().Get("during-retry-delay")
+	require.NoError(t, err)
+	assert.Equal(t, policies.FailedToApply, deferred.State, "the manage must be deferred, not applied directly")
+	assert.Equal(t, policymgr.ReasonBackendStarting, deferred.BackendErr)
+
+	select {
 	case restartErr := <-restartDone:
 		require.NoError(t, restartErr)
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for the restart to return")
-	}
-	select {
-	case <-manageDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for the manage to finish")
 	}
 
 	stored, err := a.policyManager.GetRepo().Get("during-retry-delay")
@@ -792,8 +882,8 @@ func TestManageDuringTheReplayRetryDelayIsAppliedByTheRetry(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, applies, "applied exactly once")
-	assert.Contains(t, events, "apply-policy:during-retry-delay:update=true",
-		"applied by the replay's remove-then-apply form, not a direct manage")
+	assert.Contains(t, events, "apply-policy:during-retry-delay:update=false",
+		"the policy's first apply does not remove it first")
 }
 
 // Outside a restart, a manage applies the way it always has: no restart has

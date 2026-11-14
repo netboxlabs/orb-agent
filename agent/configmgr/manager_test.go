@@ -59,6 +59,8 @@ func (m *mockPolicyManager) RemovePolicy(policyID string, policyName string, beN
 
 func (m *mockPolicyManager) SetStarter(_ policymgr.BackendStarter) {}
 
+func (m *mockPolicyManager) BackendProcessReplaced(string) {}
+
 type mockBackend struct {
 	mock.Mock
 	name string

@@ -1252,7 +1252,8 @@ func TestManageAppliesDirectlyOnceTheReplayConfirmedTheBackend(t *testing.T) {
 
 	require.NoError(t, mgr.RemoveBackendPolicies("marker_confirmed_backend", be, false))
 
-	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "seed" }), true).Return(nil).Once()
+	// The removal succeeded, so the replay applies the policy fresh.
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "seed" }), false).Return(nil).Once()
 	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "marker_confirmed_backend", be))
 
 	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "after-replay" }), false).Return(nil).Once()
@@ -1299,8 +1300,11 @@ func TestManageStaysDeferredWhileTheReplayGateFails(t *testing.T) {
 	assert.Equal(t, policymgr.ReasonBackendStarting, deferredAfterFailedGate.BackendErr)
 
 	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe() // the successful replay: entry gate, then one per-policy probe each
-	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "seed" }), true).Return(nil).Once()
-	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "deferred-manage" }), true).Return(nil).Once()
+	// The removal of the seeded policy succeeded, and the deferred manage is
+	// a policy no apply has reached yet: the replay applies both fresh rather
+	// than removing them first.
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "seed" }), false).Return(nil).Once()
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "deferred-manage" }), false).Return(nil).Once()
 
 	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "marker_gate_fail_backend", be))
 
@@ -1356,9 +1360,12 @@ func TestManageStaysDeferredWhileAReplayExitsOnAPerPolicyProbeFailure(t *testing
 	assert.Equal(t, policymgr.ReasonBackendStarting, deferredManage.BackendErr)
 
 	// A second, successful replay applies the seeded record the first replay
-	// never reached, plus the manage stored as starting, each exactly once.
+	// never reached, plus the manage stored as starting, each exactly once:
+	// the seeded record as an update, the manage, which no apply has reached
+	// yet, fresh.
 	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
-	be.On("ApplyPolicy", mock.Anything, true).Return(nil).Times(2)
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "new-during-retry" }), false).Return(nil).Once()
+	be.On("ApplyPolicy", mock.Anything, true).Return(nil).Once()
 
 	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "midreplay_marker_backend", be))
 	be.AssertExpectations(t) // a third ApplyPolicy call here would panic on the exhausted expectation
@@ -1431,24 +1438,22 @@ func TestRemovePolicyDoesNotCallABackendThatIsNotRunning(t *testing.T) {
 
 	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
 	require.NoError(t, err)
-	payload := config.PolicyPayload{Action: "manage", ID: "policy-cold", Name: "Cold Policy", Backend: "cold_backend", Version: 1, Data: map[string]any{}, DatasetID: "ds-cold"}
-	secretsMgr.On("SolvePolicySecrets", payload).Return(payload, nil)
-	mgr.ManagePolicy(payload)
-	state, err := mgr.GetPolicyState()
-	require.NoError(t, err)
-	require.Contains(t, policyIDs(state), "policy-cold", "the policy is kept as failed to apply")
+	// A record an apply reached, so the removal does not skip the backend
+	// for a policy it holds nothing of, and the not-started gate decides.
+	reached := policies.PolicyData{ID: "policy-cold", Name: "Cold Policy", Backend: "cold_backend", Version: 1, Data: map[string]any{}, Datasets: map[string]bool{"ds-cold": true}, State: policies.Running}
+	require.NoError(t, mgr.GetRepo().Update(reached))
 
 	require.NoError(t, mgr.RemovePolicy("policy-cold", "Cold Policy", "cold_backend"))
 
 	cold.AssertNotCalled(t, "RemovePolicy", mock.Anything)
-	state, err = mgr.GetPolicyState()
+	state, err := mgr.GetPolicyState()
 	require.NoError(t, err)
 	assert.NotContains(t, policyIDs(state), "policy-cold")
 	assert.NotContains(t, logs.String(), "level=ERROR", "an expected condition is not an error")
 	assert.Contains(t, logs.String(), "treating policy as already removed")
 
 	// The dataset path removes through the same gate.
-	mgr.ManagePolicy(payload)
+	require.NoError(t, mgr.GetRepo().Update(reached))
 	mgr.RemovePolicyDataset("policy-cold", "ds-cold", "cold_backend", cold)
 	cold.AssertNotCalled(t, "RemovePolicy", mock.Anything)
 	state, err = mgr.GetPolicyState()
@@ -1469,9 +1474,8 @@ func TestRemovePolicyStillAsksABackendWhoseStatusProbeFailed(t *testing.T) {
 
 	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
 	require.NoError(t, err)
-	payload := config.PolicyPayload{Action: "manage", ID: "policy-flaky", Name: "Flaky Policy", Backend: "flaky_backend", Version: 1, Data: map[string]any{}, DatasetID: "ds-flaky"}
-	secretsMgr.On("SolvePolicySecrets", payload).Return(payload, nil)
-	mgr.ManagePolicy(payload)
+	// A record an apply reached before the status probe began failing.
+	require.NoError(t, mgr.GetRepo().Update(policies.PolicyData{ID: "policy-flaky", Name: "Flaky Policy", Backend: "flaky_backend", Version: 1, Data: map[string]any{}, Datasets: map[string]bool{"ds-flaky": true}, State: policies.Running}))
 
 	require.NoError(t, mgr.RemovePolicy("policy-flaky", "Flaky Policy", "flaky_backend"))
 
@@ -1821,14 +1825,16 @@ func TestManagePolicy_ManageAction_SecretsFailure(t *testing.T) {
 	require.Len(t, state, 1)
 	assert.Equal(t, policies.FailedToApply, state[0].State)
 
-	// Recovery: a manage with WORKING secrets applies normally and clears the error.
+	// Recovery: a manage with WORKING secrets applies normally and clears the
+	// error. No apply reached the backend before it, so it is a fresh apply,
+	// not an update that removes the policy first.
 	payload3 := payload
 	payload3.Version = 3
 	payload3.DatasetID = ""
 	secretsMgr.On("SolvePolicySecrets", payload3).Return(payload3, nil)
 	mockBe.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
 		return pd.ID == "policy-sf1" && pd.Version == 3
-	}), true).Return(nil)
+	}), false).Return(nil)
 	mgr.ManagePolicy(payload3)
 
 	state, err = mgr.GetPolicyState()

@@ -64,6 +64,8 @@ func (m *mockPolicyManager) RemovePolicy(policyID string, policyName string, beN
 
 func (m *mockPolicyManager) SetStarter(_ policymgr.BackendStarter) {}
 
+func (m *mockPolicyManager) BackendProcessReplaced(string) {}
+
 // mockPolicyRepo implements the PolicyRepo interface for testing
 type mockPolicyRepo struct {
 	mock.Mock

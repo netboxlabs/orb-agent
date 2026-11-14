@@ -27,16 +27,19 @@ import (
 
 var _ backend.Backend = (*pktvisorBackend)(nil)
 
-// applyPolicyTimeout is the policy POST timeout in seconds. It is a variable
-// so tests can shorten it.
-var applyPolicyTimeout int32 = 10
+// applyPolicyTimeout is the policy POST timeout in seconds, and tapsTimeout
+// the timeout of a tap request. They are variables so tests can shorten
+// them.
+var (
+	applyPolicyTimeout int32 = 10
+	tapsTimeout        int32 = 5
+)
 
 const (
 	defaultBinary       = "pktvisord"
 	readinessTimeout    = 10
 	removePolicyTimeout = 20
 	versionTimeout      = 2
-	tapsTimeout         = 5
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "10853"
 )
@@ -455,34 +458,24 @@ func Register() bool {
 	return true
 }
 
+// ApplyPolicy refuses a policy it cannot send, for its name, its tap or its
+// encoding, before it sends pktvisord anything, an update's removal
+// included, and marks that error with backend.NotSent. An error from a
+// request, the tap's creation included, is not marked: pktvisord may have
+// acted on the request before the agent stopped waiting for its answer.
 func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
 	// Check before the update removes the running policy: a refused edit
 	// leaves it alone.
 	if err := checkPolicyName(data.Name); err != nil {
-		return err
+		return backend.NotSent(err)
 	}
 	tapType, err := managedTapType(data.Data)
 	if err != nil {
-		return err
+		return backend.NotSent(err)
 	}
-
-	if updatePolicy {
-		// To update a policy it's necessary first remove it and then apply a new version
-		if err := p.RemovePolicy(data); err != nil {
-			p.logger.Warn("policy failed to remove", "policy_id", data.ID,
-				"policy_name", data.Name, "error", err)
-		}
-	}
-
-	// The body is not logged: it carries the policy's credentials, with any
-	// secret references already resolved.
-	p.logger.Debug("pktvisor policy apply", "policy_id", data.ID, "policy_name", data.Name)
 
 	body := data.Data
 	if tapType != "" {
-		if err := p.ensureTap(tapType); err != nil {
-			return err
-		}
 		// managedTapType accepted the body, so it is a map.
 		doc, _ := data.Data.(map[string]any)
 		body = withTap(doc, managedTapName(tapType))
@@ -500,7 +493,25 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 	policyYaml, err := yaml.Marshal(fullPolicy)
 	if err != nil {
 		p.logger.Warn("yaml policy marshal failure", "policy_id", data.ID, "policy_name", data.Name)
-		return err
+		return backend.NotSent(err)
+	}
+
+	if updatePolicy {
+		// To update a policy it's necessary first remove it and then apply a new version
+		if err := p.RemovePolicy(data); err != nil {
+			p.logger.Warn("policy failed to remove", "policy_id", data.ID,
+				"policy_name", data.Name, "error", err)
+		}
+	}
+
+	// The body is not logged: it carries the policy's credentials, with any
+	// secret references already resolved.
+	p.logger.Debug("pktvisor policy apply", "policy_id", data.ID, "policy_name", data.Name)
+
+	if tapType != "" {
+		if err := p.ensureTap(tapType); err != nil {
+			return err
+		}
 	}
 
 	var resp map[string]any

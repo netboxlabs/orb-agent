@@ -315,6 +315,9 @@ func (s *Supervisor) restartHealthLocked(ctx context.Context, e *entry, reason s
 	if stopped := e.setPhase(Running); !stopped {
 		s.registerMonitorOnce(e)
 	}
+	// The reset started a new process, which holds none of the backend's
+	// policies: the replay applies them without removing them first.
+	s.applier.BackendProcessReplaced(e.name)
 	s.replayAfterStart(ctx, e)
 	return nil
 }
@@ -392,6 +395,9 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 		if err := s.stoppedDuringStart(e); err != nil {
 			return err
 		}
+		// The upgraded binary runs in a new process, which holds none of
+		// the backend's policies.
+		s.applier.BackendProcessReplaced(e.name)
 		if completed, retryable := s.reapply(ctx, e.name, e.be); !completed && retryable {
 			s.scheduleReplay(e)
 		}
@@ -465,6 +471,7 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 	if err := s.stoppedDuringStart(e); err != nil {
 		return err
 	}
+	s.applier.BackendProcessReplaced(e.name)
 	if completed, retryable := s.reapply(ctx, e.name, e.be); !completed && retryable {
 		s.scheduleReplay(e)
 	}

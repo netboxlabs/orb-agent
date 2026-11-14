@@ -60,6 +60,8 @@ func (m *mockPolicyManagerForToRPC) RemovePolicy(policyID string, policyName str
 
 func (m *mockPolicyManagerForToRPC) SetStarter(_ policymgr.BackendStarter) {}
 
+func (m *mockPolicyManagerForToRPC) BackendProcessReplaced(string) {}
+
 func TestMessaging_SendCapabilities_Success(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))

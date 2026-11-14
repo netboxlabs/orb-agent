@@ -39,7 +39,6 @@ type gitConfigManager struct {
 	repo             *gitv5.Repository
 	lastRef          plumbing.Hash
 	authMethod       transport.AuthMethod
-	version          int32
 	matchPolicyPaths []string
 	namespace        uuid.UUID
 	tempDir          string         // non-empty when using system git fallback (Azure DevOps)
@@ -237,6 +236,10 @@ func (gc *gitConfigManager) removePolicies(policiesByPath map[policyPath]policyD
 	}
 }
 
+// applyPolicies hands each policy to the policy manager. A policy it does
+// not hold yet goes as version 1, which the policy manager applies as a new
+// policy; one it holds goes as the version after the stored one, which the
+// policy manager applies as an update.
 func (gc *gitConfigManager) applyPolicies(policies policyData, backends map[string]backend.Backend) error {
 	for beName, policy := range policies {
 		if _, ok := backends[beName]; !ok {
@@ -244,13 +247,17 @@ func (gc *gitConfigManager) applyPolicies(policies policyData, backends map[stri
 		}
 		for pName, data := range policy {
 			policyID := uuid.NewSHA1(gc.namespace, []byte(pName+beName)).String()
+			version := int32(1)
+			if stored, err := gc.pMgr.GetRepo().Get(policyID); err == nil {
+				version = stored.Version + 1
+			}
 			payload := config.PolicyPayload{
 				ID:        policyID,
 				Action:    "manage",
 				Name:      pName,
 				DatasetID: uuid.NewString(),
 				Backend:   beName,
-				Version:   gc.version,
+				Version:   version,
 				Data:      data,
 			}
 			gc.pMgr.ManagePolicy(payload)
@@ -412,14 +419,11 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 	}
 
 	// Check if selector.yaml or policies has changed
-	changed := false
+	changed := make(map[string]bool, len(changes))
 	for _, change := range changes {
-		if change.To.Name == "selector.yaml" || slices.Contains(matchingPolicies, change.To.Name) {
-			changed = true
-			break
-		}
+		changed[change.To.Name] = true
 	}
-	if !changed {
+	if !changed["selector.yaml"] && !slices.ContainsFunc(matchingPolicies, func(path string) bool { return changed[path] }) {
 		gc.logger.Info("No changes in selector.yaml or policies")
 		return
 	}
@@ -433,30 +437,20 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 	// Remove policies that are not in the matching policies
 	gc.removePolicies(policiesByPath)
 
-	// Apply new policies
-	for _, policy := range matchingPolicies {
-		if slices.Contains(gc.matchPolicyPaths, policy) {
+	// Apply the files the selector now matches and did not before, and the
+	// matched files this commit changed, each once: a file can be both, and a
+	// policy sent twice is applied as a new policy and then, at once, as an
+	// update of itself.
+	for _, path := range matchingPolicies {
+		if slices.Contains(gc.matchPolicyPaths, path) && !changed[path] {
 			continue
 		}
-		policies := policiesByPath[policyPath(policy)]
-		if err = gc.applyPolicies(policies, backends); err != nil {
+		if err = gc.applyPolicies(policiesByPath[policyPath(path)], backends); err != nil {
 			gc.logger.Error("failed to apply policies", "error", err)
 		}
 	}
 
 	gc.matchPolicyPaths = matchingPolicies
-
-	// Apply only changed policies
-	gc.version++
-	for _, change := range changes {
-		for path, policies := range policiesByPath {
-			if change.To.Name == string(path) {
-				if err = gc.applyPolicies(policies, backends); err != nil {
-					gc.logger.Error("Failed to apply policies", "error", err)
-				}
-			}
-		}
-	}
 }
 
 // Start clones the repository and applies the policies its selector.yaml
@@ -468,7 +462,6 @@ func (gc *gitConfigManager) Start(ctx context.Context, cfg config.Config, backen
 func (gc *gitConfigManager) start(ctx context.Context, cfg config.Config, backends map[string]backend.Backend) error {
 	var err error
 	var startOK bool
-	gc.version = 1
 	gc.config = cfg.OrbAgent.ConfigManager.Sources.Git
 
 	if gc.config.URL == "" {

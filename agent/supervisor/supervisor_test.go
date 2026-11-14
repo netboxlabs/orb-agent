@@ -257,6 +257,10 @@ func (a *stubApplier) ApplyBackendPolicies(_ context.Context, name string, _ bac
 
 func (a *stubApplier) GetRepo() policies.PolicyRepo { return a.repo }
 
+func (a *stubApplier) BackendProcessReplaced(name string) {
+	a.rec.add("replaced:" + name)
+}
+
 func boolString(b bool) string {
 	if b {
 		return "true"
