@@ -159,6 +159,99 @@ func TestLogsHandler_Export_AgentTelemetry_PublishesToTelemetryWhenForwarded(t *
 	}, time.Second, time.Millisecond)
 }
 
+// Diode data reaches the ingest topic keyed on diode.metadata.policy_name
+// alone, and gains the dataset ids of the policy that key names. The metrics
+// scope keys, pktvisor.policy.name and policy_name, steer neither the routing
+// nor the dataset ids, and the logs path stamps no orb.policy_id or
+// orb.backend.
+func TestLogsHandler_Export_DiodeData_IngestsWithDatasetIDs(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "id-discovery", Name: "discovery", Backend: "device_discovery", Datasets: map[string]bool{"ds-discovery": true}}))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "id-edge", Name: "edge", Backend: "pktvisor", Datasets: map[string]bool{"ds-edge": true}}))
+
+	logsRequest := func(resource *resourcev1.Resource, scopeAttrs ...*commonv1.KeyValue) *collectorlogs.ExportLogsServiceRequest {
+		return &collectorlogs.ExportLogsServiceRequest{ResourceLogs: []*logsv1.ResourceLogs{{
+			Resource: resource,
+			ScopeLogs: []*logsv1.ScopeLogs{{
+				Scope:      &commonv1.InstrumentationScope{Name: "netboxlabs-diode", Attributes: scopeAttrs},
+				LogRecords: []*logsv1.LogRecord{{Body: &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: "entity"}}}},
+			}},
+		}}}
+	}
+	publishedLogs := func(t *testing.T, fp *fakePublisher) *collectorlogs.ExportLogsServiceRequest {
+		t.Helper()
+		var out collectorlogs.ExportLogsServiceRequest
+		require.NoError(t, proto.Unmarshal(fp.getPayload(), &out))
+		return &out
+	}
+	diodeMarked := &resourcev1.Resource{Attributes: []*commonv1.KeyValue{strAttr(diodePolicyNameAttributeKey, "discovery")}}
+
+	for name, scopeAttrs := range map[string][]*commonv1.KeyValue{
+		"diode key alone":                  {},
+		"beside the metrics scope keys":    {strAttr("pktvisor.policy.name", "edge"), strAttr("policy_name", "edge")},
+		"beside pktvisor.policy.name only": {strAttr("pktvisor.policy.name", "edge")},
+		"beside policy_name only":          {strAttr("policy_name", "edge")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bridge, fp := newBridgeWithRepo(t, "protobuf", repo)
+			defer func() { _ = bridge.Stop(context.Background()) }()
+
+			_, err := (&logsServer{bridge: bridge}).Export(context.Background(), logsRequest(diodeMarked, scopeAttrs...))
+			require.NoError(t, err)
+			require.Eventually(t, func() bool { return fp.getTopic() == "ingest" }, time.Second, time.Millisecond)
+
+			out := publishedLogs(t, fp).ResourceLogs[0]
+			assert.Equal(t, "discovery", attrMap(out.Resource.Attributes)[diodePolicyNameAttributeKey])
+			got := out.ScopeLogs[0].Scope.Attributes
+			assert.Equal(t, []string{"ds-discovery"}, datasetIDValues(got), "dataset ids follow diode.metadata.policy_name")
+			assert.Equal(t, 1, attrCount(got, "dataset_ids"))
+			assert.NotContains(t, attrMap(got), "orb.policy_id", "the logs path stamps no policy id")
+			assert.NotContains(t, attrMap(got), "orb.backend", "the logs path stamps no backend")
+			for _, kv := range scopeAttrs {
+				assert.Equal(t, kv.Value.GetStringValue(), attrMap(got)[kv.Key], "%s is carried as it arrived", kv.Key)
+			}
+		})
+	}
+
+	// In an ingested export, a resource without the Diode key gains no dataset
+	// ids from the metrics scope keys, while its Diode-marked neighbour does.
+	t.Run("a resource without the Diode key beside one with it", func(t *testing.T) {
+		bridge, fp := newBridgeWithRepo(t, "protobuf", repo)
+		defer func() { _ = bridge.Stop(context.Background()) }()
+
+		req := logsRequest(diodeMarked)
+		unmarked := logsRequest(&resourcev1.Resource{}, strAttr("pktvisor.policy.name", "edge"), strAttr("policy_name", "edge")).ResourceLogs[0]
+		req.ResourceLogs = append(req.ResourceLogs, unmarked)
+		_, err := (&logsServer{bridge: bridge}).Export(context.Background(), req)
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { return fp.getTopic() == "ingest" }, time.Second, time.Millisecond)
+
+		out := publishedLogs(t, fp).ResourceLogs
+		require.Len(t, out, 2)
+		assert.Equal(t, []string{"ds-discovery"}, datasetIDValues(out[0].ScopeLogs[0].Scope.Attributes))
+		assert.Equal(t, map[string]string{"pktvisor.policy.name": "edge", "policy_name": "edge"}, attrMap(out[1].ScopeLogs[0].Scope.Attributes),
+			"the unmarked resource's scope is carried as it arrived, with no dataset ids")
+	})
+
+	// Without the Diode key, a logs export naming a policy the metrics way is
+	// not Diode data: it is not ingested and gains no dataset ids.
+	t.Run("pktvisor.policy.name alone is not Diode data", func(t *testing.T) {
+		bridge, fp := newBridgeWithRepo(t, "protobuf", repo)
+		defer func() { _ = bridge.Stop(context.Background()) }()
+		_, err := (&logsServer{bridge: bridge}).Export(context.Background(), logsRequest(&resourcev1.Resource{}, strAttr("pktvisor.policy.name", "edge")))
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), bridge.dropped.total(signalLogs, reasonNoPipeline), "unforwarded, it is discarded")
+
+		bridge.cfg.ForwardLogs = true
+		_, err = (&logsServer{bridge: bridge}).Export(context.Background(), logsRequest(&resourcev1.Resource{}, strAttr("pktvisor.policy.name", "edge")))
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { return fp.getTopic() == "telemetry" }, time.Second, time.Millisecond)
+		got := publishedLogs(t, fp).ResourceLogs[0].ScopeLogs[0].Scope.Attributes
+		assert.Equal(t, map[string]string{"pktvisor.policy.name": "edge"}, attrMap(got), "forwarded, it is published as it arrived")
+	})
+}
+
 // ---------------------------------------------------------------------------
 // Pending queue
 // ---------------------------------------------------------------------------
