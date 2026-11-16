@@ -2958,6 +2958,88 @@ func TestDedup_AllZeroNetmask_IsNotTreatedAsAPrefix(t *testing.T) {
 		"a mask with no network bits is not a prefix and must not displace the host route")
 }
 
+// TestThisNetworkAddressesAreDropped covers an agent that publishes an
+// ipAddrTable row whose address is its VLAN interface's ifIndex written as
+// IPv4 (100000 is 0.1.134.160). 0.0.0.0/8 is reserved as "this network", so
+// such a row is dropped while the device's real address and one just past
+// the range are kept.
+func TestThisNetworkAddressesAreDropped(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("ipAddrTable", func(t *testing.T) {
+		cfg, err := mapping.NewConfig(primaryIPFixtureBothTablesWithNetmask(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, config.Options{})
+		assert.NoError(t, err)
+		m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "")
+		entities := m.MapObjectIDsToEntity(mergeOIDs(
+			legacyIPv4WithNetmaskOIDs("0.1.134.160", "Vl1", "255.255.255.255"),
+			legacyIPv4WithNetmaskOIDs("1.0.0.1", "Vl1", "255.255.255.0"),
+			legacyIPv4WithNetmaskOIDs("192.0.2.5", "Vl1", "255.255.255.0"),
+		))
+
+		assert.Nil(t, survivingIPFor(entities, "0."), "an address in 0.0.0.0/8 must not be emitted")
+		assert.NotNil(t, survivingIPFor(entities, "1.0.0.1/"), "1.0.0.0/8 is outside the range")
+		assert.NotNil(t, survivingIPFor(entities, "192.0.2.5/"), "the device's real address must be kept")
+	})
+
+	t.Run("ipAddressTable", func(t *testing.T) {
+		cfg, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, config.Options{})
+		assert.NoError(t, err)
+		m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "")
+		entities := m.MapObjectIDsToEntity(mergeOIDs(
+			primaryIPOneInterfaceOIDs("192.0.2.9", "Vl1"),
+			modernIPv4PDUs("0.255.255.255", 32),
+			modernIPv4PDUs("192.0.2.6", 24),
+		))
+
+		assert.Nil(t, survivingIPFor(entities, "0."), "an address in 0.0.0.0/8 must not be emitted")
+		assert.NotNil(t, survivingIPFor(entities, "192.0.2.6/"), "the device's real address must be kept")
+	})
+
+	t.Run("IPv4-mapped IPv6 in ipAddressTable", func(t *testing.T) {
+		cfg, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, config.Options{})
+		assert.NoError(t, err)
+		m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "")
+		entities := m.MapObjectIDsToEntity(mergeOIDs(
+			primaryIPOneInterfaceOIDs("192.0.2.9", "Vl1"),
+			modernIPv4MappedPDUs("0.1.134.160"),
+		))
+
+		for _, e := range entities {
+			if ip, ok := e.(*diode.IPAddress); ok && ip.Address != nil {
+				assert.NotContains(t, *ip.Address, "0.1.134.160", "the mapped form of a 0.0.0.0/8 address must not be emitted")
+			}
+		}
+		assert.NotNil(t, survivingIPFor(entities, "192.0.2.9/"), "the device's real address must be kept")
+	})
+}
+
+// modernIPv4MappedPDUs is an ipAddressTable row for addr in its IPv4-mapped
+// IPv6 form (::ffff:a.b.c.d), with no resolved prefix.
+func modernIPv4MappedPDUs(addr string) mapping.ObjectIDValueMap {
+	bytes := make([]string, 16)
+	for i, b := range net.ParseIP(addr).To16() {
+		bytes[i] = fmt.Sprintf("%d", b)
+	}
+	rowSuffix := "2.16." + strings.Join(bytes, ".")
+	return mapping.ObjectIDValueMap{
+		".1.3.6.1.2.1.4.34.1.3." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.4." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.5." + rowSuffix: mapping.Value{
+			Value: "0.0", Type: mapping.Asn1BER(mapping.ObjectIdentifier), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.7." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.10." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+	}
+}
+
 // TestIPv6PrefixLength_UnboundRowWithDisagreeingAnnotationsIsRefused is
 // the other half of the ifIndex rule. An unbound address rules no
 // annotation row out, so where several rows describe it and disagree
