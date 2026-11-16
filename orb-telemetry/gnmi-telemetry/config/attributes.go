@@ -38,10 +38,13 @@ const (
 
 // prometheusOwn reports whether a label name is one Prometheus sets or
 // reserves itself: job and instance, which it sets from the resource after
-// copying a datapoint's attributes, and every name starting with two
-// underscores.
+// copying a datapoint's attributes; every name starting with two underscores;
+// and every name starting with otel_scope_, the labels it makes from the
+// instrumentation scope, which every policy's series carry, its policy_name
+// attribute included.
 func prometheusOwn(name string) bool {
-	return name == "job" || name == "instance" || strings.HasPrefix(name, "__")
+	return name == "job" || name == "instance" ||
+		strings.HasPrefix(name, "__") || strings.HasPrefix(name, "otel_scope_")
 }
 
 // Attributes are operator-defined key/value pairs a policy puts on every
