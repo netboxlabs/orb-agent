@@ -257,11 +257,46 @@ func TestEnrichMetricsWithPolicy(t *testing.T) {
 		}
 	})
 
+	t.Run("an Orb backend's scope names its policy by orb.policy.name or policy_name", func(t *testing.T) {
+		other := policies.PolicyData{ID: "id-other", Name: "other", Backend: "snmp_telemetry"}
+		cases := []struct {
+			name   string
+			attrs  []*commonv1.KeyValue
+			wantID string
+		}{
+			{name: "orb.policy.name only", attrs: []*commonv1.KeyValue{strAttr("orb.policy.name", "core")}, wantID: "id-core"},
+			{name: "both, orb.policy.name wins", attrs: []*commonv1.KeyValue{strAttr("policy_name", "other"), strAttr("orb.policy.name", "core")}, wantID: "id-core"},
+			{name: "empty orb.policy.name falls back", attrs: []*commonv1.KeyValue{strAttr("orb.policy.name", ""), strAttr("policy_name", "core")}, wantID: "id-core"},
+			{name: "an unknown orb.policy.name does not fall back", attrs: []*commonv1.KeyValue{strAttr("orb.policy.name", "gone"), strAttr("policy_name", "core")}},
+			{name: "pktvisor.policy.name wins over orb.policy.name", attrs: []*commonv1.KeyValue{strAttr("orb.policy.name", "other"), strAttr("pktvisor.policy.name", "core")}, wantID: "id-core"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				req := &collectormetrics.ExportMetricsServiceRequest{ResourceMetrics: []*metricsv1.ResourceMetrics{{
+					ScopeMetrics: []*metricsv1.ScopeMetrics{scopeFor(tc.attrs...)},
+				}}}
+				before := attrMap(tc.attrs)
+				enrichMetricsWithPolicy(req, repoWith(t, core, other), slog.Default())
+				got := attrMap(req.ResourceMetrics[0].ScopeMetrics[0].Scope.Attributes)
+				if tc.wantID == "" {
+					assert.Equal(t, before, got, "the scope is left unattributed")
+					return
+				}
+				assert.Equal(t, tc.wantID, got["orb.policy_id"])
+				assert.Equal(t, "snmp_telemetry", got["orb.backend"])
+				for k, v := range before {
+					assert.Equal(t, v, got[k], "the scope keeps %s as it arrived", k)
+				}
+			})
+		}
+	})
+
 	t.Run("a non-string policy name is treated as no policy", func(t *testing.T) {
 		repo := &countingRepo{PolicyRepo: repoWith(t, core)}
 		req := &collectormetrics.ExportMetricsServiceRequest{ResourceMetrics: []*metricsv1.ResourceMetrics{{
 			ScopeMetrics: []*metricsv1.ScopeMetrics{scopeFor(
 				&commonv1.KeyValue{Key: "pktvisor.policy.name", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_IntValue{IntValue: 7}}},
+				&commonv1.KeyValue{Key: "orb.policy.name", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_IntValue{IntValue: 7}}},
 				&commonv1.KeyValue{Key: "policy_name", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_IntValue{IntValue: 7}}},
 			)},
 		}}}

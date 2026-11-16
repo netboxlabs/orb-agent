@@ -161,9 +161,9 @@ func TestLogsHandler_Export_AgentTelemetry_PublishesToTelemetryWhenForwarded(t *
 
 // Diode data reaches the ingest topic keyed on diode.metadata.policy_name
 // alone, and gains the dataset ids of the policy that key names. The metrics
-// scope keys, pktvisor.policy.name and policy_name, steer neither the routing
-// nor the dataset ids, and the logs path stamps no orb.policy_id or
-// orb.backend.
+// scope keys, pktvisor.policy.name, orb.policy.name and policy_name, steer
+// neither the routing nor the dataset ids, and the logs path stamps no
+// orb.policy_id or orb.backend.
 func TestLogsHandler_Export_DiodeData_IngestsWithDatasetIDs(t *testing.T) {
 	repo, err := policies.NewMemRepo()
 	require.NoError(t, err)
@@ -189,8 +189,9 @@ func TestLogsHandler_Export_DiodeData_IngestsWithDatasetIDs(t *testing.T) {
 
 	for name, scopeAttrs := range map[string][]*commonv1.KeyValue{
 		"diode key alone":                  {},
-		"beside the metrics scope keys":    {strAttr("pktvisor.policy.name", "edge"), strAttr("policy_name", "edge")},
+		"beside the metrics scope keys":    {strAttr("pktvisor.policy.name", "edge"), strAttr("orb.policy.name", "edge"), strAttr("policy_name", "edge")},
 		"beside pktvisor.policy.name only": {strAttr("pktvisor.policy.name", "edge")},
+		"beside orb.policy.name only":      {strAttr("orb.policy.name", "edge")},
 		"beside policy_name only":          {strAttr("policy_name", "edge")},
 	} {
 		t.Run(name, func(t *testing.T) {

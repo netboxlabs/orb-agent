@@ -11,12 +11,13 @@ import (
 )
 
 const (
-	// pktvisorPolicyNameScopeAttributeKey and policyNameScopeAttributeKey are
-	// the instrumentation-scope attributes a metrics backend sets to the Orb
-	// policy name, one scope per policy. pktvisor sets pktvisor.policy.name;
-	// snmp-telemetry, gnmi-telemetry and earlier pktvisor releases set
-	// policy_name. When a scope carries both, pktvisor.policy.name is read.
+	// pktvisorPolicyNameScopeAttributeKey, orbPolicyNameScopeAttributeKey and
+	// policyNameScopeAttributeKey are the instrumentation-scope attributes a
+	// metrics backend sets to the Orb policy name, one scope per policy.
+	// pktvisor sets pktvisor.policy.name, snmp-telemetry and gnmi-telemetry
+	// set orb.policy.name, and earlier releases of all three set policy_name.
 	pktvisorPolicyNameScopeAttributeKey = "pktvisor.policy.name"
+	orbPolicyNameScopeAttributeKey      = "orb.policy.name"
 	policyNameScopeAttributeKey         = "policy_name"
 	// orbPolicyIDAttributeKey and orbBackendAttributeKey are what the bridge
 	// stamps on such a scope, so the platform can validate the policy against
@@ -99,13 +100,16 @@ func (ix *policyIndex) resolve(backend, name string) (*policies.PolicyData, stri
 	return p, ""
 }
 
-// scopePolicyName returns the policy a scope names: pktvisor.policy.name when
-// it is set, policy_name otherwise, or "" when the scope names none.
+// scopePolicyName returns the policy a scope names: the first of
+// pktvisor.policy.name, orb.policy.name and policy_name that is set, or ""
+// when the scope names none.
 func scopePolicyName(attrs []*commonv1.KeyValue) string {
-	if name := stringAttribute(attrs, pktvisorPolicyNameScopeAttributeKey); name != "" {
-		return name
+	for _, key := range []string{pktvisorPolicyNameScopeAttributeKey, orbPolicyNameScopeAttributeKey, policyNameScopeAttributeKey} {
+		if name := stringAttribute(attrs, key); name != "" {
+			return name
+		}
 	}
-	return stringAttribute(attrs, policyNameScopeAttributeKey)
+	return ""
 }
 
 // enrichMetricsWithPolicy stamps orb.policy_id and orb.backend on every
