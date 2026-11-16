@@ -63,6 +63,9 @@ type Target struct {
 	Mode     string     `yaml:"mode,omitempty"`
 	Profile  string     `yaml:"profile,omitempty"`
 	Origin   *string    `yaml:"origin,omitempty"`
+	// Attributes go on every series the target produces, each key overriding
+	// the scope's of the same name.
+	Attributes Attributes `yaml:"attributes,omitempty"`
 }
 
 // ResolvedTLS returns the target's tls block or an empty one.
@@ -106,14 +109,23 @@ type Scope struct {
 	Origin   *string    `yaml:"origin,omitempty"`
 	TLS      *TLSConfig `yaml:"tls,omitempty"`
 	Targets  []Target   `yaml:"targets"`
+	// Attributes go on every series of every target, beneath each target's
+	// own (see EffectiveTarget).
+	Attributes Attributes `yaml:"attributes,omitempty"`
 }
 
 // EffectiveTarget fills a target's absent fields from the scope: a nil
-// username, password, origin or tls block inherits the scope's, a zero port
-// takes the scope's then DefaultGNMIPort. A target's own value, including an
-// explicit empty one, is kept, so applying it twice changes nothing.
+// username, password, origin or tls block inherits the scope's, and a zero
+// port takes the scope's then DefaultGNMIPort. A target's own value, including
+// an explicit empty one, is kept.
+//
+// Attributes are the exception: they merge key by key, a key the target sets
+// taking its value and every other key the scope's, so an empty attributes
+// block on a target still carries the scope's and no target can remove one.
+// Either way, applying it twice changes nothing.
 func EffectiveTarget(scope Scope, t Target) Target {
 	out := t
+	out.Attributes = MergeAttributes(scope.Attributes, t.Attributes)
 	if out.Username == nil {
 		u := scope.Username
 		out.Username = &u

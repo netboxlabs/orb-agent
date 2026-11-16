@@ -23,6 +23,10 @@ type Collector interface {
 	CollectTarget(ctx context.Context, target config.Target, opts collector.Options) error
 	ForgetPolicy(policyName string)
 	TargetStatuses(policyName string) []collector.TargetStatus
+	// ProfileAttribute reports whether the profile set promotes an attribute
+	// key collides with, as written or in Prometheus, and names that
+	// attribute and the first profile that promotes it.
+	ProfileAttribute(key string) (name, profile string, ok bool)
 }
 
 // Runner owns one policy: it admits its targets, explicit ones directly and
@@ -84,6 +88,16 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		return nil, errors.New("policy has no targets")
 	}
 	if err := checkPolicyExpansion(policy.Scope.Targets); err != nil {
+		return nil, err
+	}
+	// The attributes are checked here as well as in validatePolicy so a
+	// direct NewRunner call cannot slip past, and checked against the profile
+	// set only here: the set is the collector's, which a policy only has once
+	// it starts.
+	if err := validateAttributes(policy.Scope); err != nil {
+		return nil, fmt.Errorf("%s: invalid policy: %w", name, err)
+	}
+	if err := checkProfileAttributes(name, policy.Scope, c); err != nil {
 		return nil, err
 	}
 	if dialer == nil {

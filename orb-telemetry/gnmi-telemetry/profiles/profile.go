@@ -109,6 +109,10 @@ const maxMetricNameLen = 255 - len("gnmi.")
 // key a receiver flattening scope attributes reads the policy from.
 var reservedAttributes = map[string]bool{"device_ip": true, "policy_name": true, "netbox_id": true}
 
+// ReservedAttribute reports whether name is one of the attribute names the
+// collector owns on every series, which a profile may not promote.
+func ReservedAttribute(name string) bool { return reservedAttributes[name] }
+
 // reservedMetrics are the metric names the backend writes for its own health,
 // taken from the package that owns those instruments so the two cannot drift.
 // Most of them are process-level counters that stay on the plain, policy-less

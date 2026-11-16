@@ -35,7 +35,7 @@ func TestStoreExportsASampleOnce(t *testing.T) {
 	start := time.Unix(1000, 0)
 	for sample := range 3 {
 		at := start.Add(time.Duration(sample) * 30 * time.Second)
-		require.True(t, s.setGauge(k, float64(sample), at.UnixNano(), 3*30*time.Second, attrs))
+		require.True(t, s.setGauge(k, float64(sample), at.UnixNano(), 3*30*time.Second, attrs, nil))
 		assert.Equal(t, []float64{float64(sample)}, visited(s, "g", "p", at.Add(5*time.Second)), "sample %d: the first collection after it", sample)
 		assert.Empty(t, visited(s, "g", "p", at.Add(15*time.Second)), "sample %d: the second collection", sample)
 		assert.Empty(t, visited(s, "g", "p", at.Add(25*time.Second)), "sample %d: the third collection", sample)
@@ -50,7 +50,7 @@ func TestStoreResendsAnOnChangeValueOncePerInterval(t *testing.T) {
 	s.setResend("p", 30*time.Second)
 	k, attrs := series("g", "1", "p", "a")
 	start := time.Unix(1000, 0)
-	require.True(t, s.setGauge(k, 1, start.UnixNano(), 0, attrs))
+	require.True(t, s.setGauge(k, 1, start.UnixNano(), 0, attrs, nil))
 
 	var sentAt []time.Duration
 	for tick := range 12 {
@@ -64,7 +64,7 @@ func TestStoreResendsAnOnChangeValueOncePerInterval(t *testing.T) {
 
 	// A change leaves at once, and restarts the interval.
 	at := start.Add(101 * time.Second)
-	require.True(t, s.setGauge(k, 2, at.UnixNano(), 0, attrs))
+	require.True(t, s.setGauge(k, 2, at.UnixNano(), 0, attrs, nil))
 	assert.Equal(t, []float64{2}, visited(s, "g", "p", at.Add(4*time.Second)))
 	assert.Empty(t, visited(s, "g", "p", at.Add(14*time.Second)))
 	assert.Empty(t, visited(s, "g", "p", at.Add(24*time.Second)))
@@ -77,7 +77,7 @@ func TestStoreWithoutAnIntervalDoesNotResend(t *testing.T) {
 	s := newStore(10)
 	k, attrs := series("g", "1", "p", "a")
 	start := time.Unix(1000, 0)
-	require.True(t, s.setGauge(k, 1, start.UnixNano(), 0, attrs))
+	require.True(t, s.setGauge(k, 1, start.UnixNano(), 0, attrs, nil))
 	assert.Equal(t, []float64{1}, visited(s, "g", "p", start.Add(5*time.Second)))
 	assert.Empty(t, visited(s, "g", "p", start.Add(time.Hour)))
 }
@@ -104,7 +104,7 @@ func TestStorePoliciesOnDifferentIntervalsEachExportOncePerSample(t *testing.T) 
 			if second%int(interval/time.Second) == 0 {
 				// The value is the second of the sample, so each export can
 				// be traced to the sample it came from.
-				require.True(t, s.setGauge(keys[policy], float64(second), at.UnixNano(), 3*interval, attrs[policy]))
+				require.True(t, s.setGauge(keys[policy], float64(second), at.UnixNano(), 3*interval, attrs[policy], nil))
 				sampled[policy] = append(sampled[policy], float64(second))
 			}
 		}
@@ -135,7 +135,7 @@ func TestExporterObservesEachUpdateOnce(t *testing.T) {
 	e := newExporter(newStore(100), nil, nil)
 	attrs := []attribute.KeyValue{attribute.String("device_ip", "10.0.0.1")}
 	for i, value := range []float64{1, 2, 3} {
-		require.Empty(t, e.observeGauge("p", "cpu", "%", attrs, value, time.Now().UnixNano(), age))
+		require.Empty(t, e.observeGauge("p", "cpu", "%", attrs, value, time.Now().UnixNano(), age, nil))
 		g, ok := collect(t, reader)["gnmi.cpu"].Data.(metricdata.Gauge[float64])
 		require.True(t, ok, "update %d: the collection after it carries it", i)
 		require.Len(t, g.DataPoints, 1)

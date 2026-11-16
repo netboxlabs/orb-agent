@@ -41,6 +41,8 @@ func (s *spyCollector) ForgetPolicy(name string) {
 
 func (s *spyCollector) TargetStatuses(string) []collector.TargetStatus { return nil }
 
+func (s *spyCollector) ProfileAttribute(string) (name, profile string, ok bool) { return "", "", false }
+
 // forgotten is what the lifecycle tests assert on.
 func (s *spyCollector) forgotten() []string {
 	s.mu.Lock()

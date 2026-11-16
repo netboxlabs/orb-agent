@@ -142,6 +142,28 @@ policies:
 	assert.Empty(t, out, "a valid policy must not warn")
 }
 
+// attributes is a closed key in scope and in a target, and the keys inside it
+// are operator-chosen, so neither level may warn.
+func TestAttributesAreSilent(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      metrics_interval: 60
+    scope:
+      username: admin
+      attributes:
+        site: dc-west
+        netbox.tenant: tenant-a
+      targets:
+        - host: 192.0.2.1
+          attributes:
+            site: dc-east
+            rack_units: 2
+`)
+	assert.Empty(t, out, "attributes must not warn in scope or in a target")
+}
+
 // schedule is a policy field the discovery backends implement and this one does
 // not: every target is scheduled on metrics_interval, and nothing reads a cron
 // expression. Carrying the field made a policy asking to be polled at specific

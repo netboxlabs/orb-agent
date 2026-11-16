@@ -704,6 +704,10 @@ type statusCollector struct {
 
 func (s *statusCollector) TargetStatuses(string) []collector.TargetStatus { return s.statuses }
 
+func (s *statusCollector) ProfileAttribute(string) (name, profile string, ok bool) {
+	return "", "", false
+}
+
 func managerWith(t *testing.T, name string, c Collector) *Manager {
 	t.Helper()
 	m := newTestManager()

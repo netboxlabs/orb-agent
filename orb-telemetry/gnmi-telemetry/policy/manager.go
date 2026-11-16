@@ -822,10 +822,16 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 			}
 		}
 	}
+	if err := validateAttributes(policy.Scope); err != nil {
+		return err
+	}
 	if err := checkDuplicateTargets(policy.Scope.Targets); err != nil {
 		return err
 	}
-	return checkPolicyExpansion(policy.Scope.Targets)
+	if err := checkPolicyExpansion(policy.Scope.Targets); err != nil {
+		return err
+	}
+	return checkOverlappingAttributes(policy.Scope.Targets)
 }
 
 // carriesCredential reports whether a target would authenticate to whatever it

@@ -149,7 +149,7 @@ func held(c *Collector, policy string) map[string]metricdata.Metrics {
 			if pt.maxAge > 0 && pt.ts < now-int64(pt.maxAge) {
 				continue
 			}
-			attrs := attribute.NewSet(pt.attrs...)
+			attrs := attribute.NewSet(pt.exportAttrs()...)
 			if counters[name] {
 				sums = append(sums, metricdata.DataPoint[int64]{Attributes: attrs, Value: pt.i})
 			} else {
