@@ -104,6 +104,9 @@ func TestAttributes_ValidateRefusesWhatCannotBeExported(t *testing.T) {
 	}{
 		{"empty key", Attributes{"": "x"}, "attribute key is empty"},
 		{"invalid UTF-8 key", Attributes{"bad\xffkey": "x"}, `attribute key "bad\xffkey" is not valid UTF-8`},
+		{"leading digit", Attributes{"2 cents": "x"}, `attribute key "2 cents" must start with a letter`},
+		{"leading underscore", Attributes{"_site": "x"}, `attribute key "_site" must start with a letter`},
+		{"leading non-ASCII letter", Attributes{"élan": "x"}, `attribute key "élan" must start with a letter`},
 		{"null", Attributes{"site": nil}, `attribute "site" has no value`},
 		{"map", Attributes{"site": map[string]any{"name": "x"}}, `attribute "site" is a map`},
 		{"list", Attributes{"site": []any{"a", "b"}}, `attribute "site" is a list`},
@@ -301,6 +304,19 @@ func TestPrometheusName(t *testing.T) {
 	assert.Equal(t, "a_b_c_d", PrometheusName("a-b c/d"))
 	assert.Equal(t, "site_", PrometheusName("siteé"), "one underscore per character, not per byte")
 	assert.Equal(t, "Rack_9", PrometheusName("Rack_9"))
+	assert.Equal(t, "key_2_cents", PrometheusName("2 cents"), "a leading digit gets key_")
+	assert.Equal(t, "key_x", PrometheusName("_x"), "a single leading underscore gets key")
+	assert.Equal(t, "key_x", PrometheusName(".x"), "a leading character replaced by an underscore gets key too")
+	assert.Equal(t, "__name__", PrometheusName("__name__"), "a double underscore is kept")
+}
+
+// A key starting with a letter keeps its Prometheus name free of the prefixes
+// translation adds, so "2 cents" can no longer pass beside "key_2_cents" and
+// then land on the same label.
+func TestAttributes_ValidateKeysCannotLandOnAPrefixedName(t *testing.T) {
+	err := Attributes{"2 cents": "a", "key_2_cents": "b"}.Validate(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `attribute key "2 cents" must start with a letter`)
 }
 
 // OTLP-to-Prometheus translation replaces every character outside
@@ -345,7 +361,7 @@ func TestAttributes_ValidateBoundsTheTotalSize(t *testing.T) {
 // policy's series carry, so a key landing on one is lost or refused there.
 func TestAttributes_ValidateRefusesPrometheusOwnLabels(t *testing.T) {
 	for key, prom := range map[string]string{
-		"job": "job", "instance": "instance", "__name__": "__name__", "..meta": "__meta", "_.x": "__x",
+		"job": "job", "instance": "instance",
 		"otel_scope_name": "otel_scope_name", "otel.scope.version": "otel_scope_version",
 		"otel.scope.schema_url": "otel_scope_schema_url", "otel_scope_policy_name": "otel_scope_policy_name",
 		"otel-scope-anything": "otel_scope_anything",
@@ -354,7 +370,13 @@ func TestAttributes_ValidateRefusesPrometheusOwnLabels(t *testing.T) {
 		require.Error(t, err, key)
 		assert.Contains(t, err.Error(), fmt.Sprintf(`attribute key %q becomes %q in Prometheus, a label Prometheus sets itself`, key, prom), key)
 	}
-	require.NoError(t, Attributes{"jobs": "x", "_instance": "x", "netbox.job": "x", "otel_scope": "x", "netbox.otel_scope_name": "x"}.Validate(nil))
+	// A __ name can only be reached by a key that does not start with a letter.
+	for _, key := range []string{"__name__", "..meta", "_.x"} {
+		err := Attributes{key: "x"}.Validate(nil)
+		require.Error(t, err, key)
+		assert.Contains(t, err.Error(), fmt.Sprintf(`attribute key %q must start with a letter`, key), key)
+	}
+	require.NoError(t, Attributes{"jobs": "x", "instance_id": "x", "netbox.job": "x", "otel_scope": "x", "netbox.otel_scope_name": "x"}.Validate(nil))
 }
 
 // A key too long to quote whole is cut on a character boundary, so the

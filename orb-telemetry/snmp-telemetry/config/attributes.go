@@ -125,14 +125,32 @@ func markInteger(n *yaml.Node) (any, bool) {
 }
 
 // PrometheusName is the label a key becomes when OTLP is translated to
-// Prometheus: every character outside [A-Za-z0-9_] replaced by an underscore.
+// Prometheus: every character outside [A-Za-z0-9_] replaced by an underscore,
+// then "key_" put before a leading digit and "key" before a single leading
+// underscore.
 func PrometheusName(key string) string {
-	return strings.Map(func(r rune) rune {
+	name := strings.Map(func(r rune) rune {
 		if r == '_' || ('0' <= r && r <= '9') || ('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') {
 			return r
 		}
 		return '_'
 	}, key)
+	switch {
+	case name == "":
+		return name
+	case '0' <= name[0] && name[0] <= '9':
+		return "key_" + name
+	case name[0] == '_' && !strings.HasPrefix(name, "__"):
+		return "key" + name
+	}
+	return name
+}
+
+// startsWithLetter reports whether key starts with an ASCII letter, so that
+// its Prometheus name is the key with its other characters replaced, never
+// one translation prefixes.
+func startsWithLetter(key string) bool {
+	return key != "" && (('a' <= key[0] && key[0] <= 'z') || ('A' <= key[0] && key[0] <= 'Z'))
 }
 
 // MergeAttributes lays a target's attributes over the scope's: a key the
@@ -178,6 +196,8 @@ func (a Attributes) Validate(reserved func(string) bool) error {
 			return errors.New("attribute key is empty; give every attribute a name")
 		case !utf8.ValidString(key):
 			return fmt.Errorf("attribute key %q is not valid UTF-8", key)
+		case !startsWithLetter(key):
+			return fmt.Errorf("attribute key %q must start with a letter (A-Z or a-z)", clip(key))
 		case len(key) > MaxKeyBytes:
 			return fmt.Errorf("attribute key %q is %d bytes, longer than the limit of %d", clip(key), len(key), MaxKeyBytes)
 		case reserved != nil && reserved(key):
