@@ -578,8 +578,11 @@ key, when:
   `netbox.site` on its own is fine;
 - a key becomes, in Prometheus form, a label Prometheus sets or reserves
   itself: `job` and `instance`, which it sets from the resource after copying
-  the datapoint's attributes, so a key of that name would be overwritten, and
-  any name starting with `__`;
+  the datapoint's attributes, so a key of that name would be overwritten; any
+  name starting with `__`; and any name starting with `otel_scope_`, the
+  labels it makes from the instrumentation scope every policy's series carry,
+  such as `otel_scope_name` and `otel_scope_policy_name`, which a key of that
+  name would duplicate;
 - two entries naming one device, such as a prefix and an address inside it,
   give it different attributes. Give the entries different `id` values to keep
   them as two devices.

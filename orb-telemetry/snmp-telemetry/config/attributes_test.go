@@ -340,17 +340,21 @@ func TestAttributes_ValidateBoundsTheTotalSize(t *testing.T) {
 }
 
 // Prometheus sets job and instance from the resource after it copies the
-// datapoint's attributes, and reserves every name starting with two
-// underscores, so a key landing on one is lost or refused there.
+// datapoint's attributes, reserves every name starting with two underscores,
+// and adds otel_scope_ labels from the instrumentation scope, which every
+// policy's series carry, so a key landing on one is lost or refused there.
 func TestAttributes_ValidateRefusesPrometheusOwnLabels(t *testing.T) {
 	for key, prom := range map[string]string{
 		"job": "job", "instance": "instance", "__name__": "__name__", "..meta": "__meta", "_.x": "__x",
+		"otel_scope_name": "otel_scope_name", "otel.scope.version": "otel_scope_version",
+		"otel.scope.schema_url": "otel_scope_schema_url", "otel_scope_policy_name": "otel_scope_policy_name",
+		"otel-scope-anything": "otel_scope_anything",
 	} {
 		err := Attributes{key: "x"}.Validate(nil)
 		require.Error(t, err, key)
 		assert.Contains(t, err.Error(), fmt.Sprintf(`attribute key %q becomes %q in Prometheus, a label Prometheus sets itself`, key, prom), key)
 	}
-	require.NoError(t, Attributes{"jobs": "x", "_instance": "x", "netbox.job": "x"}.Validate(nil))
+	require.NoError(t, Attributes{"jobs": "x", "_instance": "x", "netbox.job": "x", "otel_scope": "x", "netbox.otel_scope_name": "x"}.Validate(nil))
 }
 
 // A key too long to quote whole is cut on a character boundary, so the
