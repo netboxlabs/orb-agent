@@ -47,8 +47,8 @@ func TestTheDocumentedAttributesSampleIsValid(t *testing.T) {
 	expanded, _, err := r.expandTargets()
 	require.NoError(t, err)
 	require.Len(t, expanded, 2)
-	assert.Equal(t, config.Attributes{"netbox.site": "dc-west", "netbox.tenant": "tenant-a"}, expanded[0].Attributes)
-	assert.Equal(t, config.Attributes{"netbox.site": "dc-east", "netbox.tenant": "tenant-a", "rack_units": 2}, expanded[1].Attributes)
+	assert.Equal(t, config.Attributes{"netbox.site.name": "dc-west", "netbox.tenant.name": "tenant-a"}, expanded[0].Attributes)
+	assert.Equal(t, config.Attributes{"netbox.site.name": "dc-east", "netbox.tenant.name": "tenant-a", "rack_units": 2}, expanded[1].Attributes)
 }
 
 // The documented sample must be a policy this backend accepts. Prose drifts from

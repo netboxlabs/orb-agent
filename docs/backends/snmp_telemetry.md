@@ -104,20 +104,20 @@ orb:
             protocol_version: "v2c"
             community: "public"
           attributes:
-            netbox.site: "dc-west"
-            netbox.tenant: "tenant-a"
+            netbox.site.name: "dc-west"
+            netbox.tenant.name: "tenant-a"
           targets:
             - host: "192.168.1.1"
             - host: "192.168.1.2"
               attributes:
-                netbox.site: "dc-east"
+                netbox.site.name: "dc-east"
                 rack_units: 2
 ```
 
-- Keys are non-empty, valid UTF-8 and case-sensitive; no convention is enforced, and a prefix of your own such as `netbox.` keeps them clear of the names the profiles export. A string, `true` or `false`, an integer within 64 bits or a float is exported as a string, a boolean, a 64-bit integer or a double.
+- Keys are non-empty, valid UTF-8 and case-sensitive; no convention is enforced. OTel-style names keep them clear of the names the profiles export: a `netbox.` namespace with the property named, such as `netbox.site.name`, which Prometheus shows as `netbox_site_name`. A string, `true` or `false`, an integer within 64 bits or a float is exported as a string, a boolean, a 64-bit integer or a double.
 - A target's attributes are bounded in number, in the length of each key and string value, and in their size together, since every series and every export repeats them; the limits are under [Attributes](../../orb-telemetry/snmp-telemetry/README.md#attributes).
 - The policy is refused, with an error naming the policy, the target and the key, for a null, map, list, empty string or unquoted date, an integer past 64 bits, an empty key, a key the backend sets itself (`device_ip`, `device_port`, `netbox_id`, `snmp_context`, `row_index`, `policy_name`, `trap_name`, `version`), or a key a profile of the policy's profile set exports, such as `model` or `serial_number` in the bundled set.
-- Keys are also compared as Prometheus writes them, every character outside `[A-Za-z0-9_]` turned into an underscore: `netbox.id` is refused because it becomes `netbox_id`, `netbox.site` beside `netbox_site` because the two become one label, and `job`, `instance` or a key starting with `__` or `otel_scope_` because Prometheus sets or reserves those labels itself, the `otel_scope_` ones from the instrumentation scope every policy's series carry.
+- Keys are also compared as Prometheus writes them, every character outside `[A-Za-z0-9_]` turned into an underscore: `netbox.id` is refused because it becomes `netbox_id`, `netbox.site.name` beside `netbox_site_name` because the two become one label, and `job`, `instance` or a key starting with `__` or `otel_scope_` because Prometheus sets or reserves those labels itself, the `otel_scope_` ones from the instrumentation scope every policy's series carry.
 - `snmp.traps_received` carries the attributes of the target its `device_ip` came from, only the keys every target at that address agrees on, and none on the overflow series.
 - A change takes effect when the policy is applied again: an edit reaches the backend as a removal followed by an apply.
 - The agent re-encodes a policy before posting it, so some numbers change type on the way: a float with no fractional part below 1,000,000 in magnitude, such as `3.0`, arrives as the integer `3`; an integer of 2^64 or more, or below -2^63, arrives as a float; and when Fleet delivers the policy as a JSON object, an integer of magnitude 1,000,000 or more (1,000,000 or more, or -1,000,000 or less) arrives as a float. Quote a number to keep its exact text.

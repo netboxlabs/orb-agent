@@ -516,26 +516,28 @@ policies:
         protocol_version: "v2c"
         community: "public"
       attributes:
-        netbox.site: "dc-west"
-        netbox.tenant: "tenant-a"
+        netbox.site.name: "dc-west"
+        netbox.tenant.name: "tenant-a"
       targets:
         - host: "192.168.1.1"
         - host: "192.168.1.2"
           attributes:
-            netbox.site: "dc-east"
+            netbox.site.name: "dc-east"
             rack_units: 2
 ```
 
-Every series of `192.168.1.1` carries `netbox.site="dc-west"` and
-`netbox.tenant="tenant-a"`; every series of `192.168.1.2` carries
-`netbox.site="dc-east"`, `netbox.tenant="tenant-a"` and `rack_units=2`.
+Every series of `192.168.1.1` carries `netbox.site.name="dc-west"` and
+`netbox.tenant.name="tenant-a"`; every series of `192.168.1.2` carries
+`netbox.site.name="dc-east"`, `netbox.tenant.name="tenant-a"` and
+`rack_units=2`.
 
 Keys and values:
 
 - A key is any non-empty, valid UTF-8 string of at most 128 bytes, and keys
-  are case-sensitive. No convention is enforced. Lowercase keys under a prefix
-  of your own, such as `netbox.site`, keep clear of the names the profiles
-  export.
+  are case-sensitive. No convention is enforced. OTel-style names keep clear
+  of the names the profiles export: a `netbox.` namespace with the property
+  named, such as `netbox.site.name`, which Prometheus shows as
+  `netbox_site_name`.
 - A value is a YAML scalar, exported as the OpenTelemetry type of the same
   kind: a string as a string, `true` or `false` as a boolean, an integer as a
   64-bit integer and a float as a double.
@@ -574,8 +576,8 @@ key, when:
   that land on one name with `;`. A key that becomes a reserved or
   profile-exported name, such as `netbox.id` (`netbox_id`), would corrupt a
   label that identifies the series, and two keys of one target that become
-  one name, such as `netbox.site` and `netbox_site`, would corrupt each other.
-  `netbox.site` on its own is fine;
+  one name, such as `netbox.site.name` and `netbox_site_name`, would corrupt
+  each other. `netbox.site.name` on its own is fine;
 - a key becomes, in Prometheus form, a label Prometheus sets or reserves
   itself: `job` and `instance`, which it sets from the resource after copying
   the datapoint's attributes, so a key of that name would be overwritten; any
