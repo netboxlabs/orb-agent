@@ -369,8 +369,9 @@ Every series of `192.0.2.10` carries `netbox.site.name="dc-west"` and
 
 Keys and values:
 
-- A key is any non-empty, valid UTF-8 string of at most 128 bytes, and keys
-  are case-sensitive. No convention is enforced. OTel-style names keep clear
+- A key is a valid UTF-8 string of at most 128 bytes that starts with an
+  ASCII letter (A-Z or a-z), and keys are case-sensitive. No other convention
+  is enforced. OTel-style names keep clear
   of the names the profiles promote: a `netbox.` namespace with the property
   named, such as `netbox.site.name`, which Prometheus shows as
   `netbox_site_name`.
@@ -390,6 +391,10 @@ key, when:
 
 - a key is empty, not valid UTF-8, or too long, or the target's attributes
   are too many or too large together;
+- a key does not start with an ASCII letter. Translation to Prometheus puts
+  `key_` before a name that starts with a digit and `key` before one that
+  starts with a single underscore, so `2 cents` would land on `key_2_cents`,
+  a name another key can have;
 - a value is null, a map, a list, an empty string, a string too long or not
   valid UTF-8, an unquoted date (quote it to send it as a string), or a float
   that is not finite. An empty string is refused rather than sent, since a
@@ -415,8 +420,8 @@ key, when:
   other. `netbox.site.name` on its own is fine;
 - a key becomes, in Prometheus form, a label Prometheus sets or reserves
   itself: `job` and `instance`, which it sets from the resource after copying
-  the datapoint's attributes, so a key of that name would be overwritten; any
-  name starting with `__`; and any name starting with `otel_scope_`, the
+  the datapoint's attributes, so a key of that name would be overwritten; and
+  any name starting with `otel_scope_`, the
   labels it makes from the instrumentation scope every policy's series carry,
   such as `otel_scope_name` and `otel_scope_policy_name`, which a key of that
   name would duplicate;
