@@ -24,8 +24,9 @@ import (
 const scopeName = "snmp-telemetry"
 
 // PolicyNameAttribute is the instrumentation-scope attribute naming the
-// policy whose series a ScopeMetrics holds. It is the same key pktvisor
-// puts on its per-policy scopes, so the agent's bridge reads one convention.
+// policy whose series a ScopeMetrics holds. The agent's OTLP bridge reads it
+// to stamp the policy's id and backend on the scope, so a new key must be
+// read by the bridge before this backend sends it.
 const PolicyNameAttribute = "policy_name"
 
 // Global variables for meter and cache
