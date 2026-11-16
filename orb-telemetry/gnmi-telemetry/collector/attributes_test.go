@@ -15,6 +15,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/config"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/gnmi"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/metrics"
 )
 
 // pointsByDevice indexes the points of one metric by their device_ip.
@@ -87,8 +88,15 @@ func TestCollectTarget_TargetAttributesReachTheirOwnSeries(t *testing.T) {
 	assert.Equal(t, "dc-east", site.AsString())
 }
 
+// The scope's policy key is reserved under the name the metrics package
+// exports it with, and under the key earlier releases used.
+func TestReservedAttributeName_CoversTheScopePolicyKey(t *testing.T) {
+	assert.True(t, ReservedAttributeName(metrics.PolicyNameAttribute))
+	assert.True(t, ReservedAttributeName("policy_name"))
+}
+
 func TestReservedAttributeName_IsTheCollectorsOwnDimensions(t *testing.T) {
-	for _, name := range []string{"device_ip", "netbox_id", "policy_name", "mode"} {
+	for _, name := range []string{"device_ip", "netbox_id", "orb.policy.name", "policy_name", "mode"} {
 		assert.True(t, ReservedAttributeName(name), name)
 	}
 	assert.False(t, ReservedAttributeName("site"))

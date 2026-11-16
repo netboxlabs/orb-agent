@@ -924,7 +924,7 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string,
 
 // baseAttrs is the identity every series of one target carries on the
 // datapoint: the device, and the NetBox id when the target names one. The
-// policy is not among them: it is the scope's policy_name, and the store keys
+// policy is not among them: it is the scope's orb.policy.name, and the store keys
 // on it, so selecting a target's series takes the policy beside these.
 //
 // The target's own attributes are not among them either. They follow from

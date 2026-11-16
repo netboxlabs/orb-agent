@@ -102,8 +102,8 @@ func TestParsePolicies_RefusesAnAttributeItCannotExport(t *testing.T) {
 }
 
 // Every key the collector sets itself is refused, in the scope and on a
-// target: the device and its NetBox id, the scope's policy_name, and
-// target_up's mode.
+// target: the device and its NetBox id, the scope's policy name key as earlier
+// releases wrote it, and target_up's mode.
 func TestParsePolicies_RefusesReservedAttributeKeys(t *testing.T) {
 	for _, key := range []string{"device_ip", "netbox_id", "policy_name", "mode"} {
 		_, err := newTestManager().ParsePolicies([]byte(attributePolicy("        "+key+": x", "            role: edge")))
@@ -114,6 +114,14 @@ func TestParsePolicies_RefusesReservedAttributeKeys(t *testing.T) {
 		require.Error(t, err, key)
 		assert.Contains(t, err.Error(), fmt.Sprintf(`target 192.0.2.2 (id dev-2): attribute key %q is reserved`, key))
 	}
+}
+
+// orb.policy.name, the scope's policy key, is refused too: it is in the orb
+// namespace, which the platform strips from every series.
+func TestParsePolicies_RefusesTheScopePolicyKey(t *testing.T) {
+	_, err := newTestManager().ParsePolicies([]byte(attributePolicy("        orb.policy.name: x", "            role: edge")))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `attribute key "orb.policy.name"`)
 }
 
 // profileSpy is a collector whose profile set promotes the attribute keys it

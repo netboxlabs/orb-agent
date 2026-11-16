@@ -42,7 +42,7 @@ func collect(t *testing.T, reader *sdkmetric.ManualReader) map[string]metricdata
 	return out
 }
 
-// collectByPolicy runs one collection and indexes metrics by the policy_name
+// collectByPolicy runs one collection and indexes metrics by the orb.policy.name
 // of the scope they were exported under ("" for the process scope), then by
 // name, for tests that care which scope a series left under. Every
 // collection is recorded in the reader's log (exportedByPolicy).

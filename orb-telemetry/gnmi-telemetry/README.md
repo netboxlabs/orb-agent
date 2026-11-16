@@ -9,7 +9,7 @@ one subscription carrying every path that profile names. Each notification is
 matched back to the profile, converted, and written into a last-value store that
 observable instruments read on the export cadence. Every series of a policy is
 exported under an instrumentation scope named `gnmi-telemetry` with the
-attribute `policy_name` set to the policy, one scope per policy. Every series
+attribute `orb.policy.name` set to the policy, one scope per policy. Every series
 carries `device_ip`, plus `netbox_id` when the target sets an `id`,
 whatever path keys its profile promotes, such as `interface_name`, and the
 policy's own `attributes` for the target. The SDK
@@ -404,7 +404,12 @@ key, when:
   as a float or an unsigned integer, and either would export a different
   number from the one written;
 - a key is one the collector sets itself: `device_ip`, `netbox_id`,
-  `policy_name`, and the `mode` of `gnmi.target_up`;
+  `orb.policy.name` and `policy_name` (the instrumentation scope's policy key
+  and the one earlier releases used), and the `mode` of `gnmi.target_up`;
+- a key is in the `orb` namespace: lowercase `orb` followed by a character
+  that is not an ASCII letter or digit, such as `orb.site`, `orb_site` or
+  `orb-site`. The Orb platform sets its own `orb_*` labels and strips every
+  such key from each series. `orbit.site`, `orb2` and `ORB.site` are not in it;
 - a key is one a profile of the policy's profile set promotes from a path
   key. Which profile serves a target is only known once it answers
   Capabilities, so a key any profile promotes would meet that profile's
@@ -423,7 +428,7 @@ key, when:
   the datapoint's attributes, so a key of that name would be overwritten; and
   any name starting with `otel_scope_`, the
   labels it makes from the instrumentation scope every policy's series carry,
-  such as `otel_scope_name` and `otel_scope_policy_name`, which a key of that
+  such as `otel_scope_name` and `otel_scope_orb_policy_name`, which a key of that
   name would duplicate;
 - two range targets share an address and give it different attributes. The
   sweep keeps whichever of them expanded to the address first, so the other's
@@ -478,7 +483,7 @@ with reason `schema_conflict`.
 Every series carries:
 
 - `device_ip`, the target's host as the policy named it. The policy is not a
-  datapoint attribute: it is the `policy_name` of the instrumentation scope
+  datapoint attribute: it is the `orb.policy.name` of the instrumentation scope
   the series is exported under, so two policies watching one device keep
   separate series on separate scopes.
 - `netbox_id`, when the target sets `id`.
@@ -672,8 +677,8 @@ subscriptions:
   attribute, since the key value is the only thing telling the elements of the
   list apart and an unpromoted one has them all write a single series. The
   attribute name on the left may not be `device_ip` or `netbox_id`, which the
-  collector sets on the datapoint, or `policy_name`, which it sets on the
-  series' instrumentation scope.
+  collector sets on the datapoint, or `orb.policy.name` or `policy_name`, which
+  it sets on the series' instrumentation scope.
 - `origin` may be set per subscription, and overrides the target's for that path
   alone. `origin: ""` asks under the target's native schema, which is how the SR
   Linux overlay reads memory paths OpenConfig does not carry. A path with its own

@@ -101,13 +101,18 @@ var metricName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 const maxMetricNameLen = 255 - len("gnmi.")
 
 // reservedAttributes are the attribute names the collector owns on every
-// series it writes: device_ip and netbox_id on the datapoint, and
-// policy_name, which the collector sets on the instrumentation scope. A
-// profile that promotes a path key under one of the datapoint names would
-// have the collector's value and its own on the same series; one promoting
-// policy_name would put a device-supplied value on the datapoint under the
-// key a receiver flattening scope attributes reads the policy from.
-var reservedAttributes = map[string]bool{"device_ip": true, "policy_name": true, "netbox_id": true}
+// series it writes: device_ip and netbox_id on the datapoint, and the policy
+// name key, which the collector sets on the instrumentation scope under
+// metrics.PolicyNameAttribute (orb.policy.name), and under policy_name, the
+// key earlier releases used and the agent still reads. A profile that
+// promotes a path key under one of the datapoint names would have the
+// collector's value and its own on the same series; one promoting a policy
+// name key would put a device-supplied value on the datapoint under the key a
+// receiver flattening scope attributes reads the policy from.
+var reservedAttributes = map[string]bool{
+	"device_ip": true, "netbox_id": true,
+	metrics.PolicyNameAttribute: true, "policy_name": true,
+}
 
 // ReservedAttribute reports whether name is one of the attribute names the
 // collector owns on every series, which a profile may not promote.
