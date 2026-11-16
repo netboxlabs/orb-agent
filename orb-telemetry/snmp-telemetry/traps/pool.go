@@ -85,7 +85,9 @@ func (p *Pool) Acquire(listen, policy string, devices []Device, names map[string
 	// Activated before the claims are published: a receiver already
 	// waiting on the registry lock counts the moment the claims land, and a
 	// count for a policy the tally still holds withdrawn would sit dormant
-	// until the same series key arrived again.
+	// until the same series key arrived again. The attributes are set before
+	// either, so no count is exported without them.
+	p.tally.SetAttributes(policy, devices)
 	p.tally.Activate(policy)
 	e.registry.Register(policy, devices, names)
 	e.refs++

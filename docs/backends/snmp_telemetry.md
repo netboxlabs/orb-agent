@@ -89,10 +89,45 @@ Three rules matter when writing agent config:
 
 The full parameter tables are in the backend README under [Policy Configuration](../../orb-telemetry/snmp-telemetry/README.md#policy-configuration) and [Receiving traps](../../orb-telemetry/snmp-telemetry/README.md#receiving-traps).
 
-## Metrics
-Every series of a policy is exported under an instrumentation scope carrying `policy_name`, one scope per policy; datapoints carry the device attributes (`device_ip`, `device_port`, `netbox_id`, `snmp_context`) and the profile's tags. Poll metrics are described in the backend README. Trap reception adds three:
+### Attributes
+A policy can put attributes of its own on every series of its targets, exported as OTLP datapoint attributes. `scope.attributes` applies to every target, and `attributes` on a target applies to that target, a key it sets taking the target's value over the scope's:
 
-- `snmp.traps_received{device_ip, trap_name, version}` counts traps and informs attributed to a policy, under that policy's scope.
+```yaml
+orb:
+  policies:
+    snmp_telemetry:
+      edge_metrics:
+        config:
+          metrics_interval: 60
+        scope:
+          authentication:
+            protocol_version: "v2c"
+            community: "public"
+          attributes:
+            netbox.site: "dc-west"
+            netbox.tenant: "tenant-a"
+          targets:
+            - host: "192.168.1.1"
+            - host: "192.168.1.2"
+              attributes:
+                netbox.site: "dc-east"
+                rack_units: 2
+```
+
+- Keys are non-empty, valid UTF-8 and case-sensitive; no convention is enforced, and a prefix of your own such as `netbox.` keeps them clear of the names the profiles export. A string, `true` or `false`, an integer within 64 bits or a float is exported as a string, a boolean, a 64-bit integer or a double.
+- A target's attributes are bounded in number, in the length of each key and string value, and in their size together, since every series and every export repeats them; the limits are under [Attributes](../../orb-telemetry/snmp-telemetry/README.md#attributes).
+- The policy is refused, with an error naming the policy, the target and the key, for a null, map, list, empty string or unquoted date, an integer past 64 bits, an empty key, a key the backend sets itself (`device_ip`, `device_port`, `netbox_id`, `snmp_context`, `row_index`, `policy_name`, `trap_name`, `version`), or a key a profile of the policy's profile set exports, such as `model` or `serial_number` in the bundled set.
+- Keys are also compared as Prometheus writes them, every character outside `[A-Za-z0-9_]` turned into an underscore: `netbox.id` is refused because it becomes `netbox_id`, `netbox.site` beside `netbox_site` because the two become one label, and `job`, `instance` or a key starting with `__` because Prometheus sets or reserves those labels itself.
+- `snmp.traps_received` carries the attributes of the target its `device_ip` came from, only the keys every target at that address agrees on, and none on the overflow series.
+- A change takes effect when the policy is applied again: an edit reaches the backend as a removal followed by an apply.
+- The agent re-encodes a policy before posting it, so some numbers change type on the way: a float with no fractional part below 1,000,000 in magnitude, such as `3.0`, arrives as the integer `3`; an integer of 2^64 or more, or below -2^63, arrives as a float; and when Fleet delivers the policy as a JSON object, an integer of magnitude 1,000,000 or more (1,000,000 or more, or -1,000,000 or less) arrives as a float. Quote a number to keep its exact text.
+
+`attributes` needs orb-agent 2.18.0 (snmp-telemetry 1.2.0). With an older agent, the backend logs `ignoring unrecognized policy key` with `key=attributes` and runs the policy without them. The full rules are under [Attributes](../../orb-telemetry/snmp-telemetry/README.md#attributes) in the backend README.
+
+## Metrics
+Every series of a policy is exported under an instrumentation scope carrying `policy_name`, one scope per policy; datapoints carry the device attributes (`device_ip`, `device_port`, `netbox_id`, `snmp_context`), the profile's tags, and the policy's own `attributes` for the target. Poll metrics are described in the backend README. Trap reception adds three:
+
+- `snmp.traps_received{device_ip, trap_name, version}` counts traps and informs attributed to a policy, under that policy's scope, with the policy's `attributes` for the device.
 - `snmp.traps_dropped{reason}` counts datagrams that produced no trap.
 - `snmp.traps_datagrams` counts every datagram read from any trap socket.
 

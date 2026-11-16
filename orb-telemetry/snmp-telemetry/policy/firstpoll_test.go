@@ -33,7 +33,8 @@ func (p *pollRecorder) CollectTarget(_ context.Context, target config.Target, _ 
 
 func (p *pollRecorder) ForgetPolicy(string) {}
 
-func (p *pollRecorder) TrapNames() map[string]string { return nil }
+func (p *pollRecorder) TrapNames() map[string]string                            { return nil }
+func (p *pollRecorder) ProfileAttribute(string) (name, profile string, ok bool) { return "", "", false }
 
 func (p *pollRecorder) Close() {}
 

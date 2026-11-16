@@ -14,12 +14,13 @@ sets an `id` and `snmp_context` when its authentication sets a
 `context_name`. Together with the scope they are the device identity, so two
 policies polling one device, one host answering on two ports, or one policy
 naming an endpoint twice under different IDs or contexts, stay distinct
-series. Metrics are sent only when `--otel-endpoint` is set; without it,
-targets are still polled but nothing is exported. The OTLP provider caches a
-meter per distinct policy name, plus one instrument and aggregator per metric
-name exported under it, for the life of the process with no eviction: memory
-grows with how many distinct policy names the process has ever seen, not how
-many are active, and only a restart clears it.
+series. A policy can add attributes of its own to every series of a target;
+see [Attributes](#attributes). Metrics are sent only when `--otel-endpoint`
+is set; without it, targets are still polled but nothing is exported. The
+OTLP provider caches a meter per distinct policy name, plus one instrument and
+aggregator per metric name exported under it, for the life of the process
+with no eviction: memory grows with how many distinct policy names the
+process has ever seen, not how many are active, and only a restart clears it.
 
 Each poll's values are exported once, by the first export after the poll. The
 backend checks for newly polled values every `--otel-export-period` (10
@@ -218,10 +219,12 @@ A trap is counted, not stored. Three metrics describe what arrived:
 - `snmp.traps_received{device_ip, trap_name, version}` counts traps from a
   device a policy on that socket names, once per policy naming it, under
   that policy's scope (`policy_name`), with the same `device_ip` label every
-  polled series carries.
+  polled series carries and the policy's `attributes` for that device (see
+  [Attributes](#attributes)).
   The counter is monotonic: a deleted policy's series stop being exported but
-  keep their totals, so a policy recreated under the same name continues
-  the count rather than restarting it, and nothing downstream sees a
+  keep their totals, so a policy recreated under the same name, with the same
+  attributes for the device, continues the count rather than restarting it,
+  and nothing downstream sees a
   decrease. A trap that was already in hand when its policy was deleted is
   kept the same way and stays unexported until the policy comes back. A
   retained series that has to make way for a live one leaves its total in a
@@ -451,8 +454,9 @@ authentication block; setting it under `protocol_version: v1` or
 
 A policy request body is capped at 1 MiB, and a larger one is rejected with
 HTTP 413 before it is parsed. That ceiling is far above any policy this backend
-expects: the sample above weighs about 600 bytes, and a target's `host` can be a
-CIDR prefix, so covering a whole /16 costs one line rather than 65536 of them.
+expects: the sample at the top of this section weighs about 600 bytes, and a
+target's `host` can be a CIDR prefix, so covering a whole /16 costs one line
+rather than 65536 of them.
 
 That cap bounds how many bytes a request may carry, not how long they may take,
 so the API also sets connection deadlines: 10 seconds to finish the request
@@ -492,6 +496,136 @@ the tidy arrangement, but it is not required.
 Policies naming one directory share a single loaded profile set. It is loaded on
 the first policy to use it and released with the last, so a directory no running
 policy names is not held.
+
+#### Attributes
+
+A policy can put key/value pairs of its own on every series a target produces,
+exported as OTLP datapoint attributes beside the device identity. `attributes`
+under `scope` applies to every target, and `attributes` on a target applies to
+that target: a key the target sets takes the target's value, and every other
+key keeps the scope's. The merge is key by key, so a target cannot remove a
+key the scope sets; leave it out of the scope instead.
+
+```yaml
+policies:
+  edge_metrics:
+    config:
+      metrics_interval: 60
+    scope:
+      authentication:
+        protocol_version: "v2c"
+        community: "public"
+      attributes:
+        netbox.site: "dc-west"
+        netbox.tenant: "tenant-a"
+      targets:
+        - host: "192.168.1.1"
+        - host: "192.168.1.2"
+          attributes:
+            netbox.site: "dc-east"
+            rack_units: 2
+```
+
+Every series of `192.168.1.1` carries `netbox.site="dc-west"` and
+`netbox.tenant="tenant-a"`; every series of `192.168.1.2` carries
+`netbox.site="dc-east"`, `netbox.tenant="tenant-a"` and `rack_units=2`.
+
+Keys and values:
+
+- A key is any non-empty, valid UTF-8 string of at most 128 bytes, and keys
+  are case-sensitive. No convention is enforced. Lowercase keys under a prefix
+  of your own, such as `netbox.site`, keep clear of the names the profiles
+  export.
+- A value is a YAML scalar, exported as the OpenTelemetry type of the same
+  kind: a string as a string, `true` or `false` as a boolean, an integer as a
+  64-bit integer and a float as a double.
+- A target carries at most 32 attributes, the scope's included, and a string
+  value is at most 256 bytes. Its keys and string values together are at most
+  1024 bytes. Every exported datapoint repeats them, and one export carries
+  every policy's telemetry, which the agent's OTLP bridge receives up to
+  64 MiB at a time. The per-key limits alone would let a datapoint carry
+  about 12 KiB of attributes, enough to fill that with some 5,300
+  datapoints and drop the whole export; the total holds it to 1 KiB.
+
+The policy is refused, with an error naming the policy, the target and the
+key, when:
+
+- a key is empty, not valid UTF-8, or too long, or the target's attributes
+  are too many or too large together;
+- a value is null, a map, a list, an empty string, a string too long or not
+  valid UTF-8, an unquoted date (quote it to send it as a string), or a float
+  that is not finite. An empty string is refused rather than sent, since a
+  Prometheus-style backend reads an empty label as no label at all; leave the
+  key out instead;
+- an integer does not fit a signed 64-bit integer. The YAML decoder reads one
+  as a float or an unsigned integer, and either would export a different
+  number from the one written;
+- a key is one the backend sets itself: `device_ip`, `device_port`,
+  `netbox_id`, `snmp_context`, `row_index`, `policy_name`, and the `trap_name`
+  and `version` of `snmp.traps_received`;
+- a key is one a profile of the policy's profile set exports, as a device tag,
+  a row tag, or the `_status` or `_value` attribute a symbol derives from its
+  reading. Which profile a device matches is only known once it answers, so a
+  key any profile exports would meet that profile's attribute on some device.
+  This is checked when the policy starts, and the error names the profile. The
+  bundled set exports names such as `model` and `serial_number`;
+- two keys collide once translated to Prometheus, which replaces every
+  character outside `[A-Za-z0-9_]` with an underscore and joins two labels
+  that land on one name with `;`. A key that becomes a reserved or
+  profile-exported name, such as `netbox.id` (`netbox_id`), would corrupt a
+  label that identifies the series, and two keys of one target that become
+  one name, such as `netbox.site` and `netbox_site`, would corrupt each other.
+  `netbox.site` on its own is fine;
+- a key becomes, in Prometheus form, a label Prometheus sets or reserves
+  itself: `job` and `instance`, which it sets from the resource after copying
+  the datapoint's attributes, so a key of that name would be overwritten, and
+  any name starting with `__`;
+- two entries naming one device, such as a prefix and an address inside it,
+  give it different attributes. Give the entries different `id` values to keep
+  them as two devices.
+
+Traps:
+
+- `snmp.traps_received` carries the attributes of the target its
+  `device_ip` came from. Every target that claims a trap's address shares that
+  stream of traps, so the series carries only the keys they all give the same
+  value: targets of one policy at one address, apart by port, `id` or
+  `context_name`, and a link-local target written with a zone beside one
+  written without it.
+- The series counted under a policy's overflow, with `device_ip` and
+  `trap_name` both `other`, stands for many devices and carries no attributes.
+- A policy applied again with other attributes for a device starts that
+  device's trap series afresh, under the new attributes; with the same ones,
+  the series continues its count.
+
+Changes, the agent and older versions:
+
+- The attributes are fixed for a target, so they never split or merge its
+  series. A change takes effect when the policy is applied again: the agent
+  applies an edit as a removal followed by an apply, so the series carrying
+  the old values end and the next poll carries the new ones.
+- The agent decodes a policy and encodes it again before posting it, which
+  changes some numbers, and the backend cannot tell what was written:
+  - A float with no fractional part below 1,000,000 in magnitude, such as
+    `3.0`, arrives as the integer `3`.
+  - From a YAML body, an integer from 2^63 up to 2^64 - 1 arrives as written
+    and is refused, but one of 2^64 or more, or below -2^63, arrives already
+    turned into a float, such as `1e+20`, and is exported as a double.
+  - When Fleet delivers the policy as a JSON object, every number is a float
+    to the agent, so an integer of magnitude 1,000,000 or more (1,000,000 or
+    more, or -1,000,000 or less) arrives as a float, such as `1.234567e+06`,
+    and is exported as a double, losing digits past 2^53.
+
+  Quote a number whose exact text matters, so it is sent as a string.
+- They are datapoint attributes, not resource attributes, because one
+  resource serves every target of the backend, and a Prometheus-style backend
+  turns resource attributes into a separate `target_info` series rather than
+  labels on each series, so they could not filter a dashboard.
+
+`attributes` needs orb-agent 2.18.0, which ships snmp-telemetry 1.2.0. An
+older backend logs `ignoring unrecognized policy key` with `key=attributes`,
+once for the scope and once for each target that sets it, and runs the policy
+without the attributes.
 
 ### SNMP Profiles
 

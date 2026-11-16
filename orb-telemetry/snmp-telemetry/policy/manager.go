@@ -742,6 +742,10 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		}
 	}
 
+	if err := validateAttributes(policy.Scope); err != nil {
+		return err
+	}
+
 	// The expansion budget spans the policy, so it cannot be charged one target
 	// at a time inside the loop. Checked after it so a blank or misconfigured
 	// entry is still reported by name rather than as a size.

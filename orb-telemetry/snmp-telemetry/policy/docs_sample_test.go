@@ -6,8 +6,50 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 )
+
+// The README states the limits on attributes; this holds it to the ones
+// validation applies. The agent's docs page links to it rather than stating
+// them again, so there is one place for the numbers to drift.
+func TestTheReadmeStatesTheAttributeLimits(t *testing.T) {
+	raw, err := os.ReadFile("../README.md")
+	require.NoError(t, err)
+	doc := strings.Join(strings.Fields(string(raw)), " ")
+	assert.Contains(t, doc, fmt.Sprintf("string of at most %d bytes", config.MaxKeyBytes))
+	assert.Contains(t, doc, fmt.Sprintf("A target carries at most %d attributes", config.MaxAttributes))
+	assert.Contains(t, doc, fmt.Sprintf("a string value is at most %d bytes", config.MaxStringBytes))
+	assert.Contains(t, doc, fmt.Sprintf("Its keys and string values together are at most %d bytes", config.MaxTotalBytes))
+}
+
+// The attributes sample must be accepted, and the README's reading of what
+// each target carries must be what the merge gives.
+func TestTheDocumentedAttributesSampleIsValid(t *testing.T) {
+	raw, err := os.ReadFile("../README.md")
+	require.NoError(t, err)
+	var block string
+	for _, part := range strings.Split(string(raw), "```yaml")[1:] {
+		body, _, _ := strings.Cut(part, "```")
+		if strings.Contains(body, "attributes:") {
+			block = body
+			break
+		}
+	}
+	require.NotEmpty(t, block, "README has no yaml block with attributes")
+
+	got, err := newTestManager().ParsePolicies([]byte(block))
+	require.NoError(t, err, "the documented sample must parse and validate")
+	require.Contains(t, got, "edge_metrics")
+	r := &Runner{scope: got["edge_metrics"].Scope}
+	expanded, _, err := r.expandTargets()
+	require.NoError(t, err)
+	require.Len(t, expanded, 2)
+	assert.Equal(t, config.Attributes{"netbox.site": "dc-west", "netbox.tenant": "tenant-a"}, expanded[0].Attributes)
+	assert.Equal(t, config.Attributes{"netbox.site": "dc-east", "netbox.tenant": "tenant-a", "rack_units": 2}, expanded[1].Attributes)
+}
 
 // The documented sample must be a policy this backend accepts. Prose drifts from
 // the parser silently, and a sample is the thing operators copy.
