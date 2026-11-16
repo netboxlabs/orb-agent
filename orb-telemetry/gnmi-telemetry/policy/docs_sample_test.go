@@ -45,8 +45,8 @@ func TestTheDocumentedAttributesSampleIsValid(t *testing.T) {
 	require.Contains(t, got, "edge_metrics")
 	targets := got["edge_metrics"].Scope.Targets
 	require.Len(t, targets, 2)
-	assert.Equal(t, config.Attributes{"netbox.site": "dc-west", "netbox.tenant": "tenant-a"}, targets[0].Attributes)
-	assert.Equal(t, config.Attributes{"netbox.site": "dc-east", "netbox.tenant": "tenant-a", "rack_units": 2}, targets[1].Attributes)
+	assert.Equal(t, config.Attributes{"netbox.site.name": "dc-west", "netbox.tenant.name": "tenant-a"}, targets[0].Attributes)
+	assert.Equal(t, config.Attributes{"netbox.site.name": "dc-east", "netbox.tenant.name": "tenant-a", "rack_units": 2}, targets[1].Attributes)
 }
 
 // The documented sample must be a policy this backend accepts. Prose drifts from

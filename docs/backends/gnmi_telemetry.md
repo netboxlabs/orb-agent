@@ -78,21 +78,21 @@ orb:
           username: "admin"
           password: "${GNMI_PASSWORD}"
           attributes:
-            netbox.site: "dc-west"
-            netbox.tenant: "tenant-a"
+            netbox.site.name: "dc-west"
+            netbox.tenant.name: "tenant-a"
           targets:
             - host: "192.168.1.1"
             - host: "192.168.1.2"
               attributes:
-                netbox.site: "dc-east"
+                netbox.site.name: "dc-east"
                 rack_units: 2
 ```
 
-- Keys are non-empty, valid UTF-8 and case-sensitive; no convention is enforced, and a prefix of your own such as `netbox.` keeps them clear of the names the profiles promote. A string, `true` or `false`, an integer within 64 bits or a float is exported as a string, a boolean, a 64-bit integer or a double.
+- Keys are non-empty, valid UTF-8 and case-sensitive; no convention is enforced. OTel-style names keep them clear of the names the profiles promote: a `netbox.` namespace with the property named, such as `netbox.site.name`, which Prometheus shows as `netbox_site_name`. A string, `true` or `false`, an integer within 64 bits or a float is exported as a string, a boolean, a 64-bit integer or a double.
 - The merge is key by key: a target's block overrides the keys it names and keeps the rest of the scope's, so a target cannot remove a scope key.
 - A target's attributes are bounded in number, in the length of each key and string value, and in their size together, since every series and every export repeats them; the limits are under [`attributes`](../../orb-telemetry/gnmi-telemetry/README.md#attributes).
 - The policy is refused, with an error naming the policy, the target and the key, for a null, map, list, empty string or unquoted date, an integer past 64 bits, an empty key, a key the collector sets itself (`device_ip`, `netbox_id`, `policy_name`, `mode`), or a key a profile of the policy's profile set promotes, such as `interface_name` or `component_name` in the bundled set.
-- Keys are also compared as Prometheus writes them, every character outside `[A-Za-z0-9_]` turned into an underscore: `netbox.id` is refused because it becomes `netbox_id`, `netbox.site` beside `netbox_site` because the two become one label, and `job`, `instance` or a key starting with `__` or `otel_scope_` because Prometheus sets or reserves those labels itself, the `otel_scope_` ones from the instrumentation scope every policy's series carry.
+- Keys are also compared as Prometheus writes them, every character outside `[A-Za-z0-9_]` turned into an underscore: `netbox.id` is refused because it becomes `netbox_id`, `netbox.site.name` beside `netbox_site_name` because the two become one label, and `job`, `instance` or a key starting with `__` or `otel_scope_` because Prometheus sets or reserves those labels itself, the `otel_scope_` ones from the instrumentation scope every policy's series carry.
 - Two ranges sharing an address with different attributes are refused when the policy is applied; give them the same attributes, or split the ranges so they share no address. A target naming a single address inside a range keeps its own attributes, as it keeps its own port and credentials, but does not clear a conflict between two ranges.
 - `gnmi.target_up` carries the target's attributes too.
 - A change takes effect when the policy is applied again: an edit reaches the backend as a removal followed by an apply.
