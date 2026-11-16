@@ -522,6 +522,14 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 		}
 	}
 
+	// 0.0.0.0/8 is reserved as "this network" (RFC 1122, RFC 6890) and is
+	// not a usable interface address, but some agents publish one, such as
+	// a VLAN interface's ifIndex written as IPv4 (100000 is 0.1.134.160).
+	if ipAddress.Address != nil && inThisNetwork(*ipAddress.Address) {
+		m.logger.Debug("dropping address in 0.0.0.0/8", "address", *ipAddress.Address)
+		return nil
+	}
+
 	// RFC 4293 row filtering: drop non-unicast, non-preferred/deprecated,
 	// or non-active rows. Returning nil drops the row outright; an empty
 	// &diode.IPAddress{} would still be added by MapObjectIDsToEntity.
@@ -800,6 +808,16 @@ func ValidateIPv4CIDR(cidr string) bool {
 	}
 
 	return true
+}
+
+// thisNetwork is 0.0.0.0/8, "this host on this network" (RFC 1122).
+var thisNetwork = &net.IPNet{IP: net.IPv4zero.To4(), Mask: net.CIDRMask(8, 32)}
+
+// inThisNetwork reports whether the address of cidr is in 0.0.0.0/8, written
+// as IPv4 or in its IPv4-mapped IPv6 form.
+func inThisNetwork(cidr string) bool {
+	ip, _, err := net.ParseCIDR(cidr)
+	return err == nil && thisNetwork.Contains(ip)
 }
 
 // ValidateIPCIDR validates an IPv4 or IPv6 address in CIDR notation
