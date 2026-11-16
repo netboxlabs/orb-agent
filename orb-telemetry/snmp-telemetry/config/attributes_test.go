@@ -107,6 +107,9 @@ func TestAttributes_ValidateRefusesWhatCannotBeExported(t *testing.T) {
 		{"leading digit", Attributes{"2 cents": "x"}, `attribute key "2 cents" must start with a letter`},
 		{"leading underscore", Attributes{"_site": "x"}, `attribute key "_site" must start with a letter`},
 		{"leading non-ASCII letter", Attributes{"élan": "x"}, `attribute key "élan" must start with a letter`},
+		{"orb dot", Attributes{"orb.site": "x"}, `attribute key "orb.site" is in the orb namespace`},
+		{"orb underscore", Attributes{"orb_site": "x"}, `attribute key "orb_site" is in the orb namespace`},
+		{"orb hyphen", Attributes{"orb-site": "x"}, `attribute key "orb-site" is in the orb namespace`},
 		{"null", Attributes{"site": nil}, `attribute "site" has no value`},
 		{"map", Attributes{"site": map[string]any{"name": "x"}}, `attribute "site" is a map`},
 		{"list", Attributes{"site": []any{"a", "b"}}, `attribute "site" is a list`},
@@ -122,6 +125,14 @@ func TestAttributes_ValidateRefusesWhatCannotBeExported(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.want)
 		})
+	}
+}
+
+// The enricher strips a key that is lowercase "orb" and one byte that is not
+// an ASCII letter or digit, so only those keys are refused.
+func TestAttributes_ValidateAcceptsKeysOutsideTheOrbNamespace(t *testing.T) {
+	for _, key := range []string{"orbit.site", "orb2", "ORB.site", "orb"} {
+		require.NoError(t, Attributes{key: "x"}.Validate(nil), key)
 	}
 }
 
@@ -363,7 +374,7 @@ func TestAttributes_ValidateRefusesPrometheusOwnLabels(t *testing.T) {
 	for key, prom := range map[string]string{
 		"job": "job", "instance": "instance",
 		"otel_scope_name": "otel_scope_name", "otel.scope.version": "otel_scope_version",
-		"otel.scope.schema_url": "otel_scope_schema_url", "otel_scope_policy_name": "otel_scope_policy_name",
+		"otel.scope.schema_url": "otel_scope_schema_url", "otel_scope_orb_policy_name": "otel_scope_orb_policy_name",
 		"otel-scope-anything": "otel_scope_anything",
 	} {
 		err := Attributes{key: "x"}.Validate(nil)

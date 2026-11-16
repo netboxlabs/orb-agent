@@ -103,7 +103,7 @@ func TestParsePolicies_RefusesAnAttributeItCannotExport(t *testing.T) {
 }
 
 // Every key the backend sets itself is refused, in the scope and on a target:
-// a polled series' identity and row index, the scope's policy_name, and a
+// a polled series' identity and row index, the scope's policy name, and a
 // received trap series' own dimensions.
 func TestParsePolicies_RefusesReservedAttributeKeys(t *testing.T) {
 	for _, key := range []string{"device_ip", "device_port", "netbox_id", "snmp_context", "row_index", "policy_name", "trap_name", "version"} {
@@ -307,4 +307,11 @@ func TestRunner_TrapDevicesCarryTheirTargetsAttributes(t *testing.T) {
 	require.Len(t, devices, 2)
 	assert.Equal(t, []attribute.KeyValue{attribute.String("role", "edge"), attribute.String("site", "dc-west")}, devices[0].Attributes)
 	assert.Equal(t, []attribute.KeyValue{attribute.String("site", "dc-west")}, devices[1].Attributes)
+}
+
+// The scope key is refused too, as part of the orb namespace.
+func TestParsePolicies_RefusesTheScopePolicyNameKey(t *testing.T) {
+	_, err := newTestManager().ParsePolicies([]byte(attributePolicy("        orb.policy.name: x", "            role: edge")))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `attribute key "orb.policy.name"`)
 }

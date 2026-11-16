@@ -8,7 +8,7 @@ For each target, the backend walks the device over SNMP, matches its
 `sysObjectID` against the loaded profiles, and emits the matched profile's
 metrics as OTLP gauges. Every series of a policy is exported under an
 instrumentation scope named `snmp-telemetry` with the attribute
-`policy_name` set to the policy, one scope per policy. Each gauge carries
+`orb.policy.name` set to the policy, one scope per policy. Each gauge carries
 `device_ip` and `device_port` attributes, plus `netbox_id` when the target
 sets an `id` and `snmp_context` when its authentication sets a
 `context_name`. Together with the scope they are the device identity, so two
@@ -218,7 +218,7 @@ A trap is counted, not stored. Three metrics describe what arrived:
 
 - `snmp.traps_received{device_ip, trap_name, version}` counts traps from a
   device a policy on that socket names, once per policy naming it, under
-  that policy's scope (`policy_name`), with the same `device_ip` label every
+  that policy's scope (`orb.policy.name`), with the same `device_ip` label every
   polled series carries and the policy's `attributes` for that device (see
   [Attributes](#attributes)).
   The counter is monotonic: a deleted policy's series stop being exported but
@@ -270,7 +270,7 @@ A trap is counted, not stored. Three metrics describe what arrived:
 the trap definitions in the policy's own profile set, the bundled ones plus
 whatever its `profiles_dir` adds or overrides, about two hundred names. Two
 policies on one socket may therefore name one OID differently, each under
-its own policy's scope (`policy_name`); the RFC 1215 names win over any
+its own policy's scope (`orb.policy.name`); the RFC 1215 names win over any
 profile's spelling.
 Any other trap is labelled `other`. A raw OID never appears as a label, because a
 sender chooses its own trap OID and a metric label a sender controls is
@@ -568,8 +568,13 @@ key, when:
   as a float or an unsigned integer, and either would export a different
   number from the one written;
 - a key is one the backend sets itself: `device_ip`, `device_port`,
-  `netbox_id`, `snmp_context`, `row_index`, `policy_name`, and the `trap_name`
-  and `version` of `snmp.traps_received`;
+  `netbox_id`, `snmp_context`, `row_index`, `policy_name` (the scope's name for
+  the policy in earlier releases), and the `trap_name` and `version` of
+  `snmp.traps_received`;
+- a key is in the `orb` namespace: `orb` followed by a character that is not an
+  ASCII letter or digit, such as `orb.site`, `orb_site` or `orb-site`. The Orb
+  platform sets its own `orb_*` labels and strips these keys from every series,
+  so one would be dropped. `orbit.site`, `orb2` and `ORB.site` are fine;
 - a key is one a profile of the policy's profile set exports, as a device tag,
   a row tag, or the `_status` or `_value` attribute a symbol derives from its
   reading. Which profile a device matches is only known once it answers, so a
@@ -588,7 +593,7 @@ key, when:
   the datapoint's attributes, so a key of that name would be overwritten; and
   any name starting with `otel_scope_`, the
   labels it makes from the instrumentation scope every policy's series carry,
-  such as `otel_scope_name` and `otel_scope_policy_name`, which a key of that
+  such as `otel_scope_name` and `otel_scope_orb_policy_name`, which a key of that
   name would duplicate;
 - two entries naming one device, such as a prefix and an address inside it,
   give it different attributes. Give the entries different `id` values to keep
@@ -756,9 +761,9 @@ an address.
 
 A profile's `metric_tags` become attributes beside the ones above, on the device
 or on the row. A tag that takes one of the device identity names, `row_index`,
-or `policy_name`, is dropped rather than applied: a duplicate attribute resolves
+`orb.policy.name` or `policy_name`, is dropped rather than applied: a duplicate attribute resolves
 to whichever value came last, so honouring it would replace the value that tells
-two devices or two rows apart, or shadow the scope's `policy_name` once a
+two devices or two rows apart, or shadow the scope's `orb.policy.name` once a
 receiver flattens scope attributes onto the datapoint. The profile still loads and every metric it
 declares is still collected, since a bundled profile is vendored and cannot be
 edited. The backend logs one warning naming the tag and the profile the first

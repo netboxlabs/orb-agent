@@ -382,8 +382,10 @@ func TestPolicyMeter_ExportsOneScopePerPolicy(t *testing.T) {
 	got := map[string]int64{}
 	for _, sm := range rm.ScopeMetrics {
 		assert.Equal(t, "snmp-telemetry", sm.Scope.Name)
-		policy, ok := sm.Scope.Attributes.Value(attribute.Key(PolicyNameAttribute))
+		policy, ok := sm.Scope.Attributes.Value(attribute.Key("orb.policy.name"))
 		require.True(t, ok, "every policy scope names its policy")
+		_, legacy := sm.Scope.Attributes.Value(attribute.Key("policy_name"))
+		assert.False(t, legacy, "the scope no longer carries policy_name")
 		for _, m := range sm.Metrics {
 			for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
 				assert.Equal(t, 0, dp.Attributes.Len(), "the policy is on the scope, not the datapoint")

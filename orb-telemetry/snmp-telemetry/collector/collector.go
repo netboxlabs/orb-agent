@@ -84,7 +84,7 @@ func appendDerivedAttr(attrs []attribute.KeyValue, name, value string) []attribu
 // dimension the exported series cannot express is one that silently merges two
 // devices' points.
 //
-// Every field here is exported: policy as the scope's policy_name (see
+// Every field here is exported: policy as the scope's orb.policy.name (see
 // ensureInstrument), the rest as datapoint attributes in appendIdentityAttrs.
 // Adding one without the other is what made this identity wrong twice.
 type deviceKey struct {
@@ -727,9 +727,10 @@ func appendIdentityAttrs(attrs []attribute.KeyValue, key deviceKey) []attribute.
 // A profile tag carrying one of them would replace the value rather than sit
 // beside it, since a duplicate key resolves last-value-wins. For the device
 // dimensions that would leave two devices, or two rows, sharing one series
-// with nothing left to tell them apart; for `policy_name` it would put a
+// with nothing left to tell them apart; for the scope's policy name it would put a
 // device-supplied value on the datapoint under the key the scope carries the
-// policy in, which a receiver flattening scope attributes reads.
+// policy in, which a receiver flattening scope attributes reads. Both that key
+// and the one earlier releases used are reserved.
 //
 // The device dimensions are read back from appendIdentityAttrs rather than
 // restated, so a dimension added to the identity reserves its name by the same
@@ -743,16 +744,25 @@ func appendIdentityAttrs(attrs []attribute.KeyValue, key deviceKey) []attribute.
 // derived attribute is appended rather than by reserving names here.
 var reservedAttrNames = reservedAttrNameSet()
 
+// legacyPolicyNameAttribute is the scope's policy attribute in earlier
+// releases, which the agent's bridge still reads.
+const legacyPolicyNameAttribute = "policy_name"
+
 func reservedAttrNameSet() map[string]struct{} {
 	// Every dimension is filled: appendIdentityAttrs leaves an empty one off,
 	// and a set built from a partly filled key would miss exactly the names a
 	// profile could then overwrite. A dimension added to deviceKey without a
 	// value here fails TestReservedAttrNames_AreTheExportedIdentity.
 	probe := deviceKey{policy: "p", host: "h", port: 1, id: "i", context: "c"}
-	// policy_name is reserved by name: it is the scope's attribute, not the
-	// datapoint's, and a profile tag of that name would shadow it once a
-	// receiver flattens scope attributes onto the datapoint.
-	names := map[string]struct{}{rowIndexAttr: {}, metrics.PolicyNameAttribute: {}}
+	// The scope's policy name is reserved by name: it is the scope's
+	// attribute, not the datapoint's, and a profile tag of that name would
+	// shadow it once a receiver flattens scope attributes onto the datapoint.
+	// policy_name, the key earlier releases used, stays reserved.
+	names := map[string]struct{}{
+		rowIndexAttr:                {},
+		metrics.PolicyNameAttribute: {},
+		legacyPolicyNameAttribute:   {},
+	}
 	for _, attr := range appendIdentityAttrs(nil, probe) {
 		names[string(attr.Key)] = struct{}{}
 	}

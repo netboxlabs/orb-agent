@@ -40,7 +40,7 @@ const (
 // reserves itself: job and instance, which it sets from the resource after
 // copying a datapoint's attributes; every name starting with two underscores;
 // and every name starting with otel_scope_, the labels it makes from the
-// instrumentation scope, which every policy's series carry, its policy_name
+// instrumentation scope, which every policy's series carry, its orb.policy.name
 // attribute included.
 func prometheusOwn(name string) bool {
 	return name == "job" || name == "instance" ||
@@ -153,6 +153,16 @@ func startsWithLetter(key string) bool {
 	return key != "" && (('a' <= key[0] && key[0] <= 'z') || ('A' <= key[0] && key[0] <= 'Z'))
 }
 
+// isOrbKey reports whether the Orb platform strips the key from every series:
+// lowercase "orb" followed by one byte that is not an ASCII letter or digit.
+func isOrbKey(key string) bool {
+	if len(key) < 4 || !strings.HasPrefix(key, "orb") {
+		return false
+	}
+	c := key[3]
+	return (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9')
+}
+
 // MergeAttributes lays a target's attributes over the scope's: a key the
 // target sets takes the target's value, and every other key keeps the scope's.
 // Neither map is written to. Nil when the two set nothing between them.
@@ -198,6 +208,8 @@ func (a Attributes) Validate(reserved func(string) bool) error {
 			return fmt.Errorf("attribute key %q is not valid UTF-8", key)
 		case !startsWithLetter(key):
 			return fmt.Errorf("attribute key %q must start with a letter (A-Z or a-z)", clip(key))
+		case isOrbKey(key):
+			return fmt.Errorf("attribute key %q is in the orb namespace, which the Orb platform sets and strips from every series", clip(key))
 		case len(key) > MaxKeyBytes:
 			return fmt.Errorf("attribute key %q is %d bytes, longer than the limit of %d", clip(key), len(key), MaxKeyBytes)
 		case reserved != nil && reserved(key):

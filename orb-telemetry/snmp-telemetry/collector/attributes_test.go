@@ -154,7 +154,7 @@ func TestCollectTarget_TargetAttributesReachEveryTableRow(t *testing.T) {
 }
 
 func TestReservedAttributeName_IsTheCollectorsOwnDimensions(t *testing.T) {
-	for _, name := range []string{"device_ip", "device_port", "netbox_id", "snmp_context", "row_index", "policy_name"} {
+	for _, name := range []string{"device_ip", "device_port", "netbox_id", "snmp_context", "row_index", "policy_name", "orb.policy.name"} {
 		assert.True(t, ReservedAttributeName(name), name)
 	}
 	assert.False(t, ReservedAttributeName("site"))
