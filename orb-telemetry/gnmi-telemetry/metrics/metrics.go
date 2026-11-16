@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -82,27 +83,30 @@ var dnsName = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Z
 // without a port is given the OTLP gRPC default, 4317. Left to the resolver,
 // a missing port became 443 whatever the scheme, so a plaintext http:// or
 // grpc:// URL exported to a port nothing plaintext listens on.
+//
+// A URL can carry a login, as grpc://user:password@host:port: a refusal
+// writes it masked. The parsed host, port and scheme hold none of it.
 func endpointURL(endpoint string) (*url.URL, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("otel endpoint %q is not a valid URL: %w", endpoint, err)
+		return nil, fmt.Errorf("otel endpoint %q is not a valid URL: %w", MaskedEndpoint(endpoint), parseError(endpoint, err))
 	}
 	scheme := u.Scheme
 	// The parsed hostname, not the authority: "http://:4317" has an authority
 	// and no host, and gRPC reads the empty host as localhost.
 	if u.Hostname() == "" {
-		return nil, fmt.Errorf("otel endpoint %q names no host", endpoint)
+		return nil, fmt.Errorf("otel endpoint %q names no host", MaskedEndpoint(endpoint))
 	}
 	// The same shape the bare form is held to: a URL parses with any host
 	// text, and one no resolver could look up would be retried for ever.
 	if h := u.Hostname(); net.ParseIP(h) == nil && !dnsName.MatchString(h) {
-		return nil, fmt.Errorf("otel endpoint %q: host %q is neither an IP address nor a DNS name", endpoint, h)
+		return nil, fmt.Errorf("otel endpoint %q: host %q is neither an IP address nor a DNS name", MaskedEndpoint(endpoint), h)
 	}
 	// A port written into the URL is held to the same range as the bare form's:
 	// the SDK keeps an out-of-range one and every export fails on it.
 	if port := u.Port(); port != "" {
 		if n, perr := strconv.ParseUint(port, 10, 16); perr != nil || n == 0 {
-			return nil, fmt.Errorf("otel endpoint %q: port %q must be a number between 1 and 65535", endpoint, port)
+			return nil, fmt.Errorf("otel endpoint %q: port %q must be a number between 1 and 65535", MaskedEndpoint(endpoint), port)
 		}
 	}
 	// Only the documented schemes reach the exporter. The SDK reads every
@@ -112,7 +116,7 @@ func endpointURL(endpoint string) (*url.URL, error) {
 	switch strings.ToLower(scheme) {
 	case "http", "https", "grpc", "grpcs":
 	default:
-		return nil, fmt.Errorf("otel endpoint %q: scheme %q is not http, https, grpc or grpcs", endpoint, scheme)
+		return nil, fmt.Errorf("otel endpoint %q: scheme %q is not http, https, grpc or grpcs", MaskedEndpoint(endpoint), scheme)
 	}
 
 	if u.Port() == "" {
@@ -148,6 +152,12 @@ func endpointOptions(endpoint string) ([]otlpmetric.Option, error) {
 		// the exporter build and every export retry an address that could
 		// never be dialled, under a startup line reporting it as configured.
 		bare := strings.TrimRight(endpoint, "/")
+		// A host:port holds no @. One written before a host is a login, as in
+		// user:password@host:port, which the split would quote whole, or part
+		// of, as the host or the port it reads: the refusal writes it masked.
+		if strings.Contains(bare, "@") {
+			return nil, fmt.Errorf("otel endpoint %q is neither host:port nor a URL with a scheme", MaskedEndpoint(endpoint))
+		}
 		host, port, err := net.SplitHostPort(bare)
 		if err != nil {
 			return nil, fmt.Errorf("otel endpoint %q is neither host:port nor a URL with a scheme: %w", endpoint, err)
@@ -184,6 +194,22 @@ func endpointOptions(endpoint string) ([]otlpmetric.Option, error) {
 		opts = append(opts, otlpmetric.WithTLSCredentials(credentials.NewTLS(nil)))
 	}
 	return opts, nil
+}
+
+// parseError returns err, the error url.Parse returned for endpoint, with the
+// login endpoint carries masked: url.Parse's error quotes the URL whole, and
+// its reason can quote a part of the login, as the port it reads in a
+// password that holds a /. It is the error url.Parse returns for the masked
+// URL, or, when that parses, one that says the URL's user info is invalid.
+func parseError(endpoint string, err error) error {
+	masked := MaskedEndpoint(endpoint)
+	if masked == endpoint {
+		return err
+	}
+	if _, merr := url.Parse(masked); merr != nil {
+		return merr
+	}
+	return &url.Error{Op: "parse", URL: masked, Err: errors.New("invalid user info")}
 }
 
 // SetupMetricsExport configures the OTLP metrics exporter with a periodic reader.

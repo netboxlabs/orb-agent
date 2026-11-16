@@ -1,6 +1,7 @@
 package pktvisor_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -396,4 +397,28 @@ func TestPktvisorBackendWritesItsConfigFileAtStart(t *testing.T) {
 	assert.Contains(t, string(content), "default_pcap")
 	assert.Contains(t, string(content), "port: "+port, "the file carries the picked port, the same one -p does")
 	assert.Equal(t, port, mocks.FlagValue(args, "-p"))
+}
+
+// A collector URL can carry a login, as user:password@host. pktvisor is told
+// its host and port, and the error about one that does not parse writes it
+// with its login masked: url.Parse's own error quotes the URL whole.
+func TestPktvisorMasksTheCollectorLoginInWhatItReports(t *testing.T) {
+	require.True(t, pktvisor.Register())
+	be := backend.GetBackend("pktvisor")
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	commons := config.BackendCommons{}
+	commons.Otlp.HTTP = "http://" + mocks.CollectorUser + ":" + mocks.CollectorPassword + "@127.0.0.1:4318"
+	require.NoError(t, be.Configure(logger, repo, map[string]any{}, commons, nil))
+	assert.Contains(t, logs.String(), "host=127.0.0.1 port=4318", "pktvisor is told the collector's host and port")
+	assert.NotContains(t, logs.String(), mocks.CollectorUser)
+	assert.NotContains(t, logs.String(), mocks.CollectorPassword)
+
+	commons.Otlp.HTTP = "http://" + mocks.CollectorUser + ":" + mocks.CollectorPassword + "@[bad:4318"
+	err = be.Configure(logger, repo, map[string]any{}, commons, nil)
+	require.Error(t, err)
+	assert.Equal(t, `failed to parse otlp receiver http url: parse "http://********@[bad:4318": missing ']' in host`, err.Error())
 }

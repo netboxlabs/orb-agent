@@ -2,11 +2,14 @@
 # Copyright 2025 NetBox Labs Inc
 """NetBox Labs - Metrics Unit Tests."""
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk.metrics.export import MetricsData
 
-from worker.metrics import get_metric, setup_metrics_export
+from worker.metrics import get_metric, mask_login, setup_metrics_export
 
 
 @pytest.fixture
@@ -209,3 +212,173 @@ def test_setup_metrics_export_meter_provider_error(mock_opentelemetry, reset_met
         # Verify metrics are not enabled and get_metric returns None
         metric = get_metric("api_requests")
         assert metric is None
+
+
+@pytest.mark.parametrize(
+    ("text", "endpoint", "want"),
+    [
+        (
+            "grpc://canary-user:canary-pass@127.0.0.1:4317",
+            "grpc://canary-user:canary-pass@127.0.0.1:4317",
+            "grpc://********@127.0.0.1:4317",
+        ),
+        (
+            "canary-user:canary-pass@127.0.0.1:4317",
+            "canary-user:canary-pass@127.0.0.1:4317",
+            "********@127.0.0.1:4317",
+        ),
+        ("dns:///Canary-T0ken@collector:4317", "dns:///Canary-T0ken@collector:4317", "dns:///********@collector:4317"),
+        (
+            "exporting to canary-user:canary-pass@127.0.0.1:4317 failed",
+            "grpc://canary-user:canary-pass@127.0.0.1:4317",
+            "exporting to ********@127.0.0.1:4317 failed",
+        ),
+        ("grpc://127.0.0.1:4317", "grpc://127.0.0.1:4317", "grpc://127.0.0.1:4317"),
+        ("", "", ""),
+    ],
+)
+def test_mask_login(text, endpoint, want):
+    """The login a collector URL carries is masked wherever a text writes it before an @."""
+    assert mask_login(text, endpoint) == want
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["grpc://canary-user:canary-pass@127.0.0.1:4317", "canary-user:canary-pass@127.0.0.1:4317"],
+)
+def test_setup_metrics_export_masks_the_collector_login(mock_opentelemetry, reset_metrics_cache, caplog, endpoint):
+    """The exporter is given a collector URL as written, and the log writes its login masked."""
+    with caplog.at_level(logging.DEBUG, logger="worker.metrics"):
+        setup_metrics_export(endpoint, 30)
+
+    _, kwargs = mock_opentelemetry["exporter"].call_args
+    assert kwargs["endpoint"] == endpoint
+    masked = endpoint.replace("canary-user:canary-pass@", "********@")
+    assert f"OTLP metrics exporter configured with endpoint: {masked}" in caplog.messages
+    for message in caplog.messages:
+        assert "canary-user" not in message
+        assert "canary-pass" not in message
+
+
+def test_setup_metrics_export_masks_the_collector_login_in_its_error(mock_opentelemetry, reset_metrics_cache, caplog):
+    """An error building the exporter that writes the collector's address writes its login masked."""
+    endpoint = "grpc://canary-user:canary-pass@127.0.0.1:4317"
+    mock_opentelemetry["exporter"].side_effect = ValueError("cannot dial canary-user:canary-pass@127.0.0.1:4317")
+
+    with caplog.at_level(logging.DEBUG, logger="worker.metrics"):
+        setup_metrics_export(endpoint, 30)
+
+    assert "Failed to setup metrics export: cannot dial ********@127.0.0.1:4317" in caplog.messages
+    for message in caplog.messages:
+        assert "canary-user" not in message
+        assert "canary-pass" not in message
+
+
+@pytest.mark.parametrize(
+    ("text", "endpoint", "want"),
+    [
+        # A login written without a scheme that holds a // or a :// is still
+        # everything before the last @.
+        ("user:pa//ss@collector:4317", "user:pa//ss@collector:4317", "********@collector:4317"),
+        ("user:pa://ss@h:4317", "user:pa://ss@h:4317", "********@h:4317"),
+        ("user:pass@collector:4317//x", "user:pass@collector:4317//x", "********@collector:4317//x"),
+        # With a scheme, the login ends at the last @ of the authority.
+        ("grpc://u:p@h:4317?x=y@z", "grpc://u:p@h:4317?x=y@z", "grpc://********@h:4317?x=y@z"),
+        # A value written with spaces around it, as a URL parser trims it.
+        (
+            " grpc://canary-user:canary-pass@127.0.0.1:4317 ",
+            " grpc://canary-user:canary-pass@127.0.0.1:4317 ",
+            " grpc://********@127.0.0.1:4317 ",
+        ),
+        # A user alone is masked only where it starts a word.
+        (
+            "device contact noc-ops@example.com, ssh ops@10.0.0.1",
+            "grpc://ops@collector:4317",
+            "device contact noc-ops@example.com, ssh ********@10.0.0.1",
+        ),
+        # Percent-decoded, as the gRPC client writes the address, and escaped.
+        (
+            "errors resolving canary-user:canary@pass@127.0.0.1:1",
+            "grpc://canary-user:canary%40pass@127.0.0.1:1",
+            "errors resolving ********@127.0.0.1:1",
+        ),
+        (
+            '{"error": "dial canary-user:canary\\"pass@h:4317"}',
+            'canary-user:canary"pass@h:4317',
+            '{"error": "dial ********@h:4317"}',
+        ),
+    ],
+)
+def test_mask_login_reads_the_login_as_the_agent_does(text, endpoint, want):
+    """The login is read and masked as the agent reads and masks it."""
+    assert mask_login(text, endpoint) == want
+
+
+def test_mask_login_masks_what_the_exporter_writes_for_a_percent_encoded_login(caplog):
+    """
+    The real exporter writes the login as written and percent-decoded.
+
+    A password holding an @ is percent-encoded in a URL. The gRPC client
+    decodes the address it is given and writes it decoded in the error the
+    exporter logs for every export it fails.
+    """
+    endpoint = "grpc://canary-user:canary%40pass@127.0.0.1:1"
+    exporter = OTLPMetricExporter(endpoint=endpoint, timeout=1, insecure=True)
+    try:
+        with caplog.at_level(logging.WARNING):
+            exporter.export(MetricsData(resource_metrics=[]))
+    finally:
+        exporter.shutdown()
+
+    messages = [r.getMessage() for r in caplog.records if r.name.startswith("opentelemetry")]
+    assert any("canary-user:canary@pass@127.0.0.1:1" in m for m in messages)
+    for message in messages:
+        masked = mask_login(message, endpoint)
+        assert "canary" not in masked
+        assert "********@127.0.0.1:1" in masked
+
+
+@pytest.mark.parametrize(
+    ("text", "endpoint"),
+    [
+        # A user and a password are masked wherever they come before an @.
+        ("INFO:device_discovery.client:user:pass@h:4317 unreachable", "grpc://user:pass@h:4317"),
+        ("target:user:pass@h:4317", "grpc://user:pass@h:4317"),
+        ("x-user:pass@h", "grpc://user:pass@h:4317"),
+        ("1user:pass@h", "grpc://user:pass@h:4317"),
+        ("\x1b[31muser:pass@h:4317\x1b[0m", "grpc://user:pass@h:4317"),
+        # gRPC strips a resolver's scheme written without //.
+        ("invalid target address user:pass@127.0.0.1:1", "dns:user:pass@127.0.0.1:1"),
+        # The login is read from the authority, whatever follows it.
+        ("dial user:pass@h", "grpc://user:pass@h:4317/%zz@x"),
+        ("dial user:pass@h", "grpc://user:pass@h:4317/x/a:b@c"),
+        # Decoded leniently, an invalid escape kept.
+        ("errors resolving user:pass%zz@x@127.0.0.1:1", "grpc://user:pass%zz%40x@127.0.0.1:1"),
+    ],
+)
+def test_mask_login_masks_a_user_and_a_password_wherever_they_are(text, endpoint):
+    """A user and a password are masked wherever a text writes them before an @."""
+    masked = mask_login(text, endpoint)
+    assert "user:pass" not in masked
+    assert "********@" in masked
+
+
+def test_mask_login_masks_what_the_exporter_writes_for_a_login_decoding_to_bytes_that_are_not_utf8():
+    """
+    The exporter writes a login decoding to bytes that are not UTF-8 as Latin-1.
+
+    A password written with a raw %, as canary%F3pass, decodes to a byte that
+    is not UTF-8: Python's gRPC writes the error that holds it as Latin-1.
+    The line below is one the real exporter logged for this endpoint. gRPC
+    does not always log it, as it can fail an export before the exporter
+    gets the error, so it was captured rather than awaited.
+    """
+    endpoint = "grpc://canary-user:canary%F3pass@127.0.0.1:1"
+    line = (
+        "Failed to export metrics to canary-user:canary%F3pass@127.0.0.1:1, error code: StatusCode.UNAVAILABLE,"
+        " error details: errors resolving canary-user:canary\xf3pass@127.0.0.1:1: [field:hostname lookup error:"
+        "address lookup failed for canary-user:canary\xf3pass@127.0.0.1:1: Misformatted domain name]"
+    )
+    masked = mask_login(line, endpoint)
+    assert "canary" not in masked
+    assert masked.count("********@127.0.0.1:1") == 3

@@ -114,8 +114,10 @@ func (d *gnmiDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
+		// A collector URL can carry a login, as user:password@host, with or
+		// without a scheme: it is logged with its user info masked.
 		d.logger.Info("gnmi-discovery using OTLP endpoint",
-			"endpoint", d.diodeOtelEndpoint)
+			"endpoint", redact.Endpoint(d.diodeOtelEndpoint))
 	}
 	if d.diodeTarget == "" && d.diodeOtelEndpoint != "" {
 		d.diodeTarget = d.diodeOtelEndpoint
@@ -167,7 +169,7 @@ func (d *gnmiDiscoveryBackend) buildArgs() []string {
 	}
 	if d.diodeOtelEndpoint != "" {
 		args = append(args, "--otel-endpoint", d.diodeOtelEndpoint)
-		d.logger.Info("gnmi-discovery using OTLP metrics endpoint", "endpoint", d.diodeOtelEndpoint)
+		d.logger.Info("gnmi-discovery using OTLP metrics endpoint", "endpoint", redact.Endpoint(d.diodeOtelEndpoint))
 	}
 
 	// gNMI-specific options

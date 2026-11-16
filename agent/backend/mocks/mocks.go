@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -277,4 +278,46 @@ func FlagValue(args []string, flag string) string {
 		}
 	}
 	return ""
+}
+
+// CollectorUser and CollectorPassword are the login of the collector URLs in
+// LoginCollectors: canaries, which no line a backend logs may write.
+const (
+	CollectorUser     = "canary-user"
+	CollectorPassword = "canary-pass"
+)
+
+// MaskedCollector is the collector of LoginCollectors as a line a backend
+// logs writes it: with its login masked.
+const MaskedCollector = "********@127.0.0.1:4317"
+
+// LoginCollectors are collector URLs that carry a login, with a scheme and
+// without one.
+var LoginCollectors = []string{
+	"grpc://" + CollectorUser + ":" + CollectorPassword + "@127.0.0.1:4317",
+	CollectorUser + ":" + CollectorPassword + "@127.0.0.1:4317",
+}
+
+// AssertCollectorLoginMasked asserts that logs, what a backend logged, write
+// the login of LoginCollectors nowhere, and that each of messages is the
+// message of a line that writes the collector with its login masked.
+func AssertCollectorLoginMasked(t testing.TB, logs string, messages ...string) {
+	t.Helper()
+	for _, secret := range []string{CollectorUser, CollectorPassword} {
+		if strings.Contains(logs, secret) {
+			t.Errorf("the log writes %q:\n%s", secret, logs)
+		}
+	}
+	for _, msg := range messages {
+		found := false
+		for line := range strings.SplitSeq(logs, "\n") {
+			if strings.Contains(line, msg) && strings.Contains(line, MaskedCollector) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("no line %q writes the collector as %q:\n%s", msg, MaskedCollector, logs)
+		}
+	}
 }

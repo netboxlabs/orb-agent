@@ -1,8 +1,10 @@
 package redact
 
 import (
+	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -991,6 +993,32 @@ func TestEndpoint_MasksTheUserInfoOfAValueKnownToBeAURLOrAnAddress(t *testing.T)
 	}
 }
 
+// TestParseError_MasksTheUserInfoOfTheURLItFailedToParse masks the login of a
+// URL that url.Parse refused wherever the error's text writes it: the URL it
+// quotes, and a part of the user info its reason quotes, as the port it reads
+// in a password that holds a /.
+func TestParseError_MasksTheUserInfoOfTheURLItFailedToParse(t *testing.T) {
+	for raw, want := range map[string]string{
+		"grpc://canary-user:canary-pass@[bad:4317": `parse "grpc://********@[bad:4317": missing ']' in host`,
+		"grpc://canary-user:canary/pass@host:4317": `parse "grpc://********@host:4317": invalid user info`,
+		"http://canary-user:canary%zz@host:4318":   `parse "http://********@host:4318": invalid user info`,
+		"http://[::1":                              `parse "http://[::1": missing ']' in host`,
+	} {
+		_, err := url.Parse(raw)
+		if err == nil {
+			t.Fatalf("url.Parse(%q) parsed", raw)
+		}
+		got := ParseError(raw, err)
+		if got.Error() != want {
+			t.Errorf("ParseError(%q) = %q, want %q", raw, got, want)
+		}
+		var uerr *url.Error
+		if !errors.As(got, &uerr) {
+			t.Errorf("ParseError(%q) is no *url.Error", raw)
+		}
+	}
+}
+
 // TestSensitiveData_AuthArgsKeepsOnlyAStringUnderAKeptName keeps a field of
 // a Vault login's auth_args only as its login reads it: under the exact name,
 // and a string. A Vault login matches the names exactly.
@@ -1198,6 +1226,41 @@ func TestArgs(t *testing.T) {
 			name:  "client secret followed by flag-like value",
 			input: []string{"--client-secret", "-x-custom-header-value", "--url", "https://example.com"},
 			want:  []string{"--client-secret", MaskedSecret, "--url", "https://example.com"},
+		},
+		{
+			name:  "collector URL carrying a login",
+			input: []string{"--otel-endpoint", "grpc://canary-user:canary-pass@127.0.0.1:4317", "--host", "localhost"},
+			want:  []string{"--otel-endpoint", "grpc://" + MaskedSecret + "@127.0.0.1:4317", "--host", "localhost"},
+		},
+		{
+			name:  "target carrying a login written without a scheme",
+			input: []string{"--diode-target", "canary-user:canary-pass@127.0.0.1:4317"},
+			want:  []string{"--diode-target", MaskedSecret + "@127.0.0.1:4317"},
+		},
+		{
+			name:  "endpoint carrying a token alone, written without a scheme or a port",
+			input: []string{"--otel-endpoint", "Canary-T0ken@collector.example"},
+			want:  []string{"--otel-endpoint", MaskedSecret + "@collector.example"},
+		},
+		{
+			name:  "URL carrying a login in any other argument",
+			input: []string{"--url", "https://canary-user:canary-pass@example.com", "--flag=grpc://canary-user:canary-pass@h:4317"},
+			want:  []string{"--url", "https://" + MaskedSecret + "@example.com", "--flag=grpc://" + MaskedSecret + "@h:4317"},
+		},
+		{
+			name:  "an argument holding an @ but no URL is kept as written",
+			input: []string{"--policy", `{"u":"a:b@h"}`, "--image", "img@sha256:0123abcd"},
+			want:  []string{"--policy", `{"u":"a:b@h"}`, "--image", "img@sha256:0123abcd"},
+		},
+		{
+			name:  "a URL with an empty authority in any other argument keeps its third /",
+			input: []string{"--url", "dns:///canary-user:canary-pass@collector:4317"},
+			want:  []string{"--url", "dns:///" + MaskedSecret + "@collector:4317"},
+		},
+		{
+			name:  "endpoint without a login and an e-mail address are kept",
+			input: []string{"--otel-endpoint", "grpc://127.0.0.1:4317", "--contact", "ops@example.com"},
+			want:  []string{"--otel-endpoint", "grpc://127.0.0.1:4317", "--contact", "ops@example.com"},
 		},
 	}
 

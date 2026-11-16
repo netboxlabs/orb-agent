@@ -247,6 +247,61 @@ func TestStartProcess_StreamsValidUTF8(t *testing.T) {
 	assert.Equal(t, []string{"crash output \ufffd( from the child"}, stderrLines)
 }
 
+// A collector URL can carry a login, as user:password@host, which the
+// process is given as written. Its libraries write the URL's address, login
+// included, into their own lines, as a gRPC client does for an address it
+// cannot dial and an OTLP exporter for each export it fails: the agent masks
+// the login in every line it relays.
+func TestStartProcess_MasksTheLoginOfAnEndpointItIsGivenInWhatItRelays(t *testing.T) {
+	stubProcessTimers(t)
+	fake := newFakeCommander(4243)
+	captured := stubNewCmdOptions(t, fake)
+
+	fake.stdoutCh <- "WARNING: opentelemetry.exporter.otlp.proto.grpc.exporter: Transient error StatusCode.UNAVAILABLE" +
+		" encountered while exporting metrics to canary-user:canary-pass@127.0.0.1:4317, retrying in 0.98s."
+	fake.stderrCh <- "rpc error: code = Unavailable desc = invalid target address canary-user:canary-pass@127.0.0.1:4317"
+
+	var (
+		logMu sync.Mutex
+		lines []string
+	)
+	args := []string{
+		"--otel-endpoint", "grpc://canary-user:canary-pass@127.0.0.1:4317",
+		"--diode-target", "canary-user:canary-pass@127.0.0.1:4317",
+	}
+	err := StartProcess(StartSpec{
+		Logger:         testProcessLogger(),
+		NameDisplay:    "test-backend",
+		NameUnderscore: "test_backend",
+		Exec:           "test-exec",
+		Args:           args,
+		ListenAddr:     testListenAddr(t),
+		LogLine: func(line string, _ bool) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			lines = append(lines, line)
+		},
+		SetProc:        func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) { return "1.2.3", nil },
+	})
+	require.NoError(t, err)
+	assert.Equal(t, args, captured.args, "the process is given the URLs as written")
+
+	require.Eventually(t, func() bool {
+		logMu.Lock()
+		defer logMu.Unlock()
+		return len(lines) == 2
+	}, time.Second, 5*time.Millisecond)
+
+	logMu.Lock()
+	defer logMu.Unlock()
+	assert.ElementsMatch(t, []string{
+		"WARNING: opentelemetry.exporter.otlp.proto.grpc.exporter: Transient error StatusCode.UNAVAILABLE" +
+			" encountered while exporting metrics to ********@127.0.0.1:4317, retrying in 0.98s.",
+		"rpc error: code = Unavailable desc = invalid target address ********@127.0.0.1:4317",
+	}, lines)
+}
+
 // TestStartProcess_SetProcBeforeReadiness is the regression guard for the
 // nil-proc readiness bug: SetProc MUST publish a non-nil, running Commander
 // BEFORE the first ReadinessCheck call. The check records the proc it observes

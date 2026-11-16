@@ -387,3 +387,35 @@ func TestGnmiTelemetryBackendStartPicksAPortWhenUnset(t *testing.T) {
 		})
 	}
 }
+
+// A collector URL can carry a login, as user:password@host, with a scheme or
+// without one. The process is given it as written, as its OTLP endpoint, and
+// every line the backend logs writes it with the login masked.
+func TestGnmiTelemetryMasksTheCollectorLoginInItsLog(t *testing.T) {
+	for _, collector := range mocks.LoginCollectors {
+		t.Run(collector, func(t *testing.T) {
+			host, port := mocks.APIStandIn(t, "127.0.0.1")
+			mockCmd := &mocks.MockCmd{}
+			mocks.SetupSuccessfulProcess(mockCmd, 12399)
+			var args []string
+			overrideNewCmdOptions(t, mockCmd, func(_ backend.CmdOptions, _ string, a []string) { args = a })
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			require.True(t, gnmitelemetry.Register())
+			be := backend.GetBackend("gnmi_telemetry")
+			repo, err := policies.NewMemRepo()
+			require.NoError(t, err)
+			commons := config.BackendCommons{}
+			commons.Otlp.Grpc = collector
+			require.NoError(t, be.Configure(logger, repo, map[string]any{"host": host, "port": port}, commons, nil))
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			require.NoError(t, be.Start(ctx, cancel))
+
+			assert.Equal(t, collector, mocks.FlagValue(args, "--otel-endpoint"), "the process exports to the collector as written")
+			mocks.AssertCollectorLoginMasked(t, logs.String(), "gnmi-telemetry using OTLP endpoint", "gnmi-telemetry startup")
+		})
+	}
+}

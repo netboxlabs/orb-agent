@@ -2,6 +2,7 @@ package redact
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
@@ -74,6 +75,13 @@ var sensitiveFlagSuffixes = []string{
 	"-private-key",
 	"-api-key",
 	"-auth-key",
+}
+
+// endpointFlagSuffixes are the suffixes of the flags whose value is a URL or
+// a host address, as --otel-endpoint and --diode-target are.
+var endpointFlagSuffixes = []string{
+	"-endpoint",
+	"-target",
 }
 
 // SensitiveData creates a deep copy of the input data and masks sensitive fields.
@@ -775,6 +783,26 @@ func Endpoint(s string) string {
 	return MaskedSecret + s[at:]
 }
 
+// ParseError returns err, the error url.Parse returned for raw, a value its
+// caller knows is a URL or a host address, with the user info raw carries
+// masked wherever the error's text writes it. The *url.Error url.Parse
+// returns quotes raw whole, and its reason can quote a part of the user
+// info, as the port url.Parse reads in a password that holds a /. The error
+// returned is the one url.Parse returns for raw masked as Endpoint masks it,
+// or, when that parses, one that says raw's user info is invalid, which is
+// then what url.Parse refused. err is returned as it is when raw carries no
+// user info.
+func ParseError(raw string, err error) error {
+	masked := Endpoint(raw)
+	if masked == raw {
+		return err
+	}
+	if _, merr := url.Parse(masked); merr != nil {
+		return merr
+	}
+	return &url.Error{Op: "parse", URL: masked, Err: errors.New("invalid user info")}
+}
+
 // startsWithScheme reports whether s starts with a scheme and its ://.
 func startsWithScheme(s string) bool {
 	end := strings.Index(s, "://")
@@ -1001,6 +1029,13 @@ func isSensitiveField(fieldName string) bool {
 
 // Args creates a copy of command-line arguments with sensitive values masked.
 // It detects sensitive flags (like --client-secret) and masks their values.
+// It also masks the user info of a URL in any other argument, as a
+// collector's grpc://user:password@host carries a login: the value of a flag
+// that names an endpoint or a target (--otel-endpoint, --diode-target) as
+// Endpoint masks it, so a login written without a scheme is masked too, and
+// any other argument that holds an @ and a // as Endpoint masks it when it
+// starts with the URL, and as URL does otherwise. Every other argument, as
+// JSON or an image digest that holds an @, is kept as written.
 // Returns a new slice - the original is never modified.
 func Args(args []string) []string {
 	if args == nil {
@@ -1011,18 +1046,45 @@ func Args(args []string) []string {
 	result := make([]string, len(args))
 	copy(result, args)
 
-	// Scan for sensitive flags and mask the following value
 	for i := 0; i < len(result); i++ {
-		if isSensitiveArg(result[i]) {
+		switch {
+		case isSensitiveArg(result[i]):
 			// Mask the next argument if it exists
 			if i+1 < len(result) {
 				result[i+1] = MaskedSecret
 				i++ // Skip the next iteration since we just processed it
 			}
+		case isEndpointArg(result[i]) && i+1 < len(result):
+			result[i+1] = Endpoint(result[i+1])
+			i++
+		case strings.Contains(result[i], "@") && strings.Contains(result[i], "//"):
+			// A URL written from its scheme's :// or its //, as Endpoint
+			// masks it, which keeps the third / of an empty authority;
+			// one after a flag's =, as URL does.
+			if startsWithScheme(result[i]) || strings.HasPrefix(result[i], "//") {
+				result[i] = Endpoint(result[i])
+			} else {
+				result[i] = URL(result[i])
+			}
 		}
 	}
 
 	return result
+}
+
+// isEndpointArg reports whether arg is a flag whose value is a URL or a host
+// address.
+func isEndpointArg(arg string) bool {
+	lower := strings.ToLower(arg)
+	if !strings.HasPrefix(lower, "-") {
+		return false
+	}
+	for _, suffix := range endpointFlagSuffixes {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // isSensitiveArg checks if a CLI argument is a sensitive flag
