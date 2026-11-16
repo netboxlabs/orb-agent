@@ -166,17 +166,17 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 			Path: "/interfaces/interface[name=*]/state/counters", Mode: "sample",
 			Attributes: map[string]string{"device_ip": "name"},
 			Metrics:    []Metric{{Leaf: "in-octets", Name: "n", Type: "counter"}},
-		}}}, `attribute device_ip is set by the collector`},
+		}}}, `attribute device_ip is reserved by the collector`},
 		{"attribute_name_reserved_scope", Profile{Name: "x", Subscriptions: []Subscription{{
 			Path: "/interfaces/interface[name=*]/state/counters", Mode: "sample",
 			Attributes: map[string]string{"policy_name": "name"},
 			Metrics:    []Metric{{Leaf: "in-octets", Name: "n", Type: "counter"}},
-		}}}, `attribute policy_name is set by the collector`},
+		}}}, `attribute policy_name is reserved by the collector`},
 		{"attribute_name_reserved_scope_key", Profile{Name: "x", Subscriptions: []Subscription{{
 			Path: "/interfaces/interface[name=*]/state/counters", Mode: "sample",
 			Attributes: map[string]string{"orb.policy.name": "name"},
 			Metrics:    []Metric{{Leaf: "in-octets", Name: "n", Type: "counter"}},
-		}}}, `attribute orb.policy.name is set by the collector`},
+		}}}, `attribute orb.policy.name is reserved by the collector`},
 		// Two nested lists keyed alike: a match reports one value per key name,
 		// so the inner element's wins and both attributes carry the interface
 		// name, collapsing every instance onto one series.

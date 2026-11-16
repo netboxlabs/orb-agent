@@ -403,9 +403,9 @@ key, when:
 - an integer does not fit a signed 64-bit integer. The YAML decoder reads one
   as a float or an unsigned integer, and either would export a different
   number from the one written;
-- a key is one the collector sets itself: `device_ip`, `netbox_id`,
-  `orb.policy.name` and `policy_name` (the instrumentation scope's policy key
-  and the one earlier releases used), and the `mode` of `gnmi.target_up`;
+- a key is one the collector sets itself: `device_ip`, `netbox_id` and the
+  `mode` of `gnmi.target_up`; or `policy_name`, the policy scope key of earlier
+  releases, which stays reserved;
 - a key is in the `orb` namespace: lowercase `orb` followed by a character
   that is not an ASCII letter or digit, such as `orb.site`, `orb_site` or
   `orb-site`. The Orb platform sets its own `orb_*` labels and strips every
@@ -677,8 +677,9 @@ subscriptions:
   attribute, since the key value is the only thing telling the elements of the
   list apart and an unpromoted one has them all write a single series. The
   attribute name on the left may not be `device_ip` or `netbox_id`, which the
-  collector sets on the datapoint, or `orb.policy.name` or `policy_name`, which
-  it sets on the series' instrumentation scope.
+  collector sets on the datapoint. `orb.policy.name`, the policy's scope key,
+  and `policy_name`, the policy scope key of earlier releases, are reserved
+  too.
 - `origin` may be set per subscription, and overrides the target's for that path
   alone. `origin: ""` asks under the target's native schema, which is how the SR
   Linux overlay reads memory paths OpenConfig does not carry. A path with its own
