@@ -291,3 +291,49 @@ func TestExpandTargets_APinnedTargetKeepsItsOwnAttributes(t *testing.T) {
 	assert.Equal(t, config.Attributes{"site": "dc-west", "role": "access"}, byHost["10.0.0.1"])
 	assert.Equal(t, config.Attributes{"site": "dc-west", "role": "edge"}, byHost["10.0.0.2"])
 }
+
+// A policy handed to NewRunner directly, not through ParsePolicies, has had
+// no scope inheritance, so the runner merges the scope's attributes into each
+// target itself; otherwise a key set only on the scope reaches no series. The
+// caller's policy is left as it was.
+func TestNewRunner_MergesTheScopesAttributesIntoADirectPolicy(t *testing.T) {
+	pol := minimalPolicy()
+	pol.Scope.Attributes = config.Attributes{"site": "dc-west"}
+	pol.Scope.Targets = []config.Target{
+		{Host: "192.0.2.1"},
+		{Host: "192.0.2.2", Attributes: config.Attributes{"site": "dc-east", "role": "edge"}},
+	}
+	spy := &spyCollector{}
+	r, err := NewRunner(t.Context(), testLogger, "edge-metrics", pol, spy, testDialer())
+	require.NoError(t, err)
+	r.Start()
+	require.NoError(t, r.Stop())
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	assert.Equal(t, config.Attributes{"site": "dc-west"}, spy.attrs["192.0.2.1"], "scope only")
+	assert.Equal(t, config.Attributes{"site": "dc-east", "role": "edge"}, spy.attrs["192.0.2.2"])
+	assert.Nil(t, pol.Scope.Targets[0].Attributes, "the caller's policy is not written to")
+}
+
+// The overlap between two ranges is refused on the direct path too, where
+// Manager.validatePolicy never ran: a policy handed to StartPolicy as it
+// stands still has its ranges checked against each other.
+func TestStartPolicy_RefusesOverlappingRangesInADirectPolicy(t *testing.T) {
+	m := newTestManager()
+	t.Cleanup(func() { _ = m.Stop() })
+	pol := minimalPolicy()
+	pol.Scope.Targets = []config.Target{
+		{Host: "10.0.0.10-20", Attributes: config.Attributes{"role": "edge"}},
+		{Host: "10.0.0.15-30", Attributes: config.Attributes{"role": "core"}},
+	}
+	err := m.StartPolicy("edge-metrics", pol)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "edge-metrics: invalid policy: targets 10.0.0.10-20 and 10.0.0.15-30 both name 10.0.0.15 with different attributes")
+	assert.False(t, m.HasPolicy("edge-metrics"))
+
+	// A scope attribute both ranges inherit is no conflict once merged.
+	pol.Scope.Attributes = config.Attributes{"role": "edge"}
+	pol.Scope.Targets = []config.Target{{Host: "10.0.0.10-20"}, {Host: "10.0.0.15-30", Attributes: config.Attributes{"role": "edge"}}}
+	require.NoError(t, m.StartPolicy("edge-metrics", pol))
+}
