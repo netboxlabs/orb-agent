@@ -213,11 +213,11 @@ func (a Attributes) Validate(reserved func(string) bool) error {
 		case len(key) > MaxKeyBytes:
 			return fmt.Errorf("attribute key %q is %d bytes, longer than the limit of %d", clip(key), len(key), MaxKeyBytes)
 		case reserved != nil && reserved(key):
-			return fmt.Errorf("attribute key %q is reserved: the backend sets it on its series", key)
+			return fmt.Errorf("attribute key %q is reserved for the backend's own attributes", key)
 		}
 		prom := PrometheusName(key)
 		if reserved != nil && reserved(prom) {
-			return fmt.Errorf("attribute key %q becomes %q in Prometheus, which the backend sets on its series", key, prom)
+			return fmt.Errorf("attribute key %q becomes %q in Prometheus, a name reserved for the backend's own attributes", key, prom)
 		}
 		if prometheusOwn(prom) {
 			return fmt.Errorf("attribute key %q becomes %q in Prometheus, a label Prometheus sets itself", key, prom)

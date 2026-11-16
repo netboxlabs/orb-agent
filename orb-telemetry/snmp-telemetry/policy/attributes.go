@@ -12,7 +12,8 @@ import (
 
 // reservedAttributeKey reports whether a policy attribute would take the key
 // of a dimension the backend sets itself: a polled series' identity and row
-// index, the scope's policy name, or a received trap series' own dimensions.
+// index, or a received trap series' own dimensions; or the scope's policy key,
+// orb.policy.name, or policy_name, its key in earlier releases.
 func reservedAttributeKey(key string) bool {
 	return collector.ReservedAttributeName(key) || traps.ReservedAttributeName(key)
 }

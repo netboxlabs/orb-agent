@@ -568,11 +568,11 @@ key, when:
   as a float or an unsigned integer, and either would export a different
   number from the one written;
 - a key is one the backend sets itself: `device_ip`, `device_port`,
-  `netbox_id`, `snmp_context`, `row_index`, `policy_name` (the scope's name for
-  the policy in earlier releases), and the `trap_name` and `version` of
-  `snmp.traps_received`;
-- a key is in the `orb` namespace: `orb` followed by a character that is not an
-  ASCII letter or digit, such as `orb.site`, `orb_site` or `orb-site`. The Orb
+  `netbox_id`, `snmp_context`, `row_index`, the `trap_name` and `version` of
+  `snmp.traps_received`, and `policy_name`, the policy scope key of earlier
+  releases;
+- a key is in the `orb` namespace: lowercase `orb` followed by a character that
+  is not an ASCII letter or digit, such as `orb.site`, `orb_site` or `orb-site`. The Orb
   platform sets its own `orb_*` labels and strips these keys from every series,
   so one would be dropped. `orbit.site`, `orb2` and `ORB.site` are fine;
 - a key is one a profile of the policy's profile set exports, as a device tag,
@@ -761,10 +761,11 @@ an address.
 
 A profile's `metric_tags` become attributes beside the ones above, on the device
 or on the row. A tag that takes one of the device identity names, `row_index`,
-`orb.policy.name` or `policy_name`, is dropped rather than applied: a duplicate attribute resolves
-to whichever value came last, so honouring it would replace the value that tells
-two devices or two rows apart, or shadow the scope's `orb.policy.name` once a
-receiver flattens scope attributes onto the datapoint. The profile still loads and every metric it
+`orb.policy.name` (the policy scope key) or `policy_name` (the policy scope key
+of earlier releases), is dropped rather than applied: a duplicate attribute
+resolves to whichever value came last, so honouring it would replace the value
+that tells two devices or two rows apart, or shadow the scope's policy name once
+a receiver flattens scope attributes onto the datapoint. The profile still loads and every metric it
 declares is still collected, since a bundled profile is vendored and cannot be
 edited. The backend logs one warning naming the tag and the profile the first
 time a device matches that profile. No bundled profile declares such a tag, so

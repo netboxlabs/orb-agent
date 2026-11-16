@@ -730,7 +730,8 @@ func appendIdentityAttrs(attrs []attribute.KeyValue, key deviceKey) []attribute.
 // with nothing left to tell them apart; for the scope's policy name it would put a
 // device-supplied value on the datapoint under the key the scope carries the
 // policy in, which a receiver flattening scope attributes reads. Both that key
-// and the one earlier releases used are reserved.
+// (orb.policy.name) and the scope key of earlier releases (policy_name) are
+// reserved; the collector sets neither on a datapoint.
 //
 // The device dimensions are read back from appendIdentityAttrs rather than
 // restated, so a dimension added to the identity reserves its name by the same
@@ -757,7 +758,7 @@ func reservedAttrNameSet() map[string]struct{} {
 	// The scope's policy name is reserved by name: it is the scope's
 	// attribute, not the datapoint's, and a profile tag of that name would
 	// shadow it once a receiver flattens scope attributes onto the datapoint.
-	// policy_name, the key earlier releases used, stays reserved.
+	// policy_name, the scope key of earlier releases, stays reserved.
 	names := map[string]struct{}{
 		rowIndexAttr:                {},
 		metrics.PolicyNameAttribute: {},

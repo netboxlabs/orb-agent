@@ -110,6 +110,9 @@ func TestAttributes_ValidateRefusesWhatCannotBeExported(t *testing.T) {
 		{"orb dot", Attributes{"orb.site": "x"}, `attribute key "orb.site" is in the orb namespace`},
 		{"orb underscore", Attributes{"orb_site": "x"}, `attribute key "orb_site" is in the orb namespace`},
 		{"orb hyphen", Attributes{"orb-site": "x"}, `attribute key "orb-site" is in the orb namespace`},
+		{"orb colon", Attributes{"orb:site": "x"}, `attribute key "orb:site" is in the orb namespace`},
+		{"orb multibyte", Attributes{"orbé": "x"}, `attribute key "orbé" is in the orb namespace`},
+		{"orb and one separator", Attributes{"orb.": "x"}, `attribute key "orb." is in the orb namespace`},
 		{"null", Attributes{"site": nil}, `attribute "site" has no value`},
 		{"map", Attributes{"site": map[string]any{"name": "x"}}, `attribute "site" is a map`},
 		{"list", Attributes{"site": []any{"a", "b"}}, `attribute "site" is a list`},
@@ -131,7 +134,7 @@ func TestAttributes_ValidateRefusesWhatCannotBeExported(t *testing.T) {
 // The enricher strips a key that is lowercase "orb" and one byte that is not
 // an ASCII letter or digit, so only those keys are refused.
 func TestAttributes_ValidateAcceptsKeysOutsideTheOrbNamespace(t *testing.T) {
-	for _, key := range []string{"orbit.site", "orb2", "ORB.site", "orb"} {
+	for _, key := range []string{"orbit.site", "orb2", "ORB.site", "orb", "orbSite"} {
 		require.NoError(t, Attributes{key: "x"}.Validate(nil), key)
 	}
 }
@@ -142,6 +145,10 @@ func TestAttributes_ValidateRefusesReservedKeys(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `attribute key "device_ip" is reserved`)
 	require.NoError(t, Attributes{"Device_IP": "x"}.Validate(reserved), "keys are case-sensitive")
+
+	err = Attributes{"device.ip": "192.0.2.1"}.Validate(reserved)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `a name reserved for the backend's own attributes`)
 }
 
 // Validation walks the keys in order, so the same policy is refused with the
