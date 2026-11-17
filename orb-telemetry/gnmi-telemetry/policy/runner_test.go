@@ -21,6 +21,7 @@ type spyCollector struct {
 	started []collector.Options
 	hosts   []string
 	ports   []uint16
+	attrs   map[string]config.Attributes
 	forgot  []string
 }
 
@@ -30,6 +31,10 @@ func (s *spyCollector) CollectTarget(_ context.Context, t config.Target, o colle
 	s.started = append(s.started, o)
 	s.hosts = append(s.hosts, t.Host)
 	s.ports = append(s.ports, t.Port)
+	if s.attrs == nil {
+		s.attrs = map[string]config.Attributes{}
+	}
+	s.attrs[t.Host] = t.Attributes
 	return nil
 }
 
@@ -40,6 +45,8 @@ func (s *spyCollector) ForgetPolicy(name string) {
 }
 
 func (s *spyCollector) TargetStatuses(string) []collector.TargetStatus { return nil }
+
+func (s *spyCollector) ProfileAttribute(string) (name, profile string, ok bool) { return "", "", false }
 
 // forgotten is what the lifecycle tests assert on.
 func (s *spyCollector) forgotten() []string {

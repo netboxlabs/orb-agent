@@ -64,13 +64,49 @@ orb:
 
 A target's `host` is one address or hostname, a CIDR prefix, or a range over the last octet; a prefix or range is swept, and each address that answers Capabilities gets a subscription of its own, while the ones that do not are probed again only when `config.rescan_interval_ms` is set. A credential or a TLS file path may be read from the agent's environment as `${NAME}` only when `policy_env_vars` in the backend configuration names it; otherwise the policy is refused. A CIDR or range target may carry a credential only when TLS verifies the server, as `tls.ca` does above, or when the policy sets `send_credentials_to_unverified_targets: true`.
 
+### Attributes
+A policy can put attributes of its own on every series of its targets, exported as OTLP datapoint attributes. `scope.attributes` applies to every target, and `attributes` on a target applies to that target, a key it sets taking the target's value over the scope's:
+
+```yaml
+orb:
+  policies:
+    gnmi_telemetry:
+      edge_metrics:
+        config:
+          metrics_interval: 30
+        scope:
+          username: "admin"
+          password: "${GNMI_PASSWORD}"
+          attributes:
+            netbox.site.name: "dc-west"
+            netbox.tenant.name: "tenant-a"
+          targets:
+            - host: "192.168.1.1"
+            - host: "192.168.1.2"
+              attributes:
+                netbox.site.name: "dc-east"
+                rack_units: 2
+```
+
+- Keys start with an ASCII letter, are valid UTF-8 and are case-sensitive; no other convention is enforced. OTel-style names keep them clear of the names the profiles promote: a `netbox.` namespace with the property named, such as `netbox.site.name`, which Prometheus shows as `netbox_site_name`. A string, `true` or `false`, an integer within 64 bits or a float is exported as a string, a boolean, a 64-bit integer or a double.
+- The merge is key by key: a target's block overrides the keys it names and keeps the rest of the scope's, so a target cannot remove a scope key.
+- A target's attributes are bounded in number, in the length of each key and string value, and in their size together, since every series and every export repeats them; the limits are under [`attributes`](../../orb-telemetry/gnmi-telemetry/README.md#attributes).
+- The policy is refused, with an error naming the policy, the target and the key, for a null, map, list, empty string or unquoted date, an integer past 64 bits, an empty key, a key the collector sets itself (`device_ip`, `netbox_id`, the `mode` of `gnmi.target_up`, and `policy_name`, the policy scope key of earlier releases), a key in the `orb` namespace (`orb.`, `orb_` and the like), which the Orb platform strips, or a key a profile of the policy's profile set promotes, such as `interface_name` or `component_name` in the bundled set.
+- Keys are also compared as Prometheus writes them, every character outside `[A-Za-z0-9_]` turned into an underscore: `netbox.id` is refused because it becomes `netbox_id`, `netbox.site.name` beside `netbox_site_name` because the two become one label, and `job`, `instance` or a key starting with `otel_scope_` because Prometheus sets or reserves those labels itself, the `otel_scope_` ones from the instrumentation scope every policy's series carry. A key must start with a letter because Prometheus prefixes any other: `2 cents` would become `key_2_cents`.
+- Two ranges sharing an address with different attributes are refused when the policy is applied; give them the same attributes, or split the ranges so they share no address. A target naming a single address inside a range keeps its own attributes, as it keeps its own port and credentials, but does not clear a conflict between two ranges.
+- `gnmi.target_up` carries the target's attributes too.
+- A change takes effect when the policy is applied again: an edit reaches the backend as a removal followed by an apply.
+- The agent re-encodes a policy before posting it, so some numbers change type on the way: a float with no fractional part below 1,000,000 in magnitude, such as `3.0`, arrives as the integer `3`; an integer of 2^64 or more, or below -2^63, arrives as a float; and when Fleet delivers the policy as a JSON object, an integer of magnitude 1,000,000 or more (1,000,000 or more, or -1,000,000 or less) arrives as a float. Quote a number to keep its exact text.
+
+`attributes` needs orb-agent 2.18.0 (gnmi-telemetry 1.2.0). With an older agent, the backend logs `ignoring unrecognized policy key` with `key=attributes` and runs the policy without them. The full rules are under [`attributes`](../../orb-telemetry/gnmi-telemetry/README.md#attributes) in the backend README.
+
 ### Delivery modes
 For each target the backend selects a metric profile from the vendor and network OS the device reports, and asks for the profile's paths in the mode the profile names: counters at the `metrics_interval` SAMPLE cadence, states ON_CHANGE. A device that refuses that request is asked for SAMPLE on every path, and one that refuses that too is polled with Get at the same interval. `config.mode` narrows the ladder: `on_change` keeps the profile's own modes and skips the all-SAMPLE rung, `sample` asks for SAMPLE on every path from the start; both still fall to Get. A target may set its own `mode`, and `profile` pins a metric profile instead of matching it from the device's Capabilities.
 
 The full parameter tables are in the backend README under [Policy Configuration](../../orb-telemetry/gnmi-telemetry/README.md#policy-configuration).
 
 ## Metrics
-Every metric name comes from the profile: a profile metric named `if_in_octets` is exported as `gnmi.if_in_octets`, so the names a policy produces are known before it runs. Every series is exported under an instrumentation scope carrying `policy_name`, one scope per policy, and carries `device_ip`, plus `netbox_id` when the target sets `id`, and whatever path keys the profile promotes, such as `interface_name`. A profile metric of type `counter` is exported as a cumulative total and one of type `gauge` as a gauge; an enumerated or boolean leaf is mapped to the integer the profile names.
+Every metric name comes from the profile: a profile metric named `if_in_octets` is exported as `gnmi.if_in_octets`, so the names a policy produces are known before it runs. Every series is exported under an instrumentation scope carrying `orb.policy.name`, one scope per policy, and carries `device_ip`, plus `netbox_id` when the target sets `id`, whatever path keys the profile promotes, such as `interface_name`, and the policy's own `attributes` for the target. A profile metric of type `counter` is exported as a cumulative total and one of type `gauge` as a gauge; an enumerated or boolean leaf is mapped to the integer the profile names.
 
 A SAMPLE or Get series that receives no update for three `metrics_interval`s is withheld and dropped until the device sends the leaf again; an ON_CHANGE series keeps its last value until the device deletes the element, the stream's next initial dump omits it, or the policy stops.
 

@@ -29,10 +29,11 @@ import (
 const scopeName = "gnmi-telemetry"
 
 // PolicyNameAttribute is the instrumentation-scope attribute naming the
-// policy whose series a ScopeMetrics holds. It is the same key pktvisor and
-// snmp-telemetry put on their per-policy scopes, so the agent's bridge reads
-// one convention.
-const PolicyNameAttribute = "policy_name"
+// policy whose series a ScopeMetrics holds. The agent's OTLP bridge reads it
+// to stamp the policy's id and backend on the scope, so a new key must be
+// read by the bridge before this backend sends it. Earlier releases named the
+// key policy_name, which the bridge still reads.
+const PolicyNameAttribute = "orb.policy.name"
 
 // Global variables for meter and cache
 var (
@@ -357,7 +358,7 @@ func GetMeter() metric.Meter {
 }
 
 // PolicyMeter returns the meter every series of policyName is exported
-// under: the process scope with policy_name=policyName as an
+// under: the process scope with orb.policy.name=policyName as an
 // instrumentation attribute. The SDK exports one ScopeMetrics per distinct
 // scope, so a policy's series arrive grouped under its name and no
 // datapoint has to repeat it. It is nil when export is disabled. The

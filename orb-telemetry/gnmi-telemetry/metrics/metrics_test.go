@@ -525,6 +525,32 @@ func collectProbe(t *testing.T, reader sdkmetric.Reader) (points int, overflow b
 	return points, overflow
 }
 
+// A policy's scope names the policy under orb.policy.name and does not carry
+// the key earlier releases used.
+func TestPolicyMeter_ScopeCarriesOrbPolicyName(t *testing.T) {
+	ResetMeter()
+	t.Cleanup(ResetMeter)
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	SetMeterProviderForTest(provider)
+
+	ctx := context.Background()
+	c, err := PolicyMeter("core").Int64Counter("gnmi.test_total")
+	require.NoError(t, err)
+	c.Add(ctx, 1)
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(ctx, &rm))
+	require.Len(t, rm.ScopeMetrics, 1)
+	attrs := rm.ScopeMetrics[0].Scope.Attributes
+	v, ok := attrs.Value("orb.policy.name")
+	require.True(t, ok)
+	assert.Equal(t, "core", v.AsString())
+	_, legacy := attrs.Value("policy_name")
+	assert.False(t, legacy, "the earlier scope key is not set")
+}
+
 // A policy's meter is the process scope with the policy named as an
 // instrumentation attribute, so the SDK exports one ScopeMetrics per policy
 // and the datapoints never repeat the policy.

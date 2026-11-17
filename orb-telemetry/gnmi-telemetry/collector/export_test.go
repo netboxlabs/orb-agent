@@ -42,7 +42,7 @@ func collect(t *testing.T, reader *sdkmetric.ManualReader) map[string]metricdata
 	return out
 }
 
-// collectByPolicy runs one collection and indexes metrics by the policy_name
+// collectByPolicy runs one collection and indexes metrics by the orb.policy.name
 // of the scope they were exported under ("" for the process scope), then by
 // name, for tests that care which scope a series left under. Every
 // collection is recorded in the reader's log (exportedByPolicy).
@@ -197,8 +197,8 @@ func TestExporterObservesStoreAsCounterAndGauge(t *testing.T) {
 	reader := testReader(t)
 	e := newExporter(newStore(100), nil, nil)
 	attrs := []attribute.KeyValue{attribute.String("device_ip", "10.0.0.1"), attribute.String("interface_name", "e1")}
-	require.Empty(t, e.observeCounter("p", "if_in_octets", "By", attrs, 1394, time.Now().UnixNano(), age))
-	require.Empty(t, e.observeGauge("p", "if_oper_status", "", attrs, 1, time.Now().UnixNano(), age))
+	require.Empty(t, e.observeCounter("p", "if_in_octets", "By", attrs, 1394, time.Now().UnixNano(), age, nil))
+	require.Empty(t, e.observeGauge("p", "if_oper_status", "", attrs, 1, time.Now().UnixNano(), age, nil))
 
 	got := collect(t, reader)
 	sum, ok := got["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
@@ -227,7 +227,7 @@ func TestExporterWithholdsStaleSeries(t *testing.T) {
 	reader := testReader(t)
 	e := newExporter(newStore(100), nil, nil)
 	attrs := []attribute.KeyValue{attribute.String("device_ip", "1")}
-	require.Empty(t, e.observeGauge("p", "cpu_utilization", "%", attrs, 12, time.Now().Add(-time.Minute).UnixNano(), age))
+	require.Empty(t, e.observeGauge("p", "cpu_utilization", "%", attrs, 12, time.Now().Add(-time.Minute).UnixNano(), age, nil))
 	_, stored := e.store.get(seriesKey{metric: "cpu_utilization", policy: "p", attrs: attrKey(attrs)})
 	require.True(t, stored, "the store accepted the write")
 	got := collect(t, reader)
@@ -241,8 +241,8 @@ func TestExporterExportsEachPolicyUnderItsOwnScope(t *testing.T) {
 	e := newExporter(newStore(100), nil, nil)
 	attrs := []attribute.KeyValue{attribute.String("device_ip", "10.0.0.1"), attribute.String("interface_name", "e1")}
 	now := time.Now().UnixNano()
-	require.Empty(t, e.observeCounter("core", "if_in_octets", "By", attrs, 10, now, age))
-	require.Empty(t, e.observeCounter("edge", "if_in_octets", "By", attrs, 20, now, age))
+	require.Empty(t, e.observeCounter("core", "if_in_octets", "By", attrs, 10, now, age, nil))
+	require.Empty(t, e.observeCounter("edge", "if_in_octets", "By", attrs, 20, now, age, nil))
 
 	byPolicy := collectByPolicy(t, reader)
 	core := byPolicy["core"]["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
@@ -263,8 +263,8 @@ func TestExporterForgetPolicyStopsThatPolicysExport(t *testing.T) {
 	e := newExporter(newStore(100), nil, nil)
 	attrs := []attribute.KeyValue{attribute.String("device_ip", "10.0.0.1")}
 	now := time.Now().UnixNano()
-	require.Empty(t, e.observeGauge("core", "cpu", "%", attrs, 1, now, age))
-	require.Empty(t, e.observeGauge("edge", "cpu", "%", attrs, 2, now, age))
+	require.Empty(t, e.observeGauge("core", "cpu", "%", attrs, 1, now, age, nil))
+	require.Empty(t, e.observeGauge("edge", "cpu", "%", attrs, 2, now, age, nil))
 	require.Len(t, collectByPolicy(t, reader), 2)
 
 	e.store.forgetPolicy("core")
@@ -273,8 +273,8 @@ func TestExporterForgetPolicyStopsThatPolicysExport(t *testing.T) {
 	// edge's value is sent again, so a collection would carry it if its
 	// callback were still registered; core's is too, so one would carry it
 	// if its callback were.
-	require.Empty(t, e.observeGauge("edge", "cpu", "%", attrs, 2, time.Now().UnixNano(), age))
-	e.store.setGauge(seriesKey{metric: "cpu", policy: "core", attrs: attrKey(attrs)}, 1, time.Now().UnixNano(), age, attrs)
+	require.Empty(t, e.observeGauge("edge", "cpu", "%", attrs, 2, time.Now().UnixNano(), age, nil))
+	e.store.setGauge(seriesKey{metric: "cpu", policy: "core", attrs: attrKey(attrs)}, 1, time.Now().UnixNano(), age, attrs, nil)
 	byPolicy := collectByPolicy(t, reader)
 	_, coreLeft := byPolicy["core"]["gnmi.cpu"]
 	assert.False(t, coreLeft, "a forgotten policy exports nothing")
@@ -288,7 +288,7 @@ func TestExporterForgetPolicyStopsThatPolicysExport(t *testing.T) {
 	assert.False(t, regsLeft)
 	e.store.forgetPolicy("core")
 
-	require.Empty(t, e.observeGauge("core", "cpu", "%", attrs, 3, time.Now().UnixNano(), age))
+	require.Empty(t, e.observeGauge("core", "cpu", "%", attrs, 3, time.Now().UnixNano(), age, nil))
 	byPolicy = collectByPolicy(t, reader)
 	g := byPolicy["core"]["gnmi.cpu"].Data.(metricdata.Gauge[float64])
 	require.Len(t, g.DataPoints, 1)
@@ -306,7 +306,7 @@ func TestExporterForgetPolicyStopsExportWithTheSeriesStillInTheStore(t *testing.
 	e := newExporter(newStore(100), nil, nil)
 	attrs := []attribute.KeyValue{attribute.String("device_ip", "10.0.0.1")}
 	now := time.Now().UnixNano()
-	require.Empty(t, e.observeGauge("core", "cpu", "%", attrs, 1, now, age))
+	require.Empty(t, e.observeGauge("core", "cpu", "%", attrs, 1, now, age, nil))
 	require.Len(t, collectByPolicy(t, reader), 1)
 
 	e.forgetPolicy("core")
@@ -352,8 +352,8 @@ func TestObservationsAreNotStoredWithoutAMeter(t *testing.T) {
 	require.Nil(t, metrics.GetMeter(), "this test runs with the export disabled")
 	st := newStore(100)
 	e := newExporter(st, nil, nil)
-	assert.Equal(t, "", e.observeGauge("p", "g", "", []attribute.KeyValue{attribute.String("device_ip", "h")}, 1, time.Now().UnixNano(), 0))
-	assert.Equal(t, "", e.observeCounter("p", "c", "", []attribute.KeyValue{attribute.String("device_ip", "h")}, 1, time.Now().UnixNano(), 0))
+	assert.Equal(t, "", e.observeGauge("p", "g", "", []attribute.KeyValue{attribute.String("device_ip", "h")}, 1, time.Now().UnixNano(), 0, nil))
+	assert.Equal(t, "", e.observeCounter("p", "c", "", []attribute.KeyValue{attribute.String("device_ip", "h")}, 1, time.Now().UnixNano(), 0, nil))
 	st.mu.RLock()
 	defer st.mu.RUnlock()
 	assert.Empty(t, st.series, "nothing is stored when nothing can be exported")

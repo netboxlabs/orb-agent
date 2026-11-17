@@ -9,9 +9,10 @@ one subscription carrying every path that profile names. Each notification is
 matched back to the profile, converted, and written into a last-value store that
 observable instruments read on the export cadence. Every series of a policy is
 exported under an instrumentation scope named `gnmi-telemetry` with the
-attribute `policy_name` set to the policy, one scope per policy. Every series
-carries `device_ip`, plus `netbox_id` when the target sets an `id` and
-whatever path keys its profile promotes, such as `interface_name`. The SDK
+attribute `orb.policy.name` set to the policy, one scope per policy. Every series
+carries `device_ip`, plus `netbox_id` when the target sets an `id`,
+whatever path keys its profile promotes, such as `interface_name`, and the
+policy's own `attributes` for the target. The SDK
 keeps a meter, and an instrument per metric name, for every distinct policy
 name seen over the process lifetime; a restart clears it.
 Metrics are sent only when `--otel-endpoint` is set; without it, targets are
@@ -289,6 +290,9 @@ set on the command line rather than by a policy.
 
 Every field here is a default for the policy's targets, and a target that sets
 the same field keeps its own value, an explicitly empty one included.
+`attributes` is the exception: it merges key by key, so a target's own block
+overrides the keys it names and keeps the rest of the scope's, an empty block
+keeps them all, and a target cannot remove a scope key.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -300,6 +304,7 @@ the same field keeps its own value, an explicitly empty one included.
 | `tls.insecure` | boolean | `false` | Opts out of TLS entirely, in the clear. |
 | `tls.ca` | path | none | The CA bundle the server certificate is verified against, instead of the host's roots. |
 | `tls.cert`, `tls.key` | path | none | A client certificate and key, for a device that authenticates the caller with one. |
+| `attributes` | map | none | Attributes every series of every target carries; see [`attributes`](#attributes) below. |
 | `targets` | list | required | The devices, below. |
 
 #### `targets`
@@ -314,6 +319,7 @@ the same field keeps its own value, an explicitly empty one included.
 | `origin` | string | the scope's | This target's request origin. |
 | `mode` | `auto`, `on_change` or `sample` | the policy's | The delivery mode for this target alone. |
 | `profile` | profile name | auto-detect | Pins the metric profile instead of matching the NOS or vendor from Capabilities. An unknown name falls back to matching, with a warning. |
+| `attributes` | map | the scope's | Attributes every series of this target carries. A key set here takes this value; every other key keeps the scope's. |
 
 A policy request body is capped at 1 MiB, and a larger one is rejected with HTTP
 413 before it is parsed. That ceiling is far above any policy this backend
@@ -325,6 +331,143 @@ so the API also sets connection deadlines: 10 seconds to finish the request
 headers, 30 seconds for headers and body together, 60 seconds from the headers
 to the last byte of the response, and 60 seconds idle on a kept-alive
 connection.
+
+#### `attributes`
+
+A policy can put key/value pairs of its own on every series a target produces,
+exported as OTLP datapoint attributes beside the device identity. `attributes`
+under `scope` applies to every target, and `attributes` on a target applies to
+that target: a key the target sets takes the target's value, and every other
+key keeps the scope's. Unlike the other scope fields, which a target's own
+value replaces whole, the merge is key by key, so an empty block on a target
+still carries the scope's keys and a target cannot remove one; leave it out of
+the scope instead.
+
+```yaml
+policies:
+  edge_metrics:
+    config:
+      metrics_interval: 30
+    scope:
+      username: admin
+      password: admin-pass
+      attributes:
+        netbox.site.name: dc-west
+        netbox.tenant.name: tenant-a
+      targets:
+        - host: 192.0.2.10
+        - host: 192.0.2.11
+          attributes:
+            netbox.site.name: dc-east
+            rack_units: 2
+```
+
+Every series of `192.0.2.10` carries `netbox.site.name="dc-west"` and
+`netbox.tenant.name="tenant-a"`; every series of `192.0.2.11` carries
+`netbox.site.name="dc-east"`, `netbox.tenant.name="tenant-a"` and
+`rack_units=2`. `gnmi.target_up` carries them too.
+
+Keys and values:
+
+- A key is a valid UTF-8 string of at most 128 bytes that starts with an
+  ASCII letter (A-Z or a-z), and keys are case-sensitive. No other convention
+  is enforced. OTel-style names keep clear
+  of the names the profiles promote: a `netbox.` namespace with the property
+  named, such as `netbox.site.name`, which Prometheus shows as
+  `netbox_site_name`.
+- A value is a YAML scalar, exported as the OpenTelemetry type of the same
+  kind: a string as a string, `true` or `false` as a boolean, an integer as a
+  64-bit integer and a float as a double.
+- A target carries at most 32 attributes, the scope's included, and a string
+  value is at most 256 bytes. Its keys and string values together are at most
+  1024 bytes. Every exported datapoint repeats them, and one export carries
+  every policy's telemetry, which the agent's OTLP bridge receives up to
+  64 MiB at a time. The per-key limits alone would let a datapoint carry
+  about 12 KiB of attributes, enough to fill that with some 5,300
+  datapoints and drop the whole export; the total holds it to 1 KiB.
+
+The policy is refused, with an error naming the policy, the target and the
+key, when:
+
+- a key is empty, not valid UTF-8, or too long, or the target's attributes
+  are too many or too large together;
+- a key does not start with an ASCII letter. Translation to Prometheus puts
+  `key_` before a name that starts with a digit and `key` before one that
+  starts with a single underscore, so `2 cents` would land on `key_2_cents`,
+  a name another key can have;
+- a value is null, a map, a list, an empty string, a string too long or not
+  valid UTF-8, an unquoted date (quote it to send it as a string), or a float
+  that is not finite. An empty string is refused rather than sent, since a
+  Prometheus-style backend reads an empty label as no label at all; leave the
+  key out instead;
+- an integer does not fit a signed 64-bit integer. The YAML decoder reads one
+  as a float or an unsigned integer, and either would export a different
+  number from the one written;
+- a key is one the collector sets itself: `device_ip`, `netbox_id` and the
+  `mode` of `gnmi.target_up`; or `policy_name`, the policy scope key of earlier
+  releases, which stays reserved;
+- a key is in the `orb` namespace: lowercase `orb` followed by a character
+  that is not an ASCII letter or digit, such as `orb.site`, `orb_site` or
+  `orb-site`. The Orb platform sets its own `orb_*` labels and strips every
+  such key from each series. `orbit.site`, `orb2` and `ORB.site` are not in it;
+- a key is one a profile of the policy's profile set promotes from a path
+  key. Which profile serves a target is only known once it answers
+  Capabilities, so a key any profile promotes would meet that profile's
+  attribute on some target. This is checked when the policy starts, and the
+  error names the profile. The bundled set promotes `interface_name`,
+  `component_name`, `cpu_index` and `slot`;
+- two keys collide once translated to Prometheus, which replaces every
+  character outside `[A-Za-z0-9_]` with an underscore and joins two labels
+  that land on one name with `;`. A key that becomes a reserved or promoted
+  name, such as `netbox.id` (`netbox_id`), would corrupt a label that
+  identifies the series, and two keys of one target that become one name,
+  such as `netbox.site.name` and `netbox_site_name`, would corrupt each
+  other. `netbox.site.name` on its own is fine;
+- a key becomes, in Prometheus form, a label Prometheus sets or reserves
+  itself: `job` and `instance`, which it sets from the resource after copying
+  the datapoint's attributes, so a key of that name would be overwritten; and
+  any name starting with `otel_scope_`, the
+  labels it makes from the instrumentation scope every policy's series carry,
+  such as `otel_scope_name` and `otel_scope_orb_policy_name`, which a key of that
+  name would duplicate;
+- two range targets share an address and give it different attributes. The
+  sweep keeps whichever of them expanded to the address first, so the other's
+  attributes would be dropped without a word. Ranges and prefixes are IPv4
+  arithmetic, so this is decided when the policy is applied, before anything
+  is probed. Give the two ranges the same attributes, or split them so they
+  share no address. A target naming a single address inside a range is not a
+  conflict: it wins over the range's candidate for that address and keeps its
+  own attributes, as it keeps its own port and credentials. It does not clear
+  a conflict between two ranges, which share their other addresses still.
+
+Changes, the agent and older versions:
+
+- The attributes are fixed for a target, so they never split or merge its
+  series. A change takes effect when the policy is applied again: the agent
+  applies an edit as a removal followed by an apply, so the series carrying
+  the old values end and the next update carries the new ones.
+- The agent decodes a policy and encodes it again before posting it, which
+  changes some numbers, and the backend cannot tell what was written:
+  - A float with no fractional part below 1,000,000 in magnitude, such as
+    `3.0`, arrives as the integer `3`.
+  - From a YAML body, an integer from 2^63 up to 2^64 - 1 arrives as written
+    and is refused, but one of 2^64 or more, or below -2^63, arrives already
+    turned into a float, such as `1e+20`, and is exported as a double.
+  - When Fleet delivers the policy as a JSON object, every number is a float
+    to the agent, so an integer of magnitude 1,000,000 or more (1,000,000 or
+    more, or -1,000,000 or less) arrives as a float, such as `1.234567e+06`,
+    and is exported as a double, losing digits past 2^53.
+
+  Quote a number whose exact text matters, so it is sent as a string.
+- They are datapoint attributes, not resource attributes, because one
+  resource serves every target of the backend, and a Prometheus-style backend
+  turns resource attributes into a separate `target_info` series rather than
+  labels on each series, so they could not filter a dashboard.
+
+`attributes` needs orb-agent 2.18.0, which ships gnmi-telemetry 1.2.0. An
+older backend logs `ignoring unrecognized policy key` with `key=attributes`,
+once for the scope and once for each target that sets it, and runs the policy
+without the attributes.
 
 ### Metrics
 
@@ -340,13 +483,14 @@ with reason `schema_conflict`.
 Every series carries:
 
 - `device_ip`, the target's host as the policy named it. The policy is not a
-  datapoint attribute: it is the `policy_name` of the instrumentation scope
+  datapoint attribute: it is the `orb.policy.name` of the instrumentation scope
   the series is exported under, so two policies watching one device keep
   separate series on separate scopes.
 - `netbox_id`, when the target sets `id`.
 - Whatever the profile's subscription promotes from the path keys:
   `interface_name` on the interface subtrees, `cpu_index`, `component_name`,
   and `slot` on the SR Linux native memory paths.
+- The policy's own [`attributes`](#attributes) for the target.
 
 A profile metric of type `counter` becomes an observable counter reported as a
 cumulative total, and one of type `gauge` becomes an observable gauge. A gauge
@@ -434,7 +578,7 @@ Eight metrics describe the backend itself rather than a device:
 | Metric | Kind | Attributes | Meaning |
 | --- | --- | --- | --- |
 | `gnmi.targets_active` | up-down counter | none | Targets with a running loop, across every policy. |
-| `gnmi.target_up` | gauge | `device_ip`, `mode` (under the policy's scope) | 1 while the target has a live stream or poll, 0 while it is reconnecting. `mode` is the rung it settled on. |
+| `gnmi.target_up` | gauge | `device_ip`, `mode`, the target's `attributes` (under the policy's scope) | 1 while the target has a live stream or poll, 0 while it is reconnecting. `mode` is the rung it settled on. |
 | `gnmi.subscription_reconnects_total` | counter | none | Reconnects after a stream ended or failed. Backoff runs from one second to a thirty second cap, and resets after an attempt that served: one that delivered data, or one whose stream answered the sync response closing its initial dump, which is all a subscription over an empty subtree ever carries. |
 | `gnmi.notifications_total` | counter | none | Notifications received from any target. |
 | `gnmi.updates_dropped_total` | counter | `reason` | Updates that produced no series: `unmatched_path` for a path no profile metric claims, `unconvertible_value` for a value the metric's type cannot take, `series_limit` for one refused by the cardinality bound, `schema_conflict` for one whose metric name is already exported with another kind or unit. |
@@ -533,8 +677,9 @@ subscriptions:
   attribute, since the key value is the only thing telling the elements of the
   list apart and an unpromoted one has them all write a single series. The
   attribute name on the left may not be `device_ip` or `netbox_id`, which the
-  collector sets on the datapoint, or `policy_name`, which it sets on the
-  series' instrumentation scope.
+  collector sets on the datapoint. `orb.policy.name`, the policy's scope key,
+  and `policy_name`, the policy scope key of earlier releases, are reserved
+  too.
 - `origin` may be set per subscription, and overrides the target's for that path
   alone. `origin: ""` asks under the target's native schema, which is how the SR
   Linux overlay reads memory paths OpenConfig does not carry. A path with its own

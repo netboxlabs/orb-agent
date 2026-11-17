@@ -84,6 +84,10 @@ func (g *gatedCollector) CollectTarget(_ context.Context, _ config.Target, _ col
 
 func (g *gatedCollector) TargetStatuses(string) []collector.TargetStatus { return nil }
 
+func (g *gatedCollector) ProfileAttribute(string) (name, profile string, ok bool) {
+	return "", "", false
+}
+
 func (g *gatedCollector) ForgetPolicy(string) {
 	close(g.entered)
 	<-g.release

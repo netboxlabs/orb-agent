@@ -39,6 +39,24 @@ func TestEffectiveTargetIsIdempotentAndDefaults(t *testing.T) {
 	assert.Equal(t, TLSConfig{}, got.ResolvedTLS())
 }
 
+// A target inherits the scope's attributes key by key, the way it inherits a
+// credential, and applying the inheritance twice changes nothing.
+func TestEffectiveTargetMergesAttributes(t *testing.T) {
+	scope := Scope{Attributes: Attributes{"site": "dc-west", "tenant": "tenant-a"}}
+	own := EffectiveTarget(scope, Target{Host: "10.0.0.1", Attributes: Attributes{"site": "dc-east", "role": "edge"}})
+	assert.Equal(t, Attributes{"site": "dc-east", "tenant": "tenant-a", "role": "edge"}, own.Attributes)
+	assert.Equal(t, own, EffectiveTarget(scope, own))
+
+	plain := EffectiveTarget(scope, Target{Host: "10.0.0.2"})
+	assert.Equal(t, Attributes{"site": "dc-west", "tenant": "tenant-a"}, plain.Attributes, "scope only")
+
+	only := EffectiveTarget(Scope{}, Target{Host: "10.0.0.3", Attributes: Attributes{"role": "edge"}})
+	assert.Equal(t, Attributes{"role": "edge"}, only.Attributes, "target only")
+
+	none := EffectiveTarget(Scope{}, Target{Host: "10.0.0.4"})
+	assert.Nil(t, none.Attributes)
+}
+
 func TestPolicyConfigResolvers(t *testing.T) {
 	var c PolicyConfig
 	assert.Equal(t, time.Duration(DefaultProbeTimeoutMs)*time.Millisecond, c.ResolvedProbeTimeout())

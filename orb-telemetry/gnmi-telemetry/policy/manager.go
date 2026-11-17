@@ -300,7 +300,7 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 // Nothing else is excluded. A space, a percent sequence, a query or fragment
 // character and a non-ASCII name all survive the round trip. Invalid UTF-8
 // cannot reach here at all, the YAML parser having refused the document, which
-// is what the exported `policy_name` scope attribute needs of the name.
+// is what the exported `orb.policy.name` scope attribute needs of the name.
 func ValidatePolicyName(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("policy name must not be empty or only whitespace")
@@ -822,10 +822,16 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 			}
 		}
 	}
+	if err := validateAttributes(policy.Scope); err != nil {
+		return err
+	}
 	if err := checkDuplicateTargets(policy.Scope.Targets); err != nil {
 		return err
 	}
-	return checkPolicyExpansion(policy.Scope.Targets)
+	if err := checkPolicyExpansion(policy.Scope.Targets); err != nil {
+		return err
+	}
+	return checkOverlappingAttributes(policy.Scope.Targets)
 }
 
 // carriesCredential reports whether a target would authenticate to whatever it

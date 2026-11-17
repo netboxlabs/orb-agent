@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"net"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,8 +87,11 @@ type loop struct {
 	// streams on change. Guarded by loopsMu as upSlot is.
 	upSent   upSample
 	interval time.Duration
-	mu       sync.Mutex
-	status   TargetStatus
+	// attrs are the target's own attributes, which target_up carries beside
+	// its device_ip and mode. Fixed for the loop's life.
+	attrs  []attribute.KeyValue
+	mu     sync.Mutex
+	status TargetStatus
 }
 
 // upSample is one exported target_up point. The zero value is none yet.
@@ -137,6 +142,11 @@ type Collector struct {
 	// waits for loopsMu, and RegisterCallback waits for that pipeline lock.
 	upMu         sync.Mutex
 	upRegistered map[string]bool
+	// profileAttrs maps every attribute the profile set promotes to the
+	// first profile promoting it. The set is fixed for the collector's life,
+	// so it is built once, on first use.
+	profileAttrsOnce sync.Once
+	profileAttrs     profileAttrIndex
 }
 
 // New builds a collector over a profile store, with a series budget and a
@@ -188,9 +198,9 @@ const targetUpSeries = metrics.TargetUp
 // poll, 0 while it reconnects. A collector built before the meter exists
 // registers nothing and keeps nothing, so the first target that arrives with
 // a meter registers the gauge. The callback observes only that policy's
-// loops, with device_ip and mode: the policy is the scope's. A loop's point
-// is observed when it changes and otherwise once per metrics_interval
-// (upDue), not on every export.
+// loops, with the target's own attributes, device_ip and mode: the policy is
+// the scope's. A loop's point is observed when it changes and otherwise once
+// per metrics_interval (upDue), not on every export.
 func (c *Collector) ensureTargetUp(policyName string) {
 	m := metrics.PolicyMeter(policyName)
 	if m == nil {
@@ -232,9 +242,10 @@ func (c *Collector) ensureTargetUp(policyName string) {
 			if !l.upDue(v, s.Mode, now) {
 				continue
 			}
-			o.ObserveInt64(inst, v, metric.WithAttributes(
-				attribute.String("device_ip", k.host), attribute.String("mode", s.Mode),
-			))
+			attrs := make([]attribute.KeyValue, 0, len(l.attrs)+2)
+			attrs = append(attrs, l.attrs...)
+			attrs = append(attrs, attribute.String("device_ip", k.host), attribute.String(targetUpModeAttr, s.Mode))
+			o.ObserveInt64(inst, v, metric.WithAttributes(attrs...))
 			l.upSent = upSample{at: now, value: v, mode: s.Mode}
 		}
 		return nil
@@ -264,6 +275,10 @@ func (c *Collector) ensureTargetUp(policyName string) {
 
 // CollectTarget starts the target's loop and returns. A second call for the
 // same policy and host stops the first loop and waits for it before starting.
+// A series keeps the attributes it was created with, so when the replacement's
+// own attributes differ, the first loop's series are withdrawn before the
+// replacement starts, rather than going on with the attributes it no longer
+// has.
 func (c *Collector) CollectTarget(ctx context.Context, target config.Target, opts Options) error {
 	if opts.MetricsInterval <= 0 {
 		return errors.New("metrics interval must be positive")
@@ -277,7 +292,10 @@ func (c *Collector) CollectTarget(ctx context.Context, target config.Target, opt
 	c.store.setResend(opts.PolicyName, opts.MetricsInterval)
 	k := loopKey{opts.PolicyName, target.Host}
 	loopCtx, cancel := context.WithCancel(ctx)
-	l := &loop{cancel: cancel, done: make(chan struct{}), status: TargetStatus{Host: target.Host}, interval: opts.MetricsInterval}
+	l := &loop{
+		cancel: cancel, done: make(chan struct{}), status: TargetStatus{Host: target.Host}, interval: opts.MetricsInterval,
+		attrs: target.Attributes.KeyValues(),
+	}
 	c.loopsMu.Lock()
 	if c.closed {
 		c.loopsMu.Unlock()
@@ -308,6 +326,11 @@ func (c *Collector) CollectTarget(ctx context.Context, target config.Target, opt
 	if old != nil {
 		old.cancel()
 		<-old.done
+	}
+	if old != nil && !slices.Equal(old.attrs, l.attrs) {
+		// Selected by device alone: the loop is keyed on the policy and the
+		// host, so every series of that host under the policy is the loop's.
+		c.store.deleteMatching(opts.PolicyName, nil, []attribute.KeyValue{attribute.String("device_ip", target.Host)})
 	}
 	metrics.GetTargetsActive().Add(ctx, 1)
 	go func() {
@@ -687,7 +710,7 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 			}
 			productive = true
 			metrics.GetNotifications().Add(ctx, 1)
-			c.apply(ctx, n, rung, target, opts, p)
+			c.apply(ctx, n, rung, target, opts, p, l.attrs)
 			reconcile(n)
 			armDump()
 			l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = ""; s.LastErrorAt = time.Time{} })
@@ -760,7 +783,7 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 		if err != nil {
 			return err
 		}
-		c.apply(ctx, n, "get", target, opts, p)
+		c.apply(ctx, n, "get", target, opts, p, l.attrs)
 		// A Get that recovers path by path returns what answered as a success,
 		// so what the snapshot speaks for is the paths it reports having
 		// fetched. A target that answered with none of them reconciles nothing:
@@ -830,7 +853,7 @@ func polledMetrics(metricsByPath map[string][]string, paths []string) map[string
 // they name. The notification is stamped with its arrival here rather than with
 // the device's own timestamp: a device whose clock lags by more than the
 // staleness window would otherwise export nothing, silently.
-func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string, target config.Target, opts Options, p *profiles.Profile) {
+func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string, target config.Target, opts Options, p *profiles.Profile, own []attribute.KeyValue) {
 	base := baseAttrs(target, opts)
 	ts := time.Now().UnixNano()
 	// The deletes go first, as gNMI orders them within one notification: a
@@ -884,14 +907,14 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string,
 				metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "unconvertible_value")))
 				continue
 			}
-			dropped = c.exporter.observeCounter(opts.PolicyName, m.Name, m.Unit, attrs, v, ts, maxAge)
+			dropped = c.exporter.observeCounter(opts.PolicyName, m.Name, m.Unit, attrs, v, ts, maxAge, own)
 		default:
 			v, ok := gaugeValue(*m, u.Value)
 			if !ok {
 				metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "unconvertible_value")))
 				continue
 			}
-			dropped = c.exporter.observeGauge(opts.PolicyName, m.Name, m.Unit, attrs, v, ts, maxAge)
+			dropped = c.exporter.observeGauge(opts.PolicyName, m.Name, m.Unit, attrs, v, ts, maxAge, own)
 		}
 		if dropped != "" {
 			metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", dropped)))
@@ -899,16 +922,95 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string,
 	}
 }
 
-// baseAttrs is what every series of one target carries on the datapoint: the
-// device, and the NetBox id when the target names one. The policy is not
-// among them: it is the scope's policy_name, and the store keys on it, so
-// selecting a target's series takes the policy beside these.
+// baseAttrs is the identity every series of one target carries on the
+// datapoint: the device, and the NetBox id when the target names one. The
+// policy is not among them: it is the scope's orb.policy.name, and the store keys
+// on it, so selecting a target's series takes the policy beside these.
+//
+// The target's own attributes are not among them either. They follow from
+// the policy and the device, so they tell no two series apart, and leaving
+// them out of the series key and of every selector keeps a delete or a
+// reconcile from paying for them; they are added to the series as it is
+// exported (store.set).
 func baseAttrs(target config.Target, _ Options) []attribute.KeyValue {
 	base := []attribute.KeyValue{attribute.String("device_ip", target.Host)}
 	if target.ID != "" {
 		base = append(base, attribute.String("netbox_id", target.ID))
 	}
 	return base
+}
+
+// targetUpModeAttr is the dimension target_up carries beside device_ip.
+const targetUpModeAttr = "mode"
+
+// ReservedAttributeName reports whether a policy attribute of this name would
+// take the key of a dimension the collector sets itself: the ones a profile
+// may not promote, and target_up's mode.
+func ReservedAttributeName(name string) bool {
+	return profiles.ReservedAttribute(name) || name == targetUpModeAttr
+}
+
+// ProfileAttribute reports whether a profile of the set promotes a path key
+// to an attribute key collides with, as written or once translated to
+// Prometheus, and names that attribute and the first profile, by name, that
+// promotes it. A policy attribute of that name would collide with it on some
+// target, so the policy is refused rather than one of the two being dropped
+// there.
+func (c *Collector) ProfileAttribute(key string) (name, profile string, ok bool) {
+	c.profileAttrsOnce.Do(func() { c.profileAttrs = profileAttrNames(c.profiles) })
+	if a, ok := c.profileAttrs.exact[key]; ok {
+		return a.name, a.profile, true
+	}
+	if a, ok := c.profileAttrs.prometheus[config.PrometheusName(key)]; ok {
+		return a.name, a.profile, true
+	}
+	return "", "", false
+}
+
+// profileAttr is one attribute a profile promotes.
+type profileAttr struct{ name, profile string }
+
+// profileAttrIndex is every attribute the profile set promotes, by name and
+// by the name Prometheus translation gives it.
+type profileAttrIndex struct {
+	exact, prometheus map[string]profileAttr
+}
+
+// profileAttrNames indexes every attribute a profile of the store promotes
+// under the first profile, in name order, that does, and within a profile in
+// attribute order, so the attribute a Prometheus name reports is the same on
+// every run. Every profile counts, not only the one a target is served by,
+// since which one that is is only known once the target answers
+// Capabilities.
+func profileAttrNames(store *profiles.Store) profileAttrIndex {
+	idx := profileAttrIndex{exact: map[string]profileAttr{}, prometheus: map[string]profileAttr{}}
+	if store == nil {
+		return idx
+	}
+	for _, name := range store.Names() {
+		p, _ := store.Get(name)
+		attrs := map[string]struct{}{}
+		for _, sub := range p.Subscriptions {
+			for attr := range sub.Attributes {
+				attrs[attr] = struct{}{}
+			}
+		}
+		for _, attr := range slices.Sorted(maps.Keys(attrs)) {
+			a := profileAttr{name: attr, profile: name}
+			if _, seen := idx.exact[attr]; !seen {
+				idx.exact[attr] = a
+			}
+			if prom := config.PrometheusName(attr); !hasKey(idx.prometheus, prom) {
+				idx.prometheus[prom] = a
+			}
+		}
+	}
+	return idx
+}
+
+func hasKey(m map[string]profileAttr, key string) bool {
+	_, ok := m[key]
+	return ok
 }
 
 // flattenUpdate splits a container value into one update per scalar leaf,

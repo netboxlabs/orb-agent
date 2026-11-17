@@ -43,6 +43,13 @@ func attrKey(attrs []attribute.KeyValue) string {
 // policy is not stored here: it is a field of the key that reaches every
 // function taking a point, and keeping it out of the point as well is one
 // fewer place for it to drift from the key.
+//
+// attrs is what identifies the series and what a delete or a reconcile
+// selects on. own is the target's attributes: the slice the target's loop
+// rendered once, shared by every series of the target rather than copied into
+// each. A target's attributes follow from the policy and the device, so they
+// are kept out of the series' identity and only added to what it is exported
+// with (exportAttrs).
 type point struct {
 	i       int64
 	f       float64
@@ -50,8 +57,21 @@ type point struct {
 	maxAge  time.Duration
 	resets  int
 	attrs   []attribute.KeyValue
+	own     []attribute.KeyValue
 	pending bool
 	sentAt  int64
+}
+
+// exportAttrs is the attribute set the series is exported with: the target's
+// own attributes ahead of attrs, so the collector's keys win a duplicate. It
+// is assembled per export rather than stored, since the export builds an
+// attribute set from it either way.
+func (p point) exportAttrs() []attribute.KeyValue {
+	if len(p.own) == 0 {
+		return p.attrs
+	}
+	out := make([]attribute.KeyValue, 0, len(p.own)+len(p.attrs))
+	return append(append(out, p.own...), p.attrs...)
 }
 
 // store keeps the last value per series, bounded per metric name by a budget.
@@ -104,9 +124,10 @@ func (s *store) setResend(policy string, every time.Duration) {
 }
 
 // setCounter records a cumulative value at its arrival time; a value below
-// the last is a reset.
-func (s *store) setCounter(k seriesKey, v int64, ts int64, maxAge time.Duration, attrs []attribute.KeyValue) bool {
-	return s.set(k, ts, maxAge, attrs, func(pt *point, fresh bool) {
+// the last is a reset. own are the target's attributes, exported ahead of
+// attrs (see point); nil for none.
+func (s *store) setCounter(k seriesKey, v int64, ts int64, maxAge time.Duration, attrs, own []attribute.KeyValue) bool {
+	return s.set(k, ts, maxAge, attrs, own, func(pt *point, fresh bool) {
 		if !fresh && v < pt.i {
 			pt.resets++
 		}
@@ -114,12 +135,13 @@ func (s *store) setCounter(k seriesKey, v int64, ts int64, maxAge time.Duration,
 	})
 }
 
-// setGauge records the latest value at its arrival time.
-func (s *store) setGauge(k seriesKey, v float64, ts int64, maxAge time.Duration, attrs []attribute.KeyValue) bool {
-	return s.set(k, ts, maxAge, attrs, func(pt *point, _ bool) { pt.f = v })
+// setGauge records the latest value at its arrival time, with own as
+// setCounter takes it.
+func (s *store) setGauge(k seriesKey, v float64, ts int64, maxAge time.Duration, attrs, own []attribute.KeyValue) bool {
+	return s.set(k, ts, maxAge, attrs, own, func(pt *point, _ bool) { pt.f = v })
 }
 
-func (s *store) set(k seriesKey, ts int64, maxAge time.Duration, attrs []attribute.KeyValue, apply func(*point, bool)) bool {
+func (s *store) set(k seriesKey, ts int64, maxAge time.Duration, attrs, own []attribute.KeyValue, apply func(*point, bool)) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	pt, ok := s.series[k]
@@ -128,7 +150,7 @@ func (s *store) set(k seriesKey, ts int64, maxAge time.Duration, attrs []attribu
 		if !s.budget.take(k.metric) {
 			return false
 		}
-		pt = &point{attrs: attrs}
+		pt = &point{attrs: attrs, own: own}
 		s.series[k] = pt
 		s.indexInsert(k, pt)
 	}
