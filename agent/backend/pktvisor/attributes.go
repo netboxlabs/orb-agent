@@ -209,6 +209,23 @@ func validateValue(key string, v any) error {
 	return nil
 }
 
+// asMap reads a decoded mapping. yaml.v3 decodes a mapping with a key that is
+// not a string (101:, true:) as map[any]any, so both shapes are accepted, with
+// the keys written the way yaml.Marshal writes them to pktvisord.
+func asMap(v any) (map[string]any, bool) {
+	switch m := v.(type) {
+	case map[string]any:
+		return m, true
+	case map[any]any:
+		out := make(map[string]any, len(m))
+		for k, val := range m {
+			out[fmt.Sprint(k)] = val
+		}
+		return out, true
+	}
+	return nil, false
+}
+
 // attributesOf reads the attributes of one item of the body. A missing or
 // null entry means none; anything but a mapping is refused.
 func attributesOf(holder map[string]any, item string) (attributes, error) {
@@ -216,7 +233,7 @@ func attributesOf(holder map[string]any, item string) (attributes, error) {
 	if !present || raw == nil {
 		return nil, nil
 	}
-	m, ok := raw.(map[string]any)
+	m, ok := asMap(raw)
 	if !ok {
 		return nil, fmt.Errorf("pktvisor attributes of %s must be a mapping of names to values, not a %T", item, raw)
 	}
@@ -228,7 +245,7 @@ func attributesOf(holder map[string]any, item string) (attributes, error) {
 // merged with the target's. A body of any other shape is left to the checks
 // that own it.
 func checkAttributes(body any) error {
-	doc, _ := body.(map[string]any)
+	doc, _ := asMap(body)
 	policy, err := attributesOf(doc, "policy")
 	if err != nil {
 		return err
@@ -237,11 +254,11 @@ func checkAttributes(body any) error {
 		return fmt.Errorf("pktvisor attributes of policy: %w", err)
 	}
 
-	input, _ := doc["input"].(map[string]any)
-	cfg, _ := input["config"].(map[string]any)
-	targets, _ := cfg["targets"].(map[string]any)
+	input, _ := asMap(doc["input"])
+	cfg, _ := asMap(input["config"])
+	targets, _ := asMap(cfg["targets"])
 	for _, name := range slices.Sorted(maps.Keys(targets)) {
-		target, ok := targets[name].(map[string]any)
+		target, ok := asMap(targets[name])
 		if !ok {
 			continue
 		}

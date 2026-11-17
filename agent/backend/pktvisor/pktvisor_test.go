@@ -442,3 +442,31 @@ func TestApplyPolicy_RefusedAttributesLeaveTheRunningPolicy(t *testing.T) {
 	_, ok := f.policyNamed("p1")
 	assert.True(t, ok, "the running policy stays")
 }
+
+// An edit that only changes attributes is applied as any other: the running
+// policy is removed and the new body posted, and a quoted number reaches
+// pktvisord as the string it was written as.
+func TestApplyPolicy_AnEditThatOnlyChangesAttributes(t *testing.T) {
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+
+	body := netprobeBody("192.0.2.1")
+	body["attributes"] = map[string]any{"zero": "007", "rack": 7}
+	require.NoError(t, apply(be, "p1", body, false))
+	f.clearLog()
+
+	edited := netprobeBody("192.0.2.1")
+	edited["attributes"] = map[string]any{"zero": "007", "rack": float64(8)}
+	require.NoError(t, apply(be, "p1", edited, true))
+
+	log := f.log()
+	require.NotEmpty(t, log)
+	assert.Equal(t, "DELETE /api/v1/policies/p1 200", log[0], "the running policy is removed first")
+	assert.Equal(t, "POST /api/v1/policies 201", log[len(log)-1], "the new body is posted last")
+	p, ok := f.policyNamed("p1")
+	require.True(t, ok)
+	attrs, ok := p.body["attributes"].(map[string]any)
+	require.True(t, ok, "the posted body carries the attributes")
+	assert.Equal(t, "007", attrs["zero"], "a quoted number stays the string it was")
+	assert.EqualValues(t, 8, attrs["rack"])
+}

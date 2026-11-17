@@ -2,11 +2,13 @@ package pktvisor
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 )
 
 // bodyWith builds a netprobe policy body with policy-level attributes and one
@@ -148,4 +150,125 @@ func TestPrometheusName(t *testing.T) {
 	assert.Equal(t, "__a", prometheusName("__a"))
 	assert.Empty(t, prometheusName(""))
 	assert.Equal(t, "caf_", prometheusName("café"))
+}
+
+// yamlBody decodes a YAML literal the way the config and policy_yaml paths do.
+func yamlBody(t *testing.T, doc string) any {
+	t.Helper()
+	var v any
+	require.NoError(t, yaml.Unmarshal([]byte(doc), &v))
+	return v
+}
+
+// yaml.v3 decodes a mapping with a key that is not a string as
+// map[any]any, so every level of the body is read through both shapes.
+func TestCheckAttributesYAMLNonStringKeys(t *testing.T) {
+	tests := []struct {
+		name    string
+		doc     string
+		wantErr []string // nil means accepted
+	}{
+		{"numeric target name", `
+input:
+  config:
+    targets:
+      101:
+        target: 192.0.2.1
+        attributes: {target: x}
+`, []string{`target "101"`, `"target"`}},
+		{"numeric name beside a named one", `
+input:
+  config:
+    targets:
+      gw1: {target: 192.0.2.1}
+      101:
+        target: 192.0.2.2
+        attributes: {policy: x}
+`, []string{`target "101"`, `"policy"`}},
+		{"numeric key under input", `
+input:
+  7: x
+  config:
+    targets:
+      gw1:
+        attributes: {tap: x}
+`, []string{`target "gw1"`, `"tap"`}},
+		{"numeric key at the top", `
+7: x
+attributes: {device: x}
+`, []string{"policy", `"device"`}},
+		{"boolean attribute key is an ordinary key", `
+attributes: {true: x}
+`, nil},
+		{"numeric attribute key does not start with a letter", `
+attributes: {101: x}
+`, []string{"policy", `"101"`, "must start with a letter"}},
+		{"attributes a mapping with a numeric key beside a reserved one", `
+attributes: {7: x, policy: y}
+`, []string{"policy", `"7"`}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkAttributes(yamlBody(t, tt.doc))
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), "map[interface")
+			for _, frag := range tt.wantErr {
+				assert.Contains(t, err.Error(), frag)
+			}
+		})
+	}
+}
+
+// What the decoders hand over for the values the docs promise to refuse or
+// keep, and the exact boundaries of the limits.
+func TestCheckAttributesBoundaries(t *testing.T) {
+	exactly := func(n int) map[string]any { // n attributes, none over the key limits
+		out := map[string]any{}
+		for i := range n {
+			out[fmt.Sprintf("k%02d", i)] = "v"
+		}
+		return out
+	}
+	tests := []struct {
+		name    string
+		body    any
+		wantErr []string
+	}{
+		{"empty key", yamlBody(t, `attributes: {"": x}`), []string{"policy", "empty"}},
+		{"unquoted date", yamlBody(t, `attributes: {d: 2026-11-17}`), []string{`"d"`, "timestamp"}},
+		{"quoted date", yamlBody(t, `attributes: {d: "2026-11-17"}`), nil},
+		{"nan", yamlBody(t, `attributes: {n: .nan}`), []string{`"n"`, "finite"}},
+		{"inf", yamlBody(t, `attributes: {n: .inf}`), []string{`"n"`, "finite"}},
+		{"minus inf", yamlBody(t, `attributes: {n: -.inf}`), []string{`"n"`, "finite"}},
+		{"2^63 unquoted", yamlBody(t, `attributes: {n: 9223372036854775808}`), []string{`"n"`, "64-bit"}},
+		{"2^63-1 unquoted", yamlBody(t, `attributes: {n: 9223372036854775807}`), nil},
+		{"32 attributes", bodyWith(exactly(32), nil), nil},
+		{"33 attributes", bodyWith(exactly(33), nil), []string{"33 attributes", "limit of 32"}},
+		// 4 keys of 4 bytes and 4 values of 252 bytes: 4*256 = 1024.
+		{"1024 bytes", bodyWith(map[string]any{
+			"aaaa": strings.Repeat("v", 252), "bbbb": strings.Repeat("v", 252),
+			"cccc": strings.Repeat("v", 252), "dddd": strings.Repeat("v", 252),
+		}, nil), nil},
+		{"1025 bytes", bodyWith(map[string]any{
+			"aaaa": strings.Repeat("v", 253), "bbbb": strings.Repeat("v", 252),
+			"cccc": strings.Repeat("v", 252), "dddd": strings.Repeat("v", 252),
+		}, nil), []string{"1025 bytes", "limit of 1024"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkAttributes(tt.body)
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			for _, frag := range tt.wantErr {
+				assert.Contains(t, err.Error(), frag)
+			}
+		})
+	}
 }
