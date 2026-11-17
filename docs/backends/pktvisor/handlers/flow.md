@@ -412,3 +412,13 @@ The `recorded_stream` configuration usage syntax is:
 ```yaml
 recorded_stream: true
 ```
+
+## Attributes
+
+A `flow` policy takes the policy-level [`attributes`](../README.md#policy-attributes) only, and
+every series of the policy carries them; there are no per-flow-device attributes. `device_map`,
+which names the exporting devices and their interfaces, is unchanged. A key may not be one of the
+labels the flow handler sets itself: `device`, `device_interface`, `lat`, `lon`, `conversation`,
+`geo_loc`, `asn`, `ip`, `port`, `ip_port`, `dscp`, `ecn` or `interface`. The agent refuses them
+before it sends anything, so an edit that uses one leaves the running version running; see
+[Edits](../README.md#edits). Needs orb-agent 2.18.0.

@@ -154,10 +154,88 @@ orb:
 | [`handlers`](handlers/README.md) | yes | The analyzer modules to run on that input, and their configuration, filters and metric groups. |
 | [`config`](handlers/README.md#config-section) | no | Policy level settings. Currently only `merge_like_handlers`. |
 | [`kind`](handlers/README.md#kind-section) | yes | The only supported value is `collection`. |
+| [`attributes`](#policy-attributes) | no | Key/value pairs added to every series the policy produces. Needs orb-agent 2.18.0. |
 
 A policy name must be unique within the backend. Policy, tap and handler module
 names must match `[a-zA-Z_][a-zA-Z0-9_-]*`, so they start with a letter or
 underscore and contain only letters, digits, `_` or `-`.
+
+## Policy attributes
+A policy can carry an `attributes` mapping, next to `kind`, `input`, `handlers` and `config`.
+Every series of every handler of the policy carries these attributes. They need orb-agent 2.18.0.
+
+```yaml
+orb:
+  policies:
+    pktvisor:
+      edge_dns_inspection:
+        kind: collection
+        attributes:
+          netbox.site.name: dc-west
+          netbox.tenant.name: acme
+          netbox.role.name: edge-router
+          netbox_id: "42"
+          device_ip: 192.0.2.1
+        input:
+          input_type: pcap
+          tap: edge_dns
+        handlers:
+          modules:
+            dns_summary:
+              type: dns
+```
+
+- **Per target.** A `netprobe` policy can also set `attributes` on a target, under
+  `input.config.targets.<name>.attributes`; see [Netprobe](handlers/netprobe.md#target-attributes).
+  The target's attributes are laid over the policy's, key by key, and the target's value wins.
+  A `flow` policy takes the policy-level `attributes` only; see [Flow](handlers/flow.md#attributes).
+- **Device identity.** `netbox_id` and `device_ip` are the names SNMP and gNMI telemetry give a
+  device's NetBox ID and address. Use the same names, and NetBox's numeric device ID (`"42"`,
+  not `netbox-device-42`), so a pktvisor series names its device as theirs do.
+- **Keys.** OTLP carries each key as written. Prometheus output writes every character outside
+  `[A-Za-z0-9_]` as `_`, so `netbox.site.name` becomes `netbox_site_name`.
+- **Values are text.** A value is a string, a number or a boolean, and `pktvisord` exports it as
+  text, because its labels are text. Quote a value whose exact text matters: `"007"` stays `007`,
+  while an unquoted `007` is a number. Quote large numbers and identifiers too. A policy delivered
+  as JSON can turn a whole number of 1,000,000 or more into a float, and a whole number too large
+  for 64 bits is sent in exponent form, such as `1.8446744073709552e+19`.
+
+### Checks before the policy is applied
+The agent checks `attributes` before it sends the policy to `pktvisord`, and refuses the policy
+when:
+
+- the policy has more than 32 attributes. For a netprobe target the count is of the merged set:
+  the policy's attributes with the target's laid over them, so a key the target overrides counts
+  once. The limits below apply to that merged set too;
+- a key is longer than 128 bytes, or a string value is longer than 256 bytes;
+- the keys and string values together are longer than 1024 bytes;
+- `attributes` is not a mapping, or a value is null, an empty string, a map, a list, a timestamp
+  (quote a date to send it as a string), not valid UTF-8, a number that is not finite, or an
+  integer between 2^63 and 2^64-1. An absent or null `attributes` means none;
+- a key is empty, is not valid UTF-8, or does not start with an ASCII letter;
+- a key is in the `orb` namespace: `orb` followed by a character that is not an ASCII letter or
+  digit, such as `orb.site` or `orb_site`. The Orb platform sets and strips those names;
+- a key is one of `policy`, `handler`, `tap`, `target`, `device`, `le` or `quantile`, or becomes
+  one of them in Prometheus;
+- a key becomes `job` or `instance` in Prometheus, a label Prometheus sets itself, or a name
+  starting with `otel_scope_`;
+- two keys become the same name in Prometheus, such as `netbox.site.name` and `netbox_site_name`.
+  The same key written the same way on a policy and a target is an override, not a clash;
+- a key is, or becomes in Prometheus, a label one of the policy's handlers sets on its own series.
+  These differ by handler type:
+
+  | Handler    | Labels |
+  |------------|--------|
+  | `dhcp`     | `client`, `server` |
+  | `dns`      | `direction`, `lat`, `lon`, `geo_loc`, `asn`, `ecs`, `qname`, `port`, `qtype`, `rcode` |
+  | `flow`     | `device`, `device_interface`, `lat`, `lon`, `conversation`, `geo_loc`, `asn`, `ip`, `port`, `ip_port`, `dscp`, `ecn`, `interface` |
+  | `net`      | `direction`, `lat`, `lon`, `geo_loc`, `asn`, `ipv4`, `ipv6` |
+  | `netprobe` | `target`, `status_code`, `rcode` |
+
+  Only version 2 of `dns` and `net` sets `direction`, but the agent refuses it for every version.
+
+A refused edit sends nothing, so the running version keeps running; see [Edits](#edits). A first
+version that is refused never starts. `pktvisord` checks the policy again when it loads it.
 
 ## Policies from Fleet
 A policy from Fleet has the same body as an `orb.policies.pktvisor.<name>` entry: `kind`,
@@ -216,7 +294,8 @@ policy is the last one on its listener.
 The agent applies a policy without a remove when it knows `pktvisord` holds nothing of it:
 
 - a new policy, including one the agent holds while `pktvisord` starts on demand, and one the
-  agent refused for its name, its tap or its encoding before sending `pktvisord` anything;
+  agent refused for its name, its tap, its attributes or its encoding before sending `pktvisord`
+  anything;
 - a policy a restart has removed from `pktvisord`, or hands to a new `pktvisord`;
 - a policy the agent stopped because a secret it uses no longer resolves.
 
@@ -224,8 +303,8 @@ Any other apply removes first, including the next version of a policy whose prev
 reached `pktvisord` and failed, such as one `pktvisord` refused or whose tap creation failed. A
 remove of a policy `pktvisord` does not run gets a 404, which the agent logs as a warning.
 
-The agent checks the policy name, the tap and the policy's encoding before an edit removes
-the running policy.
+The agent checks the policy name, the tap, the policy's attributes and its encoding before an
+edit removes the running policy.
 So when the agent refuses an edit:
 
 - The old version keeps running, and the policy shows `failed_to_apply`.
@@ -238,8 +317,9 @@ Two failures come after the old version is removed: the agent cannot create the 
 runs nothing until the edit is fixed.
 
 ### Policies that are refused
-The agent refuses a policy with a bad name, or one that names no tap and has an input
-type other than `netprobe` or `flow`. It still starts `pktvisord` on demand first, as it
+The agent refuses a policy with a bad name, with attributes it will not send (see
+[Checks before the policy is applied](#checks-before-the-policy-is-applied)), or one that names no
+tap and has an input type other than `netprobe` or `flow`. It still starts `pktvisord` on demand first, as it
 already does for a name with a slash.
 
 If `pktvisord` takes longer than the 10 second apply timeout to accept a policy on a

@@ -6,6 +6,7 @@ Handler type: `netprobe`
 - [Metrics Group](#metrics-group)
 - [Filters](#filters)
 - [Configurations](#configurations)
+- [Target attributes](#target-attributes)
 
 ## Example of policy with input netprobe and handler NETPROBE
 
@@ -91,3 +92,44 @@ input:
     packet_payload_size: 56
 kind: collection
 ```
+
+## Target attributes
+
+Besides the policy's own [`attributes`](../README.md#policy-attributes), each target can set
+`attributes` under `input.config.targets.<name>.attributes`. Needs orb-agent 2.18.0.
+
+```yaml
+kind: collection
+attributes:
+  netbox.site.name: dc-west
+  netbox.tenant.name: acme
+input:
+  input_type: netprobe
+  config:
+    test_type: ping
+    targets:
+      gw1:
+        target: 192.0.2.1
+        attributes:
+          netbox.site.name: dc-east
+          netbox_id: "42"
+          device_ip: 192.0.2.1
+handlers:
+  modules:
+    probe_metrics:
+      type: netprobe
+```
+
+- The target's attributes are laid over the policy's, key by key, and the target's value wins.
+  Here the series of `gw1` carry `netbox.site.name: dc-east`, `netbox.tenant.name: acme`,
+  `netbox_id`, `device_ip` and `target`.
+- The same rules apply as for the policy's attributes: values are exported as text, so quote a
+  number whose exact text matters, and the agent refuses the policy for the reasons listed under
+  [Checks before the policy is applied](../README.md#checks-before-the-policy-is-applied). The
+  limits apply to the merged set of each target. A target key whose Prometheus name matches a
+  different policy key is a clash; the same key written the same way is an override.
+- A key may not be `target`, `status_code` or `rcode`, the labels the handler sets itself. The
+  agent refuses them before it sends anything, so an edit that uses one leaves the running version
+  running; see [Edits](../README.md#edits).
+- Target attributes are not part of the input's config: policies that differ only in them share
+  one input. pktvisor's own netprobe documentation has the same section.

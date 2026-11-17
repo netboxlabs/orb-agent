@@ -143,7 +143,11 @@ func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.Export
 	// stamp the id and backend the platform validates against, from the
 	// policies this agent runs. Outside fleet mode there is no repository
 	// and the request is forwarded as it arrived.
-	enrichMetricsWithPolicy(req, s.bridge.GetPolicyRepo(), s.bridge.logger)
+	repo := s.bridge.GetPolicyRepo()
+	if n := dropPktvisorResourcesScopes(req, repo); n > 0 {
+		s.bridge.logger.Debug("dropped pktvisor resources scopes no policy owns", "scopes", n)
+	}
+	enrichMetricsWithPolicy(req, repo, s.bridge.logger)
 
 	// Metrics for the telemetry topic use the metrics encoding; Diode data
 	// keeps the ingest topic's.

@@ -461,8 +461,8 @@ func Register() bool {
 	return true
 }
 
-// ApplyPolicy refuses a policy it cannot send, for its name, its tap or its
-// encoding, before it sends pktvisord anything, an update's removal
+// ApplyPolicy refuses a policy it cannot send, for its name, its tap, its attributes or
+// its encoding, before it sends pktvisord anything, an update's removal
 // included, and marks that error with backend.NotSent. An error from a
 // request, the tap's creation included, is not marked: pktvisord may have
 // acted on the request before the agent stopped waiting for its answer.
@@ -474,6 +474,9 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 	}
 	tapType, err := managedTapType(data.Data)
 	if err != nil {
+		return backend.NotSent(err)
+	}
+	if err := checkAttributes(data.Data); err != nil {
 		return backend.NotSent(err)
 	}
 
