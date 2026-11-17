@@ -154,10 +154,76 @@ orb:
 | [`handlers`](handlers/README.md) | yes | The analyzer modules to run on that input, and their configuration, filters and metric groups. |
 | [`config`](handlers/README.md#config-section) | no | Policy level settings. Currently only `merge_like_handlers`. |
 | [`kind`](handlers/README.md#kind-section) | yes | The only supported value is `collection`. |
+| [`attributes`](#policy-attributes) | no | Key/value pairs added to every series the policy produces. Needs orb-agent 2.18.0. |
 
 A policy name must be unique within the backend. Policy, tap and handler module
 names must match `[a-zA-Z_][a-zA-Z0-9_-]*`, so they start with a letter or
 underscore and contain only letters, digits, `_` or `-`.
+
+## Policy attributes
+A policy can carry an `attributes` mapping, next to `kind`, `input`, `handlers` and `config`.
+Every series of every handler of the policy carries these attributes. They need orb-agent 2.18.0.
+
+```yaml
+orb:
+  policies:
+    pktvisor:
+      edge_dns_inspection:
+        kind: collection
+        attributes:
+          netbox.site.name: dc-west
+          netbox.tenant.name: acme
+          netbox.role.name: edge-router
+          netbox_id: netbox-device-42
+          device_ip: 192.0.2.1
+        input:
+          input_type: pcap
+          tap: edge_dns
+        handlers:
+          modules:
+            dns_summary:
+              type: dns
+```
+
+- **Per target.** A `netprobe` policy can also set `attributes` on a target, under
+  `input.config.targets.<name>.attributes`; see [Netprobe](handlers/netprobe.md#target-attributes).
+  The target's attributes are laid over the policy's, key by key, and the target's value wins.
+  A `flow` policy takes the policy-level `attributes` only; see [Flow](handlers/flow.md#attributes).
+- **Keys.** OTLP carries each key as written. Prometheus output writes every character outside
+  `[A-Za-z0-9_]` as `_`, so `netbox.site.name` becomes `netbox_site_name`.
+- **Values are text.** A value is a string, a number or a boolean, and `pktvisord` exports it as
+  text, because its labels are text. Quote a value whose exact text matters: `"007"` stays `007`,
+  while an unquoted `007` is a number. A policy delivered as JSON can turn a whole number of
+  1,000,000 or more into a float, so quote such numbers as well.
+
+### Checks before the policy is applied
+The agent checks `attributes` before it sends the policy to `pktvisord`, and refuses the policy
+when:
+
+- the policy has more than 32 attributes. For a netprobe target the count is of the policy's and
+  the target's attributes together, and so are the limits below;
+- a key is longer than 128 bytes, or a string value is longer than 256 bytes;
+- the keys and string values together are longer than 1024 bytes;
+- `attributes` is not a mapping, or a value is null, an empty string, a map, a list, a timestamp
+  (quote a date to send it as a string), not valid UTF-8, a number that is not finite, or an
+  integer that does not fit 64 bits. An absent or null `attributes` means none;
+- a key is empty, is not valid UTF-8, or does not start with an ASCII letter;
+- a key is in the `orb` namespace: `orb` followed by a character that is not an ASCII letter or
+  digit, such as `orb.site` or `orb_site`. The Orb platform sets and strips those names;
+- a key is one of `policy`, `handler`, `tap`, `target`, `device`, `le` or `quantile`, or becomes
+  one of them in Prometheus;
+- a key becomes `job` or `instance` in Prometheus, a label Prometheus sets itself, or a name
+  starting with `otel_scope_`;
+- two keys become the same name in Prometheus, such as `netbox.site.name` and `netbox_site_name`.
+  The same key written the same way on a policy and a target is an override, not a clash.
+
+`pktvisord` checks the policy again when it loads it, and also refuses a key that is, or becomes
+in Prometheus, one of the labels its handlers set on their own series. These differ by handler;
+see [Policy attributes](https://github.com/netboxlabs/pktvisor#policy-attributes) in the pktvisor
+documentation for the labels of each.
+
+When the agent refuses an edit of a running policy, the running version keeps running; see
+[Edits](#edits). A first version that is refused never starts.
 
 ## Policies from Fleet
 A policy from Fleet has the same body as an `orb.policies.pktvisor.<name>` entry: `kind`,
