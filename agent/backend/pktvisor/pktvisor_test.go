@@ -422,3 +422,23 @@ func TestPktvisorMasksTheCollectorLoginInWhatItReports(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, `failed to parse otlp receiver http url: parse "http://********@[bad:4318": missing ']' in host`, err.Error())
 }
+
+// A policy whose attributes pktvisord would refuse is refused before the
+// update removes the running one: nothing reaches pktvisord.
+func TestApplyPolicy_RefusedAttributesLeaveTheRunningPolicy(t *testing.T) {
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+	f.addPolicy("p1", "elsewhere")
+	f.clearLog()
+
+	body := netprobeBody("192.0.2.1")
+	body["attributes"] = map[string]any{"target": "x"}
+
+	err := apply(be, "p1", body, true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "attributes")
+	assert.True(t, backend.PolicyNotSent(err))
+	assert.Empty(t, f.log(), "no DELETE and no POST")
+	_, ok := f.policyNamed("p1")
+	assert.True(t, ok, "the running policy stays")
+}
