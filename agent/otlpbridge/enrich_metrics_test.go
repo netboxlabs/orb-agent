@@ -209,10 +209,94 @@ func TestEnrichMetricsWithPolicy(t *testing.T) {
 		assert.Equal(t, map[string]string{"policy_name": "noid"}, attrMap(req.ResourceMetrics[0].ScopeMetrics[0].Scope.Attributes))
 	})
 
-	t.Run("non-string policy_name is treated as no policy", func(t *testing.T) {
+	t.Run("a pktvisor scope names its policy by pktvisor.policy.name or policy_name", func(t *testing.T) {
+		other := policies.PolicyData{ID: "id-other", Name: "other", Backend: "pktvisor"}
+		intAttr := func(key string) *commonv1.KeyValue {
+			return &commonv1.KeyValue{Key: key, Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_IntValue{IntValue: 7}}}
+		}
+		cases := []struct {
+			name   string
+			attrs  []*commonv1.KeyValue
+			wantID string
+			// named is whether the scope names a policy, so the repository
+			// is read, when wantID is empty.
+			named bool
+		}{
+			{name: "pktvisor.policy.name only", attrs: []*commonv1.KeyValue{strAttr("pktvisor.policy.name", "edge")}, wantID: "id-edge"},
+			{name: "policy_name only, from an earlier release", attrs: []*commonv1.KeyValue{strAttr("policy_name", "edge")}, wantID: "id-edge"},
+			{name: "both, pktvisor.policy.name wins", attrs: []*commonv1.KeyValue{strAttr("policy_name", "other"), strAttr("pktvisor.policy.name", "edge")}, wantID: "id-edge"},
+			{name: "empty pktvisor.policy.name falls back", attrs: []*commonv1.KeyValue{strAttr("pktvisor.policy.name", ""), strAttr("policy_name", "edge")}, wantID: "id-edge"},
+			{name: "non-string pktvisor.policy.name falls back", attrs: []*commonv1.KeyValue{intAttr("pktvisor.policy.name"), strAttr("policy_name", "edge")}, wantID: "id-edge"},
+			{name: "an unknown pktvisor.policy.name does not fall back", attrs: []*commonv1.KeyValue{strAttr("pktvisor.policy.name", "gone"), strAttr("policy_name", "edge")}, named: true},
+			{name: "neither", attrs: []*commonv1.KeyValue{strAttr("policy", "edge")}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				repo := &countingRepo{PolicyRepo: repoWith(t, edge, other)}
+				req := &collectormetrics.ExportMetricsServiceRequest{ResourceMetrics: []*metricsv1.ResourceMetrics{{
+					ScopeMetrics: []*metricsv1.ScopeMetrics{scopeNamed("pktvisor/edge", tc.attrs...)},
+				}}}
+				before := attrMap(tc.attrs)
+				enrichMetricsWithPolicy(req, repo, slog.Default())
+				got := attrMap(req.ResourceMetrics[0].ScopeMetrics[0].Scope.Attributes)
+				if tc.wantID == "" {
+					assert.Equal(t, before, got, "the scope is left unattributed")
+					if tc.named {
+						assert.Equal(t, 1, repo.calls, "the named policy was looked up")
+					} else {
+						assert.Equal(t, 0, repo.calls, "a scope naming no policy never reads the repository")
+					}
+					return
+				}
+				assert.Equal(t, tc.wantID, got["orb.policy_id"])
+				assert.Equal(t, "pktvisor", got["orb.backend"])
+				for k, v := range before {
+					assert.Equal(t, v, got[k], "the scope keeps %s as it arrived", k)
+				}
+			})
+		}
+	})
+
+	t.Run("an Orb backend's scope names its policy by orb.policy.name or policy_name", func(t *testing.T) {
+		other := policies.PolicyData{ID: "id-other", Name: "other", Backend: "snmp_telemetry"}
+		cases := []struct {
+			name   string
+			attrs  []*commonv1.KeyValue
+			wantID string
+		}{
+			{name: "orb.policy.name only", attrs: []*commonv1.KeyValue{strAttr("orb.policy.name", "core")}, wantID: "id-core"},
+			{name: "both, orb.policy.name wins", attrs: []*commonv1.KeyValue{strAttr("policy_name", "other"), strAttr("orb.policy.name", "core")}, wantID: "id-core"},
+			{name: "empty orb.policy.name falls back", attrs: []*commonv1.KeyValue{strAttr("orb.policy.name", ""), strAttr("policy_name", "core")}, wantID: "id-core"},
+			{name: "an unknown orb.policy.name does not fall back", attrs: []*commonv1.KeyValue{strAttr("orb.policy.name", "gone"), strAttr("policy_name", "core")}},
+			{name: "pktvisor.policy.name wins over orb.policy.name", attrs: []*commonv1.KeyValue{strAttr("orb.policy.name", "other"), strAttr("pktvisor.policy.name", "core")}, wantID: "id-core"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				req := &collectormetrics.ExportMetricsServiceRequest{ResourceMetrics: []*metricsv1.ResourceMetrics{{
+					ScopeMetrics: []*metricsv1.ScopeMetrics{scopeFor(tc.attrs...)},
+				}}}
+				before := attrMap(tc.attrs)
+				enrichMetricsWithPolicy(req, repoWith(t, core, other), slog.Default())
+				got := attrMap(req.ResourceMetrics[0].ScopeMetrics[0].Scope.Attributes)
+				if tc.wantID == "" {
+					assert.Equal(t, before, got, "the scope is left unattributed")
+					return
+				}
+				assert.Equal(t, tc.wantID, got["orb.policy_id"])
+				assert.Equal(t, "snmp_telemetry", got["orb.backend"])
+				for k, v := range before {
+					assert.Equal(t, v, got[k], "the scope keeps %s as it arrived", k)
+				}
+			})
+		}
+	})
+
+	t.Run("a non-string policy name is treated as no policy", func(t *testing.T) {
 		repo := &countingRepo{PolicyRepo: repoWith(t, core)}
 		req := &collectormetrics.ExportMetricsServiceRequest{ResourceMetrics: []*metricsv1.ResourceMetrics{{
 			ScopeMetrics: []*metricsv1.ScopeMetrics{scopeFor(
+				&commonv1.KeyValue{Key: "pktvisor.policy.name", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_IntValue{IntValue: 7}}},
+				&commonv1.KeyValue{Key: "orb.policy.name", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_IntValue{IntValue: 7}}},
 				&commonv1.KeyValue{Key: "policy_name", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_IntValue{IntValue: 7}}},
 			)},
 		}}}

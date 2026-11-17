@@ -11,10 +11,14 @@ import (
 )
 
 const (
-	// policyNameScopeAttributeKey is the instrumentation-scope attribute every
-	// metrics backend (pktvisor, snmp-telemetry, gnmi-telemetry) sets to the
-	// Orb policy name, one scope per policy.
-	policyNameScopeAttributeKey = "policy_name"
+	// pktvisorPolicyNameScopeAttributeKey, orbPolicyNameScopeAttributeKey and
+	// policyNameScopeAttributeKey are the instrumentation-scope attributes a
+	// metrics backend sets to the Orb policy name, one scope per policy.
+	// pktvisor sets pktvisor.policy.name, snmp-telemetry and gnmi-telemetry
+	// set orb.policy.name, and earlier releases of all three set policy_name.
+	pktvisorPolicyNameScopeAttributeKey = "pktvisor.policy.name"
+	orbPolicyNameScopeAttributeKey      = "orb.policy.name"
+	policyNameScopeAttributeKey         = "policy_name"
 	// orbPolicyIDAttributeKey and orbBackendAttributeKey are what the bridge
 	// stamps on such a scope, so the platform can validate the policy against
 	// the organisation and label the series without resolving names itself.
@@ -96,15 +100,27 @@ func (ix *policyIndex) resolve(backend, name string) (*policies.PolicyData, stri
 	return p, ""
 }
 
+// scopePolicyName returns the policy a scope names: the first of
+// pktvisor.policy.name, orb.policy.name and policy_name that is set, or ""
+// when the scope names none.
+func scopePolicyName(attrs []*commonv1.KeyValue) string {
+	for _, key := range []string{pktvisorPolicyNameScopeAttributeKey, orbPolicyNameScopeAttributeKey, policyNameScopeAttributeKey} {
+		if name := stringAttribute(attrs, key); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
 // enrichMetricsWithPolicy stamps orb.policy_id and orb.backend on every
-// ScopeMetrics whose scope names a policy through policy_name, resolving
-// (backend, name) against a snapshot of the agent's policy repository taken
-// once per request. A scope with no policy_name (process-level health
-// metrics), a name the repository does not know for that backend, or a
-// bridge without a repository leave the scope as it arrived: the platform
-// treats such series as unattributed. Datapoints and resources are never
-// touched; the policy is a property of the scope, and repeating it on every
-// point would multiply the payload for nothing.
+// ScopeMetrics whose scope names a policy, resolving (backend, name) against
+// a snapshot of the agent's policy repository taken once per request. A
+// scope naming no policy (process-level health metrics), a name the
+// repository does not know for that backend, or a bridge without a
+// repository leave the scope as it arrived: the platform treats such series
+// as unattributed. Datapoints and resources are never touched; the policy is
+// a property of the scope, and repeating it on every point would multiply
+// the payload for nothing.
 func enrichMetricsWithPolicy(req *collectormetrics.ExportMetricsServiceRequest, repo policies.PolicyRepo, logger *slog.Logger) {
 	if req == nil || repo == nil {
 		return
@@ -120,7 +136,7 @@ func enrichMetricsWithPolicy(req *collectormetrics.ExportMetricsServiceRequest, 
 			if sm == nil || sm.Scope == nil {
 				continue
 			}
-			name := stringAttribute(sm.Scope.Attributes, policyNameScopeAttributeKey)
+			name := scopePolicyName(sm.Scope.Attributes)
 			if name == "" {
 				continue
 			}

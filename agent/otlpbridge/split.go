@@ -10,7 +10,7 @@ import (
 // bytes each. An export that fits is one payload, encoded once. One that does
 // not is cut along the OTLP tree: by resource, then scope, then metric, then
 // data point, so every payload keeps the resource and the scope (with its
-// policy_name) of each point it carries, and the enricher attributes it as it
+// policy name) of each point it carries, and the enricher attributes it as it
 // would the whole. A metric with no data point is carried too, its header in
 // one payload. A single data point, or a pointless metric's header, whose
 // payload is still over limit on its own is left out, and reported in dropped
