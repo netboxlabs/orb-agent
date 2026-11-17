@@ -419,5 +419,9 @@ A `flow` policy takes the policy-level [`attributes`](../README.md#policy-attrib
 every series of the policy carries them; there are no per-flow-device attributes. `device_map`,
 which names the exporting devices and their interfaces, is unchanged. A key may not be one of the
 labels the flow handler sets itself: `device`, `device_interface`, `lat`, `lon`, `conversation`,
-`geo_loc`, `asn`, `ip`, `port`, `ip_port`, `dscp`, `ecn` or `interface`; `pktvisord` refuses such a
-policy. Needs orb-agent 2.18.0.
+`geo_loc`, `asn`, `ip`, `port`, `ip_port`, `dscp`, `ecn` or `interface`. The agent refuses `device`
+(and `target`, `policy`, `handler`, `tap`, `le` and `quantile`) before it sends anything, so an
+edit that uses one leaves the running version running. For the other labels only `pktvisord`
+refuses the policy, when it loads it. An edit it refuses has already removed the running version,
+so the policy runs nothing until the body is fixed; see
+[Edits](../README.md#edits). Needs orb-agent 2.18.0.

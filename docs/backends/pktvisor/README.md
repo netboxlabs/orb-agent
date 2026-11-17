@@ -193,20 +193,22 @@ orb:
   `[A-Za-z0-9_]` as `_`, so `netbox.site.name` becomes `netbox_site_name`.
 - **Values are text.** A value is a string, a number or a boolean, and `pktvisord` exports it as
   text, because its labels are text. Quote a value whose exact text matters: `"007"` stays `007`,
-  while an unquoted `007` is a number. A policy delivered as JSON can turn a whole number of
-  1,000,000 or more into a float, so quote such numbers as well.
+  while an unquoted `007` is a number. Quote large numbers and identifiers too. A policy delivered
+  as JSON can turn a whole number of 1,000,000 or more into a float, and a whole number too large
+  for 64 bits is sent in exponent form, such as `1.8446744073709552e+19`.
 
 ### Checks before the policy is applied
 The agent checks `attributes` before it sends the policy to `pktvisord`, and refuses the policy
 when:
 
-- the policy has more than 32 attributes. For a netprobe target the count is of the policy's and
-  the target's attributes together, and so are the limits below;
+- the policy has more than 32 attributes. For a netprobe target the count is of the merged set:
+  the policy's attributes with the target's laid over them, so a key the target overrides counts
+  once. The limits below apply to that merged set too;
 - a key is longer than 128 bytes, or a string value is longer than 256 bytes;
 - the keys and string values together are longer than 1024 bytes;
 - `attributes` is not a mapping, or a value is null, an empty string, a map, a list, a timestamp
   (quote a date to send it as a string), not valid UTF-8, a number that is not finite, or an
-  integer that does not fit 64 bits. An absent or null `attributes` means none;
+  integer between 2^63 and 2^64-1. An absent or null `attributes` means none;
 - a key is empty, is not valid UTF-8, or does not start with an ASCII letter;
 - a key is in the `orb` namespace: `orb` followed by a character that is not an ASCII letter or
   digit, such as `orb.site` or `orb_site`. The Orb platform sets and strips those names;
@@ -218,12 +220,18 @@ when:
   The same key written the same way on a policy and a target is an override, not a clash.
 
 `pktvisord` checks the policy again when it loads it, and also refuses a key that is, or becomes
-in Prometheus, one of the labels its handlers set on their own series. These differ by handler;
-see [Policy attributes](https://github.com/netboxlabs/pktvisor#policy-attributes) in the pktvisor
-documentation for the labels of each.
+in Prometheus, one of the labels its handlers set on their own series, such as netprobe's
+`status_code` or flow's `asn`, `interface`, `ip` and `port`. These differ by handler; see
+[Policy attributes](https://github.com/netboxlabs/pktvisor#policy-attributes) in the pktvisor
+documentation for the labels of each. The agent does not know that list, apart from `target` and
+`device`, so it refuses those before sending anything and the others only when `pktvisord` does.
 
-When the agent refuses an edit of a running policy, the running version keeps running; see
-[Edits](#edits). A first version that is refused never starts.
+The two refusals differ on an edit of a running policy:
+
+- When the agent refuses the edit, nothing is sent and the running version keeps running; see
+  [Edits](#edits). A first version that is refused never starts.
+- When only `pktvisord` refuses it, the agent has already removed the running version, so the
+  policy runs nothing until the body is fixed.
 
 ## Policies from Fleet
 A policy from Fleet has the same body as an `orb.policies.pktvisor.<name>` entry: `kind`,
@@ -282,7 +290,8 @@ policy is the last one on its listener.
 The agent applies a policy without a remove when it knows `pktvisord` holds nothing of it:
 
 - a new policy, including one the agent holds while `pktvisord` starts on demand, and one the
-  agent refused for its name, its tap or its encoding before sending `pktvisord` anything;
+  agent refused for its name, its tap, its attributes or its encoding before sending `pktvisord`
+  anything;
 - a policy a restart has removed from `pktvisord`, or hands to a new `pktvisord`;
 - a policy the agent stopped because a secret it uses no longer resolves.
 
@@ -290,8 +299,8 @@ Any other apply removes first, including the next version of a policy whose prev
 reached `pktvisord` and failed, such as one `pktvisord` refused or whose tap creation failed. A
 remove of a policy `pktvisord` does not run gets a 404, which the agent logs as a warning.
 
-The agent checks the policy name, the tap and the policy's encoding before an edit removes
-the running policy.
+The agent checks the policy name, the tap, the policy's attributes and its encoding before an
+edit removes the running policy.
 So when the agent refuses an edit:
 
 - The old version keeps running, and the policy shows `failed_to_apply`.
@@ -304,8 +313,9 @@ Two failures come after the old version is removed: the agent cannot create the 
 runs nothing until the edit is fixed.
 
 ### Policies that are refused
-The agent refuses a policy with a bad name, or one that names no tap and has an input
-type other than `netprobe` or `flow`. It still starts `pktvisord` on demand first, as it
+The agent refuses a policy with a bad name, with attributes it will not send (see
+[Checks before the policy is applied](#checks-before-the-policy-is-applied)), or one that names no
+tap and has an input type other than `netprobe` or `flow`. It still starts `pktvisord` on demand first, as it
 already does for a name with a slash.
 
 If `pktvisord` takes longer than the 10 second apply timeout to accept a policy on a
