@@ -1,6 +1,7 @@
 package traps
 
 import (
+	"context"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/metrics"
 )
@@ -187,6 +189,59 @@ func TestTally_ANewAttributeSetStartsANewSeries(t *testing.T) {
 	got = receivedOnly(exportedCounters(t, reader))
 	assert.Equal(t, int64(1), got["core|snmp.traps_received|device_ip=10.0.0.5|site=dc-east|trap_name=linkDown|version=2c"])
 	assert.Len(t, got, 1, "the old attribute set is not exported once withdrawn")
+}
+
+// An attribute applied again with another type is another attribute set, even
+// where the two values read as the same text, so it starts a series of its
+// own and is exported with the type it now has.
+func TestTally_AnAttributeChangingTypeStartsANewSeries(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		before, to attribute.KeyValue
+	}{
+		{"string to integer", attribute.String("rack_units", "1"), attribute.Int64("rack_units", 1)},
+		{"string to boolean", attribute.String("monitored", "true"), attribute.Bool("monitored", true)},
+		{"integer to float", attribute.Int64("rack_units", 1), attribute.Float64("rack_units", 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := withProvider(t)
+			ta := NewTally(testLogger)
+			ta.Register()
+			t.Cleanup(ta.Close)
+			ta.SetAttributes("core", []Device{device("core", "10.0.0.5", tc.before)})
+			ta.Activate("core")
+			for range 5 {
+				ta.Received("10.0.0.5", "core", "linkDown", V2c)
+			}
+			ta.Withdraw("core")
+			ta.SetAttributes("core", []Device{device("core", "10.0.0.5", tc.to)})
+			ta.Activate("core")
+			ta.Received("10.0.0.5", "core", "linkDown", V2c)
+
+			dps := receivedDataPoints(t, reader)
+			require.Len(t, dps, 1, "the old attribute set is not exported once withdrawn")
+			assert.Equal(t, int64(1), dps[0].Value)
+			v, ok := dps[0].Attributes.Value(tc.to.Key)
+			require.True(t, ok)
+			assert.Equal(t, tc.to.Value.Type(), v.Type())
+		})
+	}
+}
+
+// receivedDataPoints collects the snmp.traps_received datapoints.
+func receivedDataPoints(t *testing.T, reader *sdkmetric.ManualReader) []metricdata.DataPoint[int64] {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	var out []metricdata.DataPoint[int64]
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if sum, ok := m.Data.(metricdata.Sum[int64]); ok && m.Name == "snmp.traps_received" {
+				out = append(out, sum.DataPoints...)
+			}
+		}
+	}
+	return out
 }
 
 // The same attributes applied again are the same series, which resumes its

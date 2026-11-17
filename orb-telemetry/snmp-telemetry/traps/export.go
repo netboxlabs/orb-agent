@@ -55,11 +55,27 @@ const (
 type receivedKey struct {
 	deviceIP, policy, trapName string
 	version                    Version
-	// attrs is the encoding of the policy attributes the series carries
-	// (deviceAttrs.enc). A policy applied again with other attributes for an
+	// attrs identifies the policy attributes the series carries
+	// (deviceAttrs.id). A policy applied again with other attributes for an
 	// address starts a series of its own rather than carrying the old set's
 	// total into the new one.
-	attrs string
+	attrs attrsID
+}
+
+// attrsID identifies a set of policy attributes exactly. The default encoding
+// writes every value as text, so it is paired with each value's type, in the
+// same order, to tell rack_units "1" from rack_units 1.
+type attrsID struct {
+	enc, types string
+}
+
+func identify(kvs []attribute.KeyValue) attrsID {
+	set := attribute.NewSet(slices.Clone(kvs)...)
+	types := make([]byte, 0, set.Len())
+	for iter := set.Iter(); iter.Next(); {
+		types = append(types, byte(iter.Attribute().Value.Type()))
+	}
+	return attrsID{enc: set.Encoded(attribute.DefaultEncoder()), types: string(types)}
 }
 
 // series is one received series' total and whether it is exported. A
@@ -77,10 +93,10 @@ type series struct {
 }
 
 // deviceAttrs is the policy attributes the received series of one address
-// carry, with the encoding that goes into their key.
+// carry, with the identity that goes into their key.
 type deviceAttrs struct {
 	kvs []attribute.KeyValue
-	enc string
+	id  attrsID
 }
 
 // Tally holds the counts the receiver produces and exports them through
@@ -197,7 +213,7 @@ func (t *Tally) receivedLocked(deviceIP, policy, trapName string, v Version) boo
 	k := receivedKey{deviceIP: deviceIP, policy: policy, trapName: trapName, version: v}
 	attrs := t.attrsFor(policy, deviceIP)
 	if attrs != nil {
-		k.attrs = attrs.enc
+		k.attrs = attrs.id
 	}
 	if _, exists := t.received[k]; !exists && len(t.received) >= seriesLimit && !t.evictDormant() {
 		// The overflow series stands for many devices, so it carries none of
@@ -278,9 +294,8 @@ func (t *Tally) SetAttributes(policy string, devices []Device) {
 	}
 	maps.DeleteFunc(byAddr, func(key string, da *deviceAttrs) bool { return len(da.kvs) == 0 && !final[key] })
 	for _, da := range byAddr {
-		if da.enc == "" {
-			set := attribute.NewSet(slices.Clone(da.kvs)...)
-			da.enc = set.Encoded(attribute.DefaultEncoder())
+		if da.id == (attrsID{}) {
+			da.id = identify(da.kvs)
 		}
 	}
 	t.mu.Lock()
