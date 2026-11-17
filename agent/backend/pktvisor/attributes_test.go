@@ -280,3 +280,71 @@ func TestCheckAttributesBoundaries(t *testing.T) {
 		})
 	}
 }
+
+// withModules gives body the handler modules, in the map or the list form
+// pktvisord accepts.
+func withModules(body map[string]any, modules any) map[string]any {
+	body["handlers"] = map[string]any{"modules": modules}
+	return body
+}
+
+func TestCheckAttributesHandlerLabels(t *testing.T) {
+	netprobe := map[string]any{"probe": map[string]any{"type": "netprobe"}}
+	tests := []struct {
+		name    string
+		body    any
+		wantErr []string // nil means accepted
+	}{
+		{"netprobe status_code", withModules(bodyWith(map[string]any{"status_code": "x"}, nil), netprobe), []string{"policy", `"status_code"`, "netprobe handler"}},
+		{"netprobe rcode on a target", withModules(bodyWith(nil, map[string]any{"rcode": "x"}), netprobe), []string{`target "gw1"`, `"rcode"`, "netprobe handler"}},
+		{"in Prometheus form", withModules(bodyWith(map[string]any{"status.code": "x"}, nil), netprobe), []string{`"status.code"`, `"status_code"`, "netprobe handler"}},
+		{"flow ip", withModules(bodyWith(map[string]any{"ip": "x"}, nil), map[string]any{"f": map[string]any{"type": "flow"}}), []string{`"ip"`, "flow handler"}},
+		{"ip on netprobe is fine", withModules(bodyWith(map[string]any{"ip": "x"}, nil), netprobe), nil},
+		{"dns direction", withModules(bodyWith(map[string]any{"direction": "x"}, nil), map[string]any{"d": map[string]any{"type": "dns", "require_version": "2.0"}}), []string{`"direction"`, "dns handler"}},
+		{"dhcp client", withModules(bodyWith(map[string]any{"client": "x"}, nil), map[string]any{"d": map[string]any{"type": "dhcp"}}), []string{`"client"`, "dhcp handler"}},
+		{"net ipv4", withModules(bodyWith(map[string]any{"ipv4": "x"}, nil), map[string]any{"n": map[string]any{"type": "net"}}), []string{`"ipv4"`, "net handler"}},
+		{"list form", withModules(bodyWith(map[string]any{"status_code": "x"}, nil), []any{map[string]any{"probe": map[string]any{"type": "netprobe"}}}), []string{`"status_code"`, "netprobe handler"}},
+		{"type under the module name", withModules(bodyWith(map[string]any{"status_code": "x"}, nil), map[string]any{"probe": map[string]any{"probe": map[string]any{"type": "netprobe"}}}), []string{`"status_code"`, "netprobe handler"}},
+		{"two handlers name the first in order", withModules(bodyWith(map[string]any{"port": "x"}, nil), map[string]any{"f": map[string]any{"type": "flow"}, "d": map[string]any{"type": "dns"}}), []string{`"port"`, "dns handler"}},
+		{"unknown handler type", withModules(bodyWith(map[string]any{"ip": "x"}, nil), map[string]any{"x": map[string]any{"type": "other"}}), nil},
+		{"modules not a mapping", withModules(bodyWith(map[string]any{"ip": "x"}, nil), "flow"), nil},
+		{"no handlers", bodyWith(map[string]any{"ip": "x", "status_code": "x"}, nil), nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkAttributes(tt.body)
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			for _, frag := range tt.wantErr {
+				assert.Contains(t, err.Error(), frag)
+			}
+		})
+	}
+}
+
+// A body read from YAML, as a policy written in the agent's config is.
+func TestCheckAttributesHandlerLabelsYAML(t *testing.T) {
+	var body any
+	require.NoError(t, yaml.Unmarshal([]byte(`
+kind: collection
+input:
+  input_type: netprobe
+  config:
+    targets:
+      gw1:
+        target: 192.0.2.1
+        attributes:
+          status_code: "x"
+handlers:
+  modules:
+    - probe:
+        type: netprobe
+`), &body))
+	err := checkAttributes(body)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `target "gw1"`)
+	assert.Contains(t, err.Error(), "netprobe handler")
+}

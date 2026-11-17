@@ -129,10 +129,7 @@ handlers:
   limits apply to the merged set of each target. A target key whose Prometheus name matches a
   different policy key is a clash; the same key written the same way is an override.
 - A key may not be `target`, `status_code` or `rcode`, the labels the handler sets itself. The
-  agent refuses `target` (and `policy`, `handler`, `tap`, `device`, `le` and `quantile`) before it
-  sends anything, so an edit that uses one leaves the running version running. For `status_code`
-  and `rcode` only `pktvisord` refuses the policy, when it loads it. An edit it refuses has
-  already removed the running version, so the policy runs nothing until the body is fixed; see
-  [Edits](../README.md#edits).
+  agent refuses them before it sends anything, so an edit that uses one leaves the running version
+  running; see [Edits](../README.md#edits).
 - Target attributes are not part of the input's config: policies that differ only in them share
   one input. pktvisor's own netprobe documentation has the same section.

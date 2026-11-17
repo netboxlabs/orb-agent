@@ -220,21 +220,22 @@ when:
 - a key becomes `job` or `instance` in Prometheus, a label Prometheus sets itself, or a name
   starting with `otel_scope_`;
 - two keys become the same name in Prometheus, such as `netbox.site.name` and `netbox_site_name`.
-  The same key written the same way on a policy and a target is an override, not a clash.
+  The same key written the same way on a policy and a target is an override, not a clash;
+- a key is, or becomes in Prometheus, a label one of the policy's handlers sets on its own series.
+  These differ by handler type:
 
-`pktvisord` checks the policy again when it loads it, and also refuses a key that is, or becomes
-in Prometheus, one of the labels its handlers set on their own series, such as netprobe's
-`status_code` or flow's `asn`, `interface`, `ip` and `port`. These differ by handler; see
-[Policy attributes](https://github.com/netboxlabs/pktvisor#policy-attributes) in the pktvisor
-documentation for the labels of each. The agent does not know that list, apart from `target` and
-`device`, so it refuses those before sending anything and the others only when `pktvisord` does.
+  | Handler    | Labels |
+  |------------|--------|
+  | `dhcp`     | `client`, `server` |
+  | `dns`      | `direction`, `lat`, `lon`, `geo_loc`, `asn`, `ecs`, `qname`, `port`, `qtype`, `rcode` |
+  | `flow`     | `device`, `device_interface`, `lat`, `lon`, `conversation`, `geo_loc`, `asn`, `ip`, `port`, `ip_port`, `dscp`, `ecn`, `interface` |
+  | `net`      | `direction`, `lat`, `lon`, `geo_loc`, `asn`, `ipv4`, `ipv6` |
+  | `netprobe` | `target`, `status_code`, `rcode` |
 
-The two refusals differ on an edit of a running policy:
+  Only version 2 of `dns` and `net` sets `direction`, but the agent refuses it for every version.
 
-- When the agent refuses the edit, nothing is sent and the running version keeps running; see
-  [Edits](#edits). A first version that is refused never starts.
-- When only `pktvisord` refuses it, the agent has already removed the running version, so the
-  policy runs nothing until the body is fixed.
+A refused edit sends nothing, so the running version keeps running; see [Edits](#edits). A first
+version that is refused never starts. `pktvisord` checks the policy again when it loads it.
 
 ## Policies from Fleet
 A policy from Fleet has the same body as an `orb.policies.pktvisor.<name>` entry: `kind`,

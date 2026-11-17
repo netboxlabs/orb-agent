@@ -45,6 +45,59 @@ func reservedAttribute(name string) bool {
 	return false
 }
 
+// handlerLabels are the labels each pktvisor handler type sets on its own
+// series (own_label_names in pktvisord). pktvisord refuses an attribute whose
+// Prometheus name is one of them for any handler the policy runs. A type's
+// versions share one list, so direction, which only v2 of dns and net sets,
+// is refused for v1 too.
+var handlerLabels = map[string][]string{
+	"dhcp":     {"client", "server"},
+	"dns":      {"direction", "lat", "lon", "geo_loc", "asn", "ecs", "qname", "port", "qtype", "rcode"},
+	"flow":     {"device", "device_interface", "lat", "lon", "conversation", "geo_loc", "asn", "ip", "port", "ip_port", "dscp", "ecn", "interface"},
+	"net":      {"direction", "lat", "lon", "geo_loc", "asn", "ipv4", "ipv6"},
+	"netprobe": {"target", "status_code", "rcode"},
+}
+
+// ownLabels maps each label the body's handler modules set to the first
+// handler type, in name order, that sets it. Modules are read in the two forms
+// pktvisord accepts: a mapping of module names, or a list of one-name
+// mappings, each module holding its type, or holding a mapping under its own
+// name that does.
+func ownLabels(doc map[string]any) map[string]string {
+	handlers, _ := asMap(doc["handlers"])
+	named := map[string]any{}
+	if list, ok := handlers["modules"].([]any); ok {
+		for _, item := range list {
+			one, _ := asMap(item)
+			for name := range one {
+				named[name] = one
+			}
+		}
+	} else if m, ok := asMap(handlers["modules"]); ok {
+		named = m
+	}
+	var types []string
+	for name, raw := range named {
+		module, _ := asMap(raw)
+		if _, ok := module["type"]; !ok {
+			module, _ = asMap(module[name])
+		}
+		if t, ok := module["type"].(string); ok {
+			types = append(types, t)
+		}
+	}
+	slices.Sort(types)
+	out := map[string]string{}
+	for _, t := range types {
+		for _, label := range handlerLabels[t] {
+			if _, seen := out[label]; !seen {
+				out[label] = t
+			}
+		}
+	}
+	return out
+}
+
 // prometheusOwn reports whether a label name is one Prometheus sets or
 // reserves itself: job and instance, every name starting with two
 // underscores, and every name starting with otel_scope_.
@@ -103,14 +156,15 @@ func mergeAttributes(policy, target attributes) attributes {
 }
 
 // validate checks the set's size, then every key and value in key order, and
-// names the first one that cannot be exported.
+// names the first one that cannot be exported. handlerOwn holds the labels the
+// policy's handlers set, each with its handler type (ownLabels).
 //
 // An empty string is refused rather than exported: a Prometheus-style backend
 // reads an empty label as an absent one. Keys are compared in their
 // Prometheus form too: a key landing on a reserved name would corrupt a label
 // that identifies the series, and two keys landing on one name would corrupt
 // each other.
-func (a attributes) validate() error {
+func (a attributes) validate(handlerOwn map[string]string) error {
 	if len(a) > maxAttributes {
 		return fmt.Errorf("carries %d attributes, more than the limit of %d", len(a), maxAttributes)
 	}
@@ -138,6 +192,12 @@ func (a attributes) validate() error {
 		prom := prometheusName(key)
 		if reservedAttribute(prom) {
 			return fmt.Errorf("attribute key %q becomes %q in Prometheus, a name reserved for the backend's own attributes", key, prom)
+		}
+		if handler, ok := handlerOwn[prom]; ok {
+			if prom == key {
+				return fmt.Errorf("attribute key %q is a label the %s handler sets itself", key, handler)
+			}
+			return fmt.Errorf("attribute key %q becomes %q in Prometheus, a label the %s handler sets itself", key, prom, handler)
 		}
 		if prometheusOwn(prom) {
 			return fmt.Errorf("attribute key %q becomes %q in Prometheus, a label Prometheus sets itself", key, prom)
@@ -250,7 +310,8 @@ func checkAttributes(body any) error {
 	if err != nil {
 		return err
 	}
-	if err := policy.validate(); err != nil {
+	handlerOwn := ownLabels(doc)
+	if err := policy.validate(handlerOwn); err != nil {
 		return fmt.Errorf("pktvisor attributes of policy: %w", err)
 	}
 
@@ -270,7 +331,7 @@ func checkAttributes(body any) error {
 		if own == nil {
 			continue
 		}
-		if err := mergeAttributes(policy, own).validate(); err != nil {
+		if err := mergeAttributes(policy, own).validate(handlerOwn); err != nil {
 			return fmt.Errorf("pktvisor attributes of %s: %w", item, err)
 		}
 	}
