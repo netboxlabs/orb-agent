@@ -577,8 +577,10 @@ key, when:
   so one would be dropped. `orbit.site`, `orb2` and `ORB.site` are fine;
 - a key is one a profile of the policy's profile set exports, as a device tag,
   a row tag, or the `_status` or `_value` attribute a symbol derives from its
-  reading. Which profile a device matches is only known once it answers, so a
-  key any profile exports would meet that profile's attribute on some device.
+  reading. The profiles that count are the ones a device can be served: one a
+  sysObjectID selects, or one its sysDescr redirect names. Which of them a
+  device matches is only known once it answers, so a key any of them exports
+  would meet that profile's attribute on some device.
   This is checked when the policy starts, and the error names the profile. The
   bundled set exports names such as `model` and `serial_number`;
 - two keys collide once translated to Prometheus, which replaces every

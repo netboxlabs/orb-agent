@@ -816,14 +816,14 @@ type profileAttrIndex struct {
 // cannot disagree. Within a profile they are indexed in name order, so the
 // attribute a Prometheus name reports is the same on every run.
 //
-// Every profile counts, not only the one a device matches, since which one
-// that is is only known once the device answers.
+// Every profile a device can be served counts, not only the one a device
+// matches, since which one that is is only known once the device answers.
 func profileAttrNames(matcher *profiles.Matcher) profileAttrIndex {
 	idx := profileAttrIndex{exact: map[string]profileAttr{}, prometheus: map[string]profileAttr{}}
 	if matcher == nil {
 		return idx
 	}
-	for _, p := range matcher.Profiles() {
+	for _, p := range matcher.Selectable() {
 		names := tagNameSet(p.MetricTags)
 		for i := range p.Metrics {
 			entry := &p.Metrics[i]

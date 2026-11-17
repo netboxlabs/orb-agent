@@ -165,7 +165,7 @@ func TestReservedAttributeName_IsTheCollectorsOwnDimensions(t *testing.T) {
 // series: device tags, row tags, joined tags and the attributes a symbol,
 // scalar or column, derives from its reading. The tags of a `symbol:` entry
 // are never applied, and neither is a tag naming no OID, so they are not
-// among them.
+// among them; nor is anything in a profile no device can be served.
 func TestProfileAttribute_NamesEveryKeyTheProfilesExport(t *testing.T) {
 	enum := profiles.Enum{Values: map[string]int{"up": 1, "down": 2}}
 	device := profileWithOID("1.3.6.1.4.1.9999.63", "vendor-a.yml", []profiles.MetricEntry{
@@ -198,15 +198,19 @@ func TestProfileAttribute_NamesEveryKeyTheProfilesExport(t *testing.T) {
 		{Symbol: &profiles.Symbol{Name: "cpu", OID: "1.3.6.1.4.1.9999.64.1"}},
 	})
 	other.MetricTags = []profiles.MetricTag{{Tag: "model", Column: &profiles.TagColumn{OID: "1.3.6.1.4.1.9999.64.2", Name: "model"}}}
+	// No sysobjectid and no redirect to it, so no device is ever served it.
+	unmatched := &profiles.Profile{FileName: "custom-base.yml", MetricTags: []profiles.MetricTag{
+		{Tag: "rack_row", Column: &profiles.TagColumn{OID: "1.3.6.1.4.1.9999.67.1.0", Name: "rackRow"}},
+	}}
 
-	c := newCollectorWithProfiles(nil, device, other)
+	c := newCollectorWithProfiles(nil, unmatched, device, other)
 	for _, key := range []string{"model", "interface", "ifName", "ifOperStatus_status", "ifPhysAddress_value", "chassisState_status"} {
 		name, profile, ok := c.ProfileAttribute(key)
 		assert.True(t, ok, key)
 		assert.Equal(t, key, name, key)
 		assert.Equal(t, "vendor-a.yml", profile, "%s is named by the first profile that exports it", key)
 	}
-	for _, key := range []string{"site", "Model", "ifOperStatus", "cpu", "fan_slot", "if_position", "if_alias", "rack_position"} {
+	for _, key := range []string{"site", "Model", "ifOperStatus", "cpu", "fan_slot", "if_position", "if_alias", "rack_position", "rack_row"} {
 		_, _, ok := c.ProfileAttribute(key)
 		assert.False(t, ok, key)
 	}
