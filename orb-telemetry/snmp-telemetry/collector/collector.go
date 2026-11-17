@@ -838,10 +838,12 @@ func profileAttrNames(matcher *profiles.Matcher) profileAttrIndex {
 			if entryAppliesRowTags(entry) {
 				maps.Copy(names, tagNameSet(entry.MetricTags))
 			}
+			// `symbol:` wins over `symbols:`, as entryCollects reads it.
 			if entry.Symbol != nil {
 				for _, name := range derivedAttrNames(entry.Symbol) {
 					names[name] = struct{}{}
 				}
+				continue
 			}
 			for j := range entry.Symbols {
 				for _, name := range derivedAttrNames(&entry.Symbols[j]) {

@@ -191,6 +191,11 @@ func TestProfileAttribute_NamesEveryKeyTheProfilesExport(t *testing.T) {
 			MetricTags: []profiles.MetricTag{{Tag: "fan_slot", Column: &profiles.TagColumn{OID: "1.3.6.1.4.1.9999.63.3", Name: "fanSlot"}}},
 		},
 		{
+			// `symbol:` wins, so the `symbols:` beside it are never read.
+			Symbol:  &profiles.Symbol{Name: "psuState", OID: "1.3.6.1.4.1.9999.63.6.0"},
+			Symbols: []profiles.Symbol{{Name: "psuMode", OID: "1.3.6.1.4.1.9999.63.7.0", Enum: enum}},
+		},
+		{
 			// The entry's only symbol is never read, so its rows never exist.
 			Table:      &profiles.Table{Name: "slotTable", OID: "1.3.6.1.4.1.9999.63.5"},
 			Symbols:    []profiles.Symbol{{Name: "slotLoad", OID: "1.3.6.1.4.1.9999.63.5.1.2", Script: "value * 8"}},
@@ -226,7 +231,7 @@ func TestProfileAttribute_NamesEveryKeyTheProfilesExport(t *testing.T) {
 		assert.Equal(t, key, name, key)
 		assert.Equal(t, "vendor-a.yml", profile, "%s is named by the first profile that exports it", key)
 	}
-	for _, key := range []string{"site", "Model", "ifOperStatus", "cpu", "fan_slot", "if_position", "if_alias", "rack_position", "rack_row", "slot_name", "site_code"} {
+	for _, key := range []string{"site", "Model", "ifOperStatus", "cpu", "fan_slot", "if_position", "if_alias", "rack_position", "rack_row", "slot_name", "site_code", "psuMode_status"} {
 		_, _, ok := c.ProfileAttribute(key)
 		assert.False(t, ok, key)
 	}
