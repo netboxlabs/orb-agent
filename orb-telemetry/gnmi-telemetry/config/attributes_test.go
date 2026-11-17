@@ -181,6 +181,14 @@ policies:
 	assert.Contains(t, err.Error(), "is not valid UTF-8")
 }
 
+// The refusal clips an invalid key as it clips every other, so a key of any
+// size cannot fill the error.
+func TestAttributes_InvalidUTF8KeyIsClippedInTheRefusal(t *testing.T) {
+	err := Attributes{"bad\xff" + strings.Repeat("k", 4*MaxKeyBytes): "x"}.Validate(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `attribute key "bad\xff`+strings.Repeat("k", 28)+`..." is not valid UTF-8`)
+}
+
 func TestAttributes_QuotedEmptyKeyIsRefused(t *testing.T) {
 	p := decodePolicy(t, `
 policies:
