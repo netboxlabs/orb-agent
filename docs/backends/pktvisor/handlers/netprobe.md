@@ -112,7 +112,7 @@ input:
         target: 192.0.2.1
         attributes:
           netbox.site.name: dc-east
-          netbox_id: netbox-device-42
+          netbox_id: "42"
           device_ip: 192.0.2.1
 handlers:
   modules:

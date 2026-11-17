@@ -174,7 +174,7 @@ orb:
           netbox.site.name: dc-west
           netbox.tenant.name: acme
           netbox.role.name: edge-router
-          netbox_id: netbox-device-42
+          netbox_id: "42"
           device_ip: 192.0.2.1
         input:
           input_type: pcap
@@ -189,6 +189,9 @@ orb:
   `input.config.targets.<name>.attributes`; see [Netprobe](handlers/netprobe.md#target-attributes).
   The target's attributes are laid over the policy's, key by key, and the target's value wins.
   A `flow` policy takes the policy-level `attributes` only; see [Flow](handlers/flow.md#attributes).
+- **Device identity.** `netbox_id` and `device_ip` are the names SNMP and gNMI telemetry give a
+  device's NetBox ID and address. Use the same names, and NetBox's numeric device ID (`"42"`,
+  not `netbox-device-42`), so a pktvisor series names its device as theirs do.
 - **Keys.** OTLP carries each key as written. Prometheus output writes every character outside
   `[A-Za-z0-9_]` as `_`, so `netbox.site.name` becomes `netbox_site_name`.
 - **Values are text.** A value is a string, a number or a boolean, and `pktvisord` exports it as
