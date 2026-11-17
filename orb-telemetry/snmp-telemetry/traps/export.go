@@ -4,6 +4,9 @@ import (
 	"container/list"
 	"context"
 	"log/slog"
+	"maps"
+	"slices"
+	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -52,6 +55,27 @@ const (
 type receivedKey struct {
 	deviceIP, policy, trapName string
 	version                    Version
+	// attrs identifies the policy attributes the series carries
+	// (deviceAttrs.id). A policy applied again with other attributes for an
+	// address starts a series of its own rather than carrying the old set's
+	// total into the new one.
+	attrs attrsID
+}
+
+// attrsID identifies a set of policy attributes exactly. The default encoding
+// writes every value as text, so it is paired with each value's type, in the
+// same order, to tell rack_units "1" from rack_units 1.
+type attrsID struct {
+	enc, types string
+}
+
+func identify(kvs []attribute.KeyValue) attrsID {
+	set := attribute.NewSet(slices.Clone(kvs)...)
+	types := make([]byte, 0, set.Len())
+	for iter := set.Iter(); iter.Next(); {
+		types = append(types, byte(iter.Attribute().Value.Type()))
+	}
+	return attrsID{enc: set.Encoded(attribute.DefaultEncoder()), types: string(types)}
 }
 
 // series is one received series' total and whether it is exported. A
@@ -60,10 +84,19 @@ type receivedKey struct {
 // a series that reappeared at one after a policy was deleted and recreated
 // under the same name would read as a decrease. A dormant series is not
 // observed, keeps its total, resumes from it when its key is counted again,
-// and is the first thing evicted when the map is at its cap.
+// and is the first thing evicted when the map is at its cap. attrs are the
+// policy attributes it is exported with, the ones its key encodes.
 type series struct {
-	n    int64
-	live bool
+	n     int64
+	live  bool
+	attrs []attribute.KeyValue
+}
+
+// deviceAttrs is the policy attributes the received series of one address
+// carry, with the identity that goes into their key.
+type deviceAttrs struct {
+	kvs []attribute.KeyValue
+	id  attrsID
 }
 
 // Tally holds the counts the receiver produces and exports them through
@@ -100,6 +133,9 @@ type Tally struct {
 	// at twice the cap.
 	baselines     map[receivedKey]*list.Element
 	baselineOrder *list.List
+	// attrs is each policy's attributes by device address (SetAttributes),
+	// read as a trap is counted.
+	attrs map[string]map[string]*deviceAttrs
 
 	regMu sync.Mutex
 	// registration is the process-level counters' callback (drops and
@@ -124,6 +160,7 @@ func NewTally(logger *slog.Logger) *Tally {
 		dormant:       make(map[receivedKey]struct{}),
 		baselines:     make(map[receivedKey]*list.Element),
 		baselineOrder: list.New(),
+		attrs:         make(map[string]map[string]*deviceAttrs),
 		policyRegs:    make(map[string]metric.Registration),
 		active:        make(map[string]struct{}),
 	}
@@ -173,9 +210,16 @@ func (a *Account) Received(deviceIP, policy, trapName string, v Version) bool {
 }
 
 func (t *Tally) receivedLocked(deviceIP, policy, trapName string, v Version) bool {
-	k := receivedKey{deviceIP, policy, trapName, v}
+	k := receivedKey{deviceIP: deviceIP, policy: policy, trapName: trapName, version: v}
+	attrs := t.attrsFor(policy, deviceIP)
+	if attrs != nil {
+		k.attrs = attrs.id
+	}
 	if _, exists := t.received[k]; !exists && len(t.received) >= seriesLimit && !t.evictDormant() {
-		k = receivedKey{OtherName, policy, OtherName, v}
+		// The overflow series stands for many devices, so it carries none of
+		// their attributes.
+		k = receivedKey{deviceIP: OtherName, policy: policy, trapName: OtherName, version: v}
+		attrs = nil
 		if _, exists := t.received[k]; !exists && len(t.received) >= maxSeries && !t.evictDormant() {
 			return false
 		}
@@ -183,6 +227,9 @@ func (t *Tally) receivedLocked(deviceIP, policy, trapName string, v Version) boo
 	sr := t.received[k]
 	if sr == nil {
 		sr = &series{n: t.takeBaseline(k)}
+		if attrs != nil {
+			sr.attrs = attrs.kvs
+		}
 		t.received[k] = sr
 		// A brand-new key, not one taken back from a baseline, is a new
 		// piece of retained state for its policy. takeBaseline returns a
@@ -202,6 +249,102 @@ func (t *Tally) receivedLocked(deviceIP, policy, trapName string, v Version) boo
 	sr.live = true
 	delete(t.dormant, k)
 	return true
+}
+
+// SetAttributes records the policy attributes the policy's received series
+// carry, per device address, replacing what the policy had. Every target
+// claiming a trap's address shares one stream of traps, so the address
+// carries only the attributes they all give the same value:
+//   - targets of one policy at one address, apart by port, ID or context;
+//   - a target written with a zone and one written without it, both of which
+//     claim a trap from that interface.
+//
+// Devices an entry expanded to share one rendering of its attributes, and
+// share one record here too, so a wide prefix costs a map entry per address
+// rather than a copy of its attributes per address.
+func (t *Tally) SetAttributes(policy string, devices []Device) {
+	byAddr := make(map[string]*deviceAttrs)
+	var last *deviceAttrs
+	for _, d := range devices {
+		a := canonical(d.Addr)
+		if !a.IsValid() {
+			continue
+		}
+		key := a.String()
+		if held, seen := byAddr[key]; seen {
+			byAddr[key] = &deviceAttrs{kvs: agreed(held.kvs, d.Attributes)}
+			continue
+		}
+		if last == nil || !sameSlice(last.kvs, d.Attributes) {
+			last = &deviceAttrs{kvs: d.Attributes}
+		}
+		byAddr[key] = last
+	}
+	// A zoned address beside its zoneless form keeps its record even when the
+	// two agree on nothing: attrsFor would otherwise fall back to the zoneless
+	// record, whose attributes the zoned target does not share.
+	final := make(map[string]bool)
+	for key, held := range byAddr {
+		if addr, _, zoned := strings.Cut(key, "%"); zoned {
+			if zoneless, ok := byAddr[addr]; ok {
+				byAddr[key] = &deviceAttrs{kvs: agreed(held.kvs, zoneless.kvs)}
+				final[key] = true
+			}
+		}
+	}
+	maps.DeleteFunc(byAddr, func(key string, da *deviceAttrs) bool { return len(da.kvs) == 0 && !final[key] })
+	for _, da := range byAddr {
+		if da.id == (attrsID{}) {
+			da.id = identify(da.kvs)
+		}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(byAddr) == 0 {
+		delete(t.attrs, policy)
+		return
+	}
+	t.attrs[policy] = byAddr
+}
+
+// agreed is the attributes of a that b carries with the same value.
+func agreed(a, b []attribute.KeyValue) []attribute.KeyValue {
+	return slices.DeleteFunc(slices.Clone(a), func(kv attribute.KeyValue) bool {
+		return !slices.Contains(b, kv)
+	})
+}
+
+// sameSlice reports whether two slices are one rendering, not merely equal.
+func sameSlice(a, b []attribute.KeyValue) bool {
+	return len(a) == len(b) && (len(a) == 0 || &a[0] == &b[0])
+}
+
+// attrsFor is the policy attributes a received series of the policy and
+// device address carries, or nil. A record for the address is final, empty
+// or not; a zoned address with none takes the zoneless address's, since the
+// policy names it only without a zone and its claims do the same. Needs mu.
+func (t *Tally) attrsFor(policy, deviceIP string) *deviceAttrs {
+	byAddr := t.attrs[policy]
+	if da, ok := byAddr[deviceIP]; ok {
+		return da
+	}
+	if addr, _, zoned := strings.Cut(deviceIP, "%"); zoned {
+		return byAddr[addr]
+	}
+	return nil
+}
+
+// The dimensions a received series carries itself.
+const (
+	deviceIPAttr = "device_ip"
+	trapNameAttr = "trap_name"
+	versionAttr  = "version"
+)
+
+// ReservedAttributeName reports whether a policy attribute of this name would
+// take the key of a dimension the received series carries itself.
+func ReservedAttributeName(name string) bool {
+	return name == deviceIPAttr || name == trapNameAttr || name == versionAttr
 }
 
 // Activate marks a policy acquired, so its counts are exported again, and
@@ -299,9 +442,11 @@ func (t *Tally) Datagram() {
 // policy stops exporting; the totals are kept so a series that reappears
 // resumes rather than restarts. Drops and datagrams are process-level and
 // are kept. The policy's counter is given back to the meter, so its scope
-// exports nothing until it is activated again.
+// exports nothing until it is activated again, and its attributes are
+// forgotten, so it carries the ones it is next acquired with.
 func (t *Tally) Withdraw(policy string) {
 	t.mu.Lock()
+	delete(t.attrs, policy)
 	for k, sr := range t.received {
 		if k.policy == policy {
 			sr.live = false
@@ -380,8 +525,10 @@ func (t *Tally) registerPolicy(policy string) {
 
 // registerPolicyLocked attaches traps_received on the policy's meter, once
 // per policy. The callback observes only that policy's live series, with
-// the device attributes the polled series carry and no policy attribute:
-// the scope names the policy. It needs regMu.
+// the device attributes the polled series carry and the policy attributes the
+// series was counted under (SetAttributes), its own dimensions last so they
+// win. The scope names the policy, so no datapoint attribute does. It needs
+// regMu.
 func (t *Tally) registerPolicyLocked(policy string) {
 	if _, ok := t.policyRegs[policy]; ok {
 		return
@@ -402,11 +549,14 @@ func (t *Tally) registerPolicyLocked(policy string) {
 			if k.policy != policy || !sr.live {
 				continue
 			}
-			o.ObserveInt64(received, sr.n, metric.WithAttributes(
-				attribute.String("device_ip", k.deviceIP),
-				attribute.String("trap_name", k.trapName),
-				attribute.String("version", string(k.version)),
-			))
+			attrs := make([]attribute.KeyValue, 0, len(sr.attrs)+3)
+			attrs = append(attrs, sr.attrs...)
+			attrs = append(attrs,
+				attribute.String(deviceIPAttr, k.deviceIP),
+				attribute.String(trapNameAttr, k.trapName),
+				attribute.String(versionAttr, string(k.version)),
+			)
+			o.ObserveInt64(received, sr.n, metric.WithAttributes(attrs...))
 		}
 		return nil
 	}, received)
@@ -475,7 +625,7 @@ func (t *Tally) Close() {
 func (t *Tally) receivedCount(deviceIP, policy, trapName string, v Version) int64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if sr := t.received[receivedKey{deviceIP, policy, trapName, v}]; sr != nil && sr.live {
+	if sr := t.received[receivedKey{deviceIP: deviceIP, policy: policy, trapName: trapName, version: v}]; sr != nil && sr.live {
 		return sr.n
 	}
 	return 0
@@ -497,7 +647,7 @@ func (t *Tally) baselineCount() int {
 func (t *Tally) retainedCount(deviceIP, policy, trapName string, v Version) int64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if sr := t.received[receivedKey{deviceIP, policy, trapName, v}]; sr != nil {
+	if sr := t.received[receivedKey{deviceIP: deviceIP, policy: policy, trapName: trapName, version: v}]; sr != nil {
 		return sr.n
 	}
 	return 0

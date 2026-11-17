@@ -33,6 +33,9 @@ type matchRedirect struct {
 
 // Matcher matches a device sysObjectID (and optionally sysDescr) to a Profile.
 type Matcher struct {
+	// profiles is every profile the matcher was built from, in the order
+	// given, which Selectable keeps.
+	profiles []*Profile
 	// trapNames is the trap definitions of the profile set this matcher was
 	// built from, keyed by normalised OID, built once. A policy registers
 	// them with its trap claims so its traps are named by its own set.
@@ -125,6 +128,7 @@ func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 	reportShadowed(byWildcard, logger, "sysobjectid", keyClaims.bundled)
 
 	m := &Matcher{
+		profiles:      profiles,
 		trapNames:     TrapNames(profiles),
 		exactIndex:    make(map[string]*Profile, len(byExact)),
 		profileByFile: make(map[string]*Profile, len(byBase)),
@@ -376,3 +380,27 @@ func normalizeOID(raw string) string {
 // TrapNames is the trap definitions of the profile set this matcher was built
 // from, keyed by normalised OID. The same map is returned every time.
 func (m *Matcher) TrapNames() map[string]string { return m.trapNames }
+
+// Selectable is every profile MatchWithDescr can return, in the order the
+// matcher was given: the profiles serving a sysObjectID, exact or wildcard,
+// and the profiles their sysDescr redirects name. A profile reached only
+// through `extends` is not among them; the profiles extending it carry what it
+// declares once resolved.
+func (m *Matcher) Selectable() []*Profile {
+	served := make(map[*Profile]bool, len(m.exactIndex)+len(m.wildcardIndex))
+	for _, p := range m.exactIndex {
+		served[p] = true
+	}
+	for _, e := range m.wildcardIndex {
+		served[e.profile] = true
+	}
+	selectable := maps.Clone(served)
+	for p := range served {
+		for _, r := range m.redirects[p] {
+			if target, ok := m.profileByFile[r.file]; ok {
+				selectable[target] = true
+			}
+		}
+	}
+	return slices.DeleteFunc(slices.Clone(m.profiles), func(p *Profile) bool { return !selectable[p] })
+}

@@ -10,6 +10,7 @@ import (
 	"math"
 	"net"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -83,7 +84,7 @@ func appendDerivedAttr(attrs []attribute.KeyValue, name, value string) []attribu
 // dimension the exported series cannot express is one that silently merges two
 // devices' points.
 //
-// Every field here is exported: policy as the scope's policy_name (see
+// Every field here is exported: policy as the scope's orb.policy.name (see
 // ensureInstrument), the rest as datapoint attributes in appendIdentityAttrs.
 // Adding one without the other is what made this identity wrong twice.
 type deviceKey struct {
@@ -340,6 +341,12 @@ type MetricsCollector struct {
 	// Profiles already checked for conversions the collector cannot apply.
 	reviewMu         sync.Mutex
 	reviewedProfiles map[string]struct{}
+
+	// profileAttrs is every attribute key the profile set can export, with
+	// the first profile exporting it. The set is fixed for the collector's
+	// life, so it is built once, on first use.
+	profileAttrsOnce sync.Once
+	profileAttrs     profileAttrIndex
 }
 
 // TrapNames is the trap definitions of the profile set this collector polls
@@ -720,9 +727,11 @@ func appendIdentityAttrs(attrs []attribute.KeyValue, key deviceKey) []attribute.
 // A profile tag carrying one of them would replace the value rather than sit
 // beside it, since a duplicate key resolves last-value-wins. For the device
 // dimensions that would leave two devices, or two rows, sharing one series
-// with nothing left to tell them apart; for `policy_name` it would put a
+// with nothing left to tell them apart; for the scope's policy name it would put a
 // device-supplied value on the datapoint under the key the scope carries the
-// policy in, which a receiver flattening scope attributes reads.
+// policy in, which a receiver flattening scope attributes reads. Both that key
+// (orb.policy.name) and the scope key of earlier releases (policy_name) are
+// reserved; the collector sets neither on a datapoint.
 //
 // The device dimensions are read back from appendIdentityAttrs rather than
 // restated, so a dimension added to the identity reserves its name by the same
@@ -736,16 +745,25 @@ func appendIdentityAttrs(attrs []attribute.KeyValue, key deviceKey) []attribute.
 // derived attribute is appended rather than by reserving names here.
 var reservedAttrNames = reservedAttrNameSet()
 
+// legacyPolicyNameAttribute is the scope's policy attribute in earlier
+// releases, which the agent's bridge still reads.
+const legacyPolicyNameAttribute = "policy_name"
+
 func reservedAttrNameSet() map[string]struct{} {
 	// Every dimension is filled: appendIdentityAttrs leaves an empty one off,
 	// and a set built from a partly filled key would miss exactly the names a
 	// profile could then overwrite. A dimension added to deviceKey without a
 	// value here fails TestReservedAttrNames_AreTheExportedIdentity.
 	probe := deviceKey{policy: "p", host: "h", port: 1, id: "i", context: "c"}
-	// policy_name is reserved by name: it is the scope's attribute, not the
-	// datapoint's, and a profile tag of that name would shadow it once a
-	// receiver flattens scope attributes onto the datapoint.
-	names := map[string]struct{}{rowIndexAttr: {}, metrics.PolicyNameAttribute: {}}
+	// The scope's policy name is reserved by name: it is the scope's
+	// attribute, not the datapoint's, and a profile tag of that name would
+	// shadow it once a receiver flattens scope attributes onto the datapoint.
+	// policy_name, the scope key of earlier releases, stays reserved.
+	names := map[string]struct{}{
+		rowIndexAttr:                {},
+		metrics.PolicyNameAttribute: {},
+		legacyPolicyNameAttribute:   {},
+	}
 	for _, attr := range appendIdentityAttrs(nil, probe) {
 		names[string(attr.Key)] = struct{}{}
 	}
@@ -758,6 +776,100 @@ func reservedAttrNameSet() map[string]struct{} {
 func reservedTagName(name string) bool {
 	_, reserved := reservedAttrNames[name]
 	return reserved
+}
+
+// ReservedAttributeName reports whether a policy attribute of this name would
+// take the key of an identity attribute, the same names a profile tag may not
+// use.
+func ReservedAttributeName(name string) bool { return reservedTagName(name) }
+
+// ProfileAttribute reports whether a profile of the set can put an attribute
+// on a series that key collides with, as written or once translated to
+// Prometheus, and names that attribute and the first profile that exports it.
+// A policy attribute of that name would collide with it on some device, so
+// the policy is refused rather than one of the two being dropped there.
+func (c *MetricsCollector) ProfileAttribute(key string) (name, profile string, ok bool) {
+	c.profileAttrsOnce.Do(func() { c.profileAttrs = profileAttrNames(c.matcher) })
+	if a, ok := c.profileAttrs.exact[key]; ok {
+		return a.name, a.profile, true
+	}
+	if a, ok := c.profileAttrs.prometheus[config.PrometheusName(key)]; ok {
+		return a.name, a.profile, true
+	}
+	return "", "", false
+}
+
+// profileAttr is one attribute a profile exports.
+type profileAttr struct{ name, profile string }
+
+// profileAttrIndex is every attribute the profile set exports, by name and by
+// the name Prometheus translation gives it.
+type profileAttrIndex struct {
+	exact, prometheus map[string]profileAttr
+}
+
+// profileAttrNames indexes every attribute key a profile of the set can put
+// on a series under the first profile, in the matcher's order, that does: its
+// device tags, the row tags of the entries that apply them, and the
+// attributes its symbols derive from a reading. The names are read through
+// the helpers the collection path and the profile review use, so the three
+// cannot disagree. Within a profile they are indexed in name order, so the
+// attribute a Prometheus name reports is the same on every run.
+//
+// Every profile a device can be served counts, not only the one a device
+// matches, since which one that is is only known once the device answers.
+// Tags ride on the points the entries produce, so an entry none of whose
+// symbols is read contributes no row tags, and a profile none of whose entries
+// is read contributes no device tags.
+func profileAttrNames(matcher *profiles.Matcher) profileAttrIndex {
+	idx := profileAttrIndex{exact: map[string]profileAttr{}, prometheus: map[string]profileAttr{}}
+	if matcher == nil {
+		return idx
+	}
+	for _, p := range matcher.Selectable() {
+		names := make(map[string]struct{})
+		collects := false
+		for i := range p.Metrics {
+			entry := &p.Metrics[i]
+			if !entryCollects(entry) {
+				continue
+			}
+			collects = true
+			if entryAppliesRowTags(entry) {
+				maps.Copy(names, tagNameSet(entry.MetricTags))
+			}
+			// `symbol:` wins over `symbols:`, as entryCollects reads it.
+			if entry.Symbol != nil {
+				for _, name := range derivedAttrNames(entry.Symbol) {
+					names[name] = struct{}{}
+				}
+				continue
+			}
+			for j := range entry.Symbols {
+				for _, name := range derivedAttrNames(&entry.Symbols[j]) {
+					names[name] = struct{}{}
+				}
+			}
+		}
+		if collects {
+			maps.Copy(names, tagNameSet(p.MetricTags))
+		}
+		for _, name := range slices.Sorted(maps.Keys(names)) {
+			a := profileAttr{name: name, profile: profileID(p)}
+			if _, seen := idx.exact[name]; !seen {
+				idx.exact[name] = a
+			}
+			if prom := config.PrometheusName(name); !hasKey(idx.prometheus, prom) {
+				idx.prometheus[prom] = a
+			}
+		}
+	}
+	return idx
+}
+
+func hasKey(m map[string]profileAttr, key string) bool {
+	_, ok := m[key]
+	return ok
 }
 
 // maxInterruptedRuns bounds how many consecutive runs cut short by their own
@@ -906,9 +1018,12 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	walks := make(walkCache)
 
 	// The attributes every series of this run carries, rendered when the first
-	// point needs them rather than here.
+	// point needs them rather than here. The target's own attributes come
+	// first. A policy is refused before it starts when one of them takes a key
+	// the collector or the profile set exports, so none meets a key appended
+	// after it.
 	base := &deviceAttrs{render: func() []attribute.KeyValue {
-		return c.appendDeviceTags(ctx, walker, walks, profile, appendIdentityAttrs(nil, key), sysDescr, sysOIDValue)
+		return c.appendDeviceTags(ctx, walker, walks, profile, appendIdentityAttrs(slices.Clip(target.AttributeKeyValues()), key), sysDescr, sysOIDValue)
 	}}
 
 	// fresh accumulates this run's observations, one per metric name and row.
@@ -1073,11 +1188,11 @@ func groupedSymbolsAreTableColumns(entry *profiles.MetricEntry) bool {
 	return false
 }
 
-// deviceAttrs holds the attributes every series of one run carries: the device
-// identity, and the profile's top-level metric_tags rendered beside it. Each
-// tag column not already walked is a request of its own, and 181 of the 205
-// bundled profiles declare a block of them, almost all through the inherited
-// system MIB block.
+// deviceAttrs holds the attributes every series of one run carries: the
+// policy's attributes for the target, the device identity, and the profile's
+// top-level metric_tags rendered beside them. Each tag column not already
+// walked is a request of its own, and 181 of the 205 bundled profiles declare
+// a block of them, almost all through the inherited system MIB block.
 //
 // They are rendered on the first point that needs them rather than up front. A
 // declaration throttled by poll_time_sec walks nothing between its due times,
@@ -1327,15 +1442,33 @@ func entryAppliesRowTags(entry *profiles.MetricEntry) bool {
 	return entry.Symbol == nil && len(entry.MetricTags) > 0
 }
 
-// tagNameSet is the set of attribute names a group of metric_tags declares.
-// A tag under a reserved name is left out: the collection path drops it before
-// anything can shadow it, so it is not a declaration a derived attribute takes
-// away.
+// entryCollects reports whether the collection path reads any symbol of an
+// entry: its `symbol:` when it has one, which wins over `symbols:`, and
+// otherwise any of its `symbols:`. An entry that reads none produces no point.
+func entryCollects(entry *profiles.MetricEntry) bool {
+	if entry.Symbol != nil {
+		return unusableSymbolReason(entry.Symbol) == ""
+	}
+	for i := range entry.Symbols {
+		if unusableSymbolReason(&entry.Symbols[i]) == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// tagNameSet is the set of attribute names a group of metric_tags puts on a
+// point. A tag under a reserved name, or one naming no OID, is left out: the
+// collection path skips it, so no point carries it.
 func tagNameSet(tags []profiles.MetricTag) map[string]struct{} {
 	names := make(map[string]struct{}, len(tags))
 	for i := range tags {
 		mt := &tags[i]
-		if name := metricTagName(mt, metricTagColumn(mt)); name != "" && !reservedTagName(name) {
+		col := metricTagColumn(mt)
+		if col == nil || col.OID == "" {
+			continue
+		}
+		if name := metricTagName(mt, col); name != "" && !reservedTagName(name) {
 			names[name] = struct{}{}
 		}
 	}

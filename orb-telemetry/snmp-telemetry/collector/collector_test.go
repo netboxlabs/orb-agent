@@ -2503,7 +2503,7 @@ func TestCollectTarget_ExportedAttrsCarryEveryKeyDimension(t *testing.T) {
 
 // keyDimensionAttrs names the exported attribute that carries each field of
 // deviceKey. Every field but policy is a datapoint attribute; policy is the
-// policy_name attribute of the instrumentation scope, since every series of
+// orb.policy.name attribute of the instrumentation scope, since every series of
 // a policy is registered on that policy's meter (see ensureInstrument). A
 // dimension added to the internal key without an entry here fails
 // TestDeviceKey_EveryDimensionIsExported, which is what keeps the key and
@@ -2571,9 +2571,10 @@ func TestReservedAttrNames_AreTheExportedIdentity(t *testing.T) {
 		assert.True(t, reservedTagName(attr),
 			"deviceKey.%s is exported as %q, so a profile tag of that name would overwrite it", field, attr)
 	}
-	assert.True(t, reservedTagName(metrics.PolicyNameAttribute), "a profile tag must not shadow the scope's policy_name")
+	assert.True(t, reservedTagName(metrics.PolicyNameAttribute), "a profile tag must not shadow the scope's orb.policy.name")
+	assert.True(t, reservedTagName("policy_name"), "nor the name earlier releases used for it")
 	assert.True(t, reservedTagName(rowIndexAttr), "a row identity is as overwritable as a device identity")
-	assert.Len(t, reservedAttrNames, len(datapointIdentityAttrs())+2,
+	assert.Len(t, reservedAttrNames, len(datapointIdentityAttrs())+3,
 		"the reserved set names an attribute the exported identity does not build")
 }
 
@@ -6431,8 +6432,8 @@ type exportedPoint struct {
 }
 
 // exportedByPolicy runs one collection and indexes metricName's gauge points
-// by the policy_name of the scope each was exported under. A scope with no
-// policy_name fails the test: every gauge the collector registers belongs to
+// by the orb.policy.name of the scope each was exported under. A scope with no
+// orb.policy.name fails the test: every gauge the collector registers belongs to
 // a policy.
 func exportedByPolicy(t *testing.T, reader *sdkmetric.ManualReader, metricName string) map[string][]exportedPoint {
 	t.Helper()
@@ -6441,7 +6442,7 @@ func exportedByPolicy(t *testing.T, reader *sdkmetric.ManualReader, metricName s
 	out := map[string][]exportedPoint{}
 	for _, sm := range rm.ScopeMetrics {
 		policy, ok := sm.Scope.Attributes.Value(attribute.Key(metrics.PolicyNameAttribute))
-		require.True(t, ok, "scope %q exported without a policy_name", sm.Scope.Name)
+		require.True(t, ok, "scope %q exported without an orb.policy.name", sm.Scope.Name)
 		for _, m := range sm.Metrics {
 			if m.Name != metricName {
 				continue
@@ -7388,13 +7389,16 @@ func TestDerivedAttrNames_NoBundledProfileTagIsShadowed(t *testing.T) {
 // tagNameSet holds what a derived attribute could shadow. A tag under a
 // reserved name is already dropped before it reaches a point, so it is left
 // out and reported as an identity collision instead of a shadowed one. A tag
-// that names nothing declares no attribute at all.
+// that names nothing declares no attribute at all, and one naming no OID is
+// skipped by the collection path and reported as unusable.
 func TestTagNameSet_LeavesOutWhatCannotBeShadowed(t *testing.T) {
 	const oid = "1.3.6.1.2.1.2.2.1.2"
 	names := tagNameSet([]profiles.MetricTag{
 		{Tag: rowIndexAttr, Column: &profiles.TagColumn{OID: oid, Name: "ifDescr"}},
 		{Tag: "if_desc", Column: &profiles.TagColumn{OID: oid, Name: "ifDescr"}},
 		{Column: &profiles.TagColumn{OID: oid}},
+		{Tag: "if_position", Index: 1},
+		{Tag: "if_alias", Column: &profiles.TagColumn{Name: "ifAlias"}},
 	})
 	assert.Equal(t, map[string]struct{}{"if_desc": {}}, names)
 }

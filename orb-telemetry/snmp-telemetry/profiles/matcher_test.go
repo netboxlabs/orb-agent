@@ -161,6 +161,24 @@ func TestMatchWithDescr_EmptyDescrNoRedirect(t *testing.T) {
 	assert.Equal(t, base, got)
 }
 
+// Selectable is every profile a device can be served, in the order the
+// matcher was given: the ones serving a sysObjectID, exact or wildcard, and
+// the targets of their sysDescr redirects. A profile with no sysobjectid that
+// nothing served redirects to, and one that loses its only OID to another,
+// are left out.
+func TestMatcher_SelectableIsWhatADeviceCanBeServed(t *testing.T) {
+	exact := &Profile{FileName: "exact.yml", SysObjectID: StringOrSlice{"1.3.6.1.4.1.9999.1"}, Matches: map[string]string{"edge": "edge.yml"}}
+	wildcard := makeProfile("wildcard.yml", "1.3.6.1.4.1.9999.2.*")
+	edge := &Profile{FileName: "edge.yml"}
+	// base is never served, so the redirect it declares is never followed.
+	base := &Profile{FileName: "base.yml", Matches: map[string]string{"core": "core.yml"}}
+	core := &Profile{FileName: "core.yml"}
+	shadowed := makeProfile("shadowed.yml", "1.3.6.1.4.1.9999.1")
+	m := NewMatcher([]*Profile{base, core, edge, wildcard, exact, shadowed}, silentLogger)
+
+	assert.Equal(t, []*Profile{edge, wildcard, exact}, m.Selectable())
+}
+
 func TestProfileCount(t *testing.T) {
 	p1 := makeProfile("a.yml", "1.2.3", "1.2.4")
 	p2 := makeProfile("b.yml", "1.3.*")

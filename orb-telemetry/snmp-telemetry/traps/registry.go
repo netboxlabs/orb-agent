@@ -6,6 +6,8 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Device is one address a policy polls. The policy layer builds these from a
@@ -19,6 +21,9 @@ type Device struct {
 	// credential and no other: one a policy assigned to a different device
 	// must not vouch for this one.
 	User *V3User
+	// Attributes are the policy attributes of the target the address came
+	// from, which the device's received series carry.
+	Attributes []attribute.KeyValue
 }
 
 // V3User is the USM credential a v3 target carries. The receiver hands gosnmp

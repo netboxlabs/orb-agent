@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/collector"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
@@ -74,6 +76,10 @@ type Collector interface {
 	// TrapNames is the trap definitions of the profile set the collector
 	// polls with, which the runner registers with its trap claims.
 	TrapNames() map[string]string
+	// ProfileAttribute reports whether the profile set exports an attribute
+	// key collides with, as written or in Prometheus, and names that
+	// attribute and the first profile that exports it.
+	ProfileAttribute(key string) (name, profile string, ok bool)
 }
 
 // Runner represents the policy runner for SNMP metrics collection
@@ -219,6 +225,20 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		return nil, err
 	}
 
+	// The attributes are checked here as well as in validatePolicy so a
+	// direct NewRunner call cannot slip past, and checked against the profile
+	// set only here: the set is the collector's, which a policy only has once
+	// it starts. A trap-only policy polls no profile, and its trap series
+	// carry no profile attribute, so it is not checked against the set.
+	if err := validateAttributes(runner.scope); err != nil {
+		return nil, fmt.Errorf("%s: invalid policy: %w", name, err)
+	}
+	if polls {
+		if err := checkProfileAttributes(name, runner.scope, metricsCollector); err != nil {
+			return nil, err
+		}
+	}
+
 	expanded, collapsed, err := runner.expandTargets()
 	if err != nil {
 		return nil, err
@@ -310,6 +330,13 @@ func (r *Runner) scheduleMetrics(s gocron.Scheduler, t config.Target, first time
 // so it cannot drift from the host, port, NetBox ID and SNMP context that
 // deviceKey is built from.
 //
+// Each device carries its entry's attributes laid over the scope's, rendered
+// once for the entry and shared by every device it expands to: a prefix's
+// devices would otherwise each hold a copy, in the collection and in the trap
+// claims. Two entries collapsing into one device must agree on them, or the
+// policy is refused: the repeat is dropped, and with it whatever it said
+// about the device.
+//
 // checkPolicyExpansion charges the policy budget before this runs, against the
 // notation rather than the collapsed result. Charging it afterwards would let
 // a policy name one span as two overlapping prefixes and pay for one, and the
@@ -317,9 +344,12 @@ func (r *Runner) scheduleMetrics(s gocron.Scheduler, t config.Target, first time
 // can be seen.
 func (r *Runner) expandTargets() ([]config.Target, int, error) {
 	var out []config.Target
-	seen := make(map[targetKey]struct{})
+	// seen holds the entry each device was first expanded from, and rendered
+	// each entry's attributes.
+	seen := make(map[targetKey]int)
+	rendered := make([][]attribute.KeyValue, len(r.scope.Targets))
 	collapsed := 0
-	for _, entry := range r.scope.Targets {
+	for i, entry := range r.scope.Targets {
 		// Skipping the target instead would leave a policy with no job for it,
 		// and a policy whose targets are all unexpandable would start with no
 		// jobs at all and be reported as running while collecting nothing.
@@ -327,12 +357,18 @@ func (r *Runner) expandTargets() ([]config.Target, int, error) {
 		if err != nil {
 			return nil, 0, fmt.Errorf("expanding target %s: %w", entry.Host, err)
 		}
+		attrs := config.MergeAttributes(r.scope.Attributes, entry.Attributes)
+		// Clipped, so a caller appending to it allocates rather than writing
+		// into the slice the entry's other devices share.
+		rendered[i] = slices.Clip(attrs.KeyValues())
 		for _, ip := range expandedIPs {
 			t := config.Target{
-				Host:           ip,
-				Port:           entry.Port,
-				ID:             entry.ID,
-				Authentication: entry.Authentication,
+				Host:               ip,
+				Port:               entry.Port,
+				ID:                 entry.ID,
+				Authentication:     entry.Authentication,
+				Attributes:         attrs,
+				RenderedAttributes: rendered[i],
 			}
 			if t.Port == 0 {
 				t.Port = SNMPDefaultPort
@@ -340,11 +376,15 @@ func (r *Runner) expandTargets() ([]config.Target, int, error) {
 			// Keyed after the port default, so an entry leaving the port unset
 			// and one naming 161 are the one endpoint they reach as.
 			key := newTargetKey(t, r.resolveTargetAuthentication(t))
-			if _, dup := seen[key]; dup {
+			if first, dup := seen[key]; dup {
+				if !slices.Equal(rendered[first], rendered[i]) {
+					return nil, 0, fmt.Errorf("%s: invalid policy: targets %s and %s both name %s with different attributes; give the device one set of attributes, or the entries different ids",
+						r.name, r.scope.Targets[first].Host, entry.Host, key)
+				}
 				collapsed++
 				continue
 			}
-			seen[key] = struct{}{}
+			seen[key] = i
 			out = append(out, t)
 		}
 	}
@@ -535,7 +575,8 @@ func (r *Runner) Stop() error {
 
 // trapDevices is the address each expanded target names, with the v3 user the
 // target is polled with, so the receiver authenticates a trap from that
-// device with that credential and no other. A target that is a hostname
+// device with that credential and no other, and with the target's
+// attributes, which its received series carry. A target that is a hostname
 // rather than an address has none and is skipped; the README says such a
 // target does not receive traps in this phase.
 func trapDevices(r *Runner, targets []config.Target) []traps.Device {
@@ -545,7 +586,7 @@ func trapDevices(r *Runner, targets []config.Target) []traps.Device {
 		if err != nil {
 			continue
 		}
-		d := traps.Device{Policy: r.name, Addr: addr}
+		d := traps.Device{Policy: r.name, Addr: addr, Attributes: t.AttributeKeyValues()}
 		if auth := r.resolveTargetAuthentication(t); auth != nil && normalizeProtocolVersion(auth.ProtocolVersion) == "SNMPv3" {
 			d.User = &traps.V3User{
 				Username:       auth.Username,

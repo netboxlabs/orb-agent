@@ -1,6 +1,10 @@
 package config
 
-import "time"
+import (
+	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+)
 
 // MaxDurationSeconds bounds every value this backend states in seconds before
 // it is multiplied by time.Second. The multiply overflows an int64 above
@@ -35,6 +39,9 @@ type Scope struct {
 	// config because it is a source the policy observes, beside the targets
 	// it polls and the credentials that verify a v3 trap.
 	Traps *Traps `yaml:"traps,omitempty"`
+	// Attributes go on every series of every target, beneath each target's
+	// own (see MergeAttributes).
+	Attributes Attributes `yaml:"attributes,omitempty"`
 }
 
 // Traps is a policy's trap reception. Listen is the host:port the socket
@@ -50,6 +57,25 @@ type Target struct {
 	Port           uint16          `yaml:"port" default:"161"`
 	ID             string          `yaml:"id,omitempty"`
 	Authentication *Authentication `yaml:"authentication,omitempty"`
+	// Attributes go on every series the target produces, each key overriding
+	// the scope's of the same name.
+	Attributes Attributes `yaml:"attributes,omitempty"`
+	// RenderedAttributes is Attributes as OTel attributes, never read from a
+	// policy. Only the runner's expandTargets sets it, from Attributes, once
+	// per scope entry, sharing the slice between every device the entry
+	// expands to, so the two always describe the same set. Read it through
+	// AttributeKeyValues, which renders Attributes when it is nil.
+	RenderedAttributes []attribute.KeyValue `yaml:"-"`
+}
+
+// AttributeKeyValues is the target's attributes as OTel attributes: the
+// shared rendering when expandTargets made one, a fresh rendering of
+// Attributes otherwise.
+func (t Target) AttributeKeyValues() []attribute.KeyValue {
+	if t.RenderedAttributes != nil {
+		return t.RenderedAttributes
+	}
+	return t.Attributes.KeyValues()
 }
 
 // Authentication represents the authentication credentials for a target host

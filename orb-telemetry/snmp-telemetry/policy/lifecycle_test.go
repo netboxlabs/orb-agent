@@ -34,7 +34,8 @@ func (s *spyCollector) CollectTarget(_ context.Context, _ config.Target, _ *conf
 }
 
 // trapNames is what TrapNames returns, standing in for a profile set.
-func (s *spyCollector) TrapNames() map[string]string { return s.trapNames }
+func (s *spyCollector) TrapNames() map[string]string                            { return s.trapNames }
+func (s *spyCollector) ProfileAttribute(string) (name, profile string, ok bool) { return "", "", false }
 
 func (s *spyCollector) ForgetPolicy(name string) {
 	s.mu.Lock()
@@ -229,6 +230,9 @@ func (f *failingCollector) CollectTarget(_ context.Context, target config.Target
 }
 
 func (f *failingCollector) TrapNames() map[string]string { return nil }
+func (f *failingCollector) ProfileAttribute(string) (name, profile string, ok bool) {
+	return "", "", false
+}
 
 func (f *failingCollector) ForgetPolicy(string) {}
 
@@ -366,6 +370,9 @@ func (s *stallingCollector) CollectTarget(ctx context.Context, target config.Tar
 }
 
 func (s *stallingCollector) TrapNames() map[string]string { return nil }
+func (s *stallingCollector) ProfileAttribute(string) (name, profile string, ok bool) {
+	return "", "", false
+}
 
 func (s *stallingCollector) ForgetPolicy(name string) {
 	s.mu.Lock()

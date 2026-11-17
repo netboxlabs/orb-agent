@@ -20,7 +20,7 @@ import (
 var testLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 // exportedCounters runs one collection and indexes every counter datapoint
-// as "<policy_name>|<metric>|k=v|...", policy_name being the scope's
+// as "<policy>|<metric>|k=v|...", policy being the scope's
 // attribute or "" for the process scope. Trap counts join to poll metrics by
 // scope, so the scope is part of what a test asserts.
 func exportedCounters(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
