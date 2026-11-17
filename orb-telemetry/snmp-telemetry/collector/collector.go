@@ -818,15 +818,23 @@ type profileAttrIndex struct {
 //
 // Every profile a device can be served counts, not only the one a device
 // matches, since which one that is is only known once the device answers.
+// Tags ride on the points the entries produce, so an entry none of whose
+// symbols is read contributes no row tags, and a profile none of whose entries
+// is read contributes no device tags.
 func profileAttrNames(matcher *profiles.Matcher) profileAttrIndex {
 	idx := profileAttrIndex{exact: map[string]profileAttr{}, prometheus: map[string]profileAttr{}}
 	if matcher == nil {
 		return idx
 	}
 	for _, p := range matcher.Selectable() {
-		names := tagNameSet(p.MetricTags)
+		names := make(map[string]struct{})
+		collects := false
 		for i := range p.Metrics {
 			entry := &p.Metrics[i]
+			if !entryCollects(entry) {
+				continue
+			}
+			collects = true
 			if entryAppliesRowTags(entry) {
 				maps.Copy(names, tagNameSet(entry.MetricTags))
 			}
@@ -840,6 +848,9 @@ func profileAttrNames(matcher *profiles.Matcher) profileAttrIndex {
 					names[name] = struct{}{}
 				}
 			}
+		}
+		if collects {
+			maps.Copy(names, tagNameSet(p.MetricTags))
 		}
 		for _, name := range slices.Sorted(maps.Keys(names)) {
 			a := profileAttr{name: name, profile: profileID(p)}
@@ -1427,6 +1438,21 @@ func (c *MetricsCollector) reviewProfile(profile *profiles.Profile) {
 // to hang them on, and collectScalar never reads them.
 func entryAppliesRowTags(entry *profiles.MetricEntry) bool {
 	return entry.Symbol == nil && len(entry.MetricTags) > 0
+}
+
+// entryCollects reports whether the collection path reads any symbol of an
+// entry: its `symbol:` when it has one, which wins over `symbols:`, and
+// otherwise any of its `symbols:`. An entry that reads none produces no point.
+func entryCollects(entry *profiles.MetricEntry) bool {
+	if entry.Symbol != nil {
+		return unusableSymbolReason(entry.Symbol) == ""
+	}
+	for i := range entry.Symbols {
+		if unusableSymbolReason(&entry.Symbols[i]) == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // tagNameSet is the set of attribute names a group of metric_tags puts on a

@@ -165,7 +165,9 @@ func TestReservedAttributeName_IsTheCollectorsOwnDimensions(t *testing.T) {
 // series: device tags, row tags, joined tags and the attributes a symbol,
 // scalar or column, derives from its reading. The tags of a `symbol:` entry
 // are never applied, and neither is a tag naming no OID, so they are not
-// among them; nor is anything in a profile no device can be served.
+// among them; nor is anything in a profile no device can be served, a row tag
+// of an entry none of whose symbols is read, or a device tag of a profile none
+// of whose entries is.
 func TestProfileAttribute_NamesEveryKeyTheProfilesExport(t *testing.T) {
 	enum := profiles.Enum{Values: map[string]int{"up": 1, "down": 2}}
 	device := profileWithOID("1.3.6.1.4.1.9999.63", "vendor-a.yml", []profiles.MetricEntry{
@@ -188,6 +190,12 @@ func TestProfileAttribute_NamesEveryKeyTheProfilesExport(t *testing.T) {
 			Symbol:     &profiles.Symbol{Name: "fanSpeed", OID: "1.3.6.1.4.1.9999.63.2.0"},
 			MetricTags: []profiles.MetricTag{{Tag: "fan_slot", Column: &profiles.TagColumn{OID: "1.3.6.1.4.1.9999.63.3", Name: "fanSlot"}}},
 		},
+		{
+			// The entry's only symbol is never read, so its rows never exist.
+			Table:      &profiles.Table{Name: "slotTable", OID: "1.3.6.1.4.1.9999.63.5"},
+			Symbols:    []profiles.Symbol{{Name: "slotLoad", OID: "1.3.6.1.4.1.9999.63.5.1.2", Script: "value * 8"}},
+			MetricTags: []profiles.MetricTag{{Tag: "slot_name", Column: &profiles.TagColumn{OID: "1.3.6.1.4.1.9999.63.5.1.1", Name: "slotName"}}},
+		},
 	})
 	device.MetricTags = []profiles.MetricTag{
 		{Tag: "model", Column: &profiles.TagColumn{OID: "1.3.6.1.2.1.47.1.1.1.1.13.1", Name: "entPhysicalModelName"}},
@@ -199,18 +207,26 @@ func TestProfileAttribute_NamesEveryKeyTheProfilesExport(t *testing.T) {
 	})
 	other.MetricTags = []profiles.MetricTag{{Tag: "model", Column: &profiles.TagColumn{OID: "1.3.6.1.4.1.9999.64.2", Name: "model"}}}
 	// No sysobjectid and no redirect to it, so no device is ever served it.
-	unmatched := &profiles.Profile{FileName: "custom-base.yml", MetricTags: []profiles.MetricTag{
-		{Tag: "rack_row", Column: &profiles.TagColumn{OID: "1.3.6.1.4.1.9999.67.1.0", Name: "rackRow"}},
-	}}
+	unmatched := &profiles.Profile{
+		FileName:   "custom-base.yml",
+		Metrics:    []profiles.MetricEntry{{Symbol: &profiles.Symbol{Name: "rackTemp", OID: "1.3.6.1.4.1.9999.67.2.0"}}},
+		MetricTags: []profiles.MetricTag{{Tag: "rack_row", Column: &profiles.TagColumn{OID: "1.3.6.1.4.1.9999.67.1.0", Name: "rackRow"}}},
+	}
+	// Served, but nothing it declares is read, so its device tags ride on no
+	// point.
+	idle := profileWithOID("1.3.6.1.4.1.9999.68", "vendor-c.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "psuLoad", OID: "1.3.6.1.4.1.9999.68.1.0", Script: "value * 8"}},
+	})
+	idle.MetricTags = []profiles.MetricTag{{Tag: "site_code", Column: &profiles.TagColumn{OID: "1.3.6.1.4.1.9999.68.2.0", Name: "siteCode"}}}
 
-	c := newCollectorWithProfiles(nil, unmatched, device, other)
+	c := newCollectorWithProfiles(nil, unmatched, device, other, idle)
 	for _, key := range []string{"model", "interface", "ifName", "ifOperStatus_status", "ifPhysAddress_value", "chassisState_status"} {
 		name, profile, ok := c.ProfileAttribute(key)
 		assert.True(t, ok, key)
 		assert.Equal(t, key, name, key)
 		assert.Equal(t, "vendor-a.yml", profile, "%s is named by the first profile that exports it", key)
 	}
-	for _, key := range []string{"site", "Model", "ifOperStatus", "cpu", "fan_slot", "if_position", "if_alias", "rack_position", "rack_row"} {
+	for _, key := range []string{"site", "Model", "ifOperStatus", "cpu", "fan_slot", "if_position", "if_alias", "rack_position", "rack_row", "slot_name", "site_code"} {
 		_, _, ok := c.ProfileAttribute(key)
 		assert.False(t, ok, key)
 	}
