@@ -92,7 +92,7 @@ func ownLabels(doc map[string]any) map[string]string {
 			if _, seen := out[label]; seen {
 				continue
 			}
-			out[label] = t + " handler"
+			out[label] = "the " + t + " handler"
 			if label == "direction" {
 				out[label] = "version 2 of the " + t + " handler"
 			}
@@ -210,9 +210,9 @@ func (a attributes) validate(handlerOwn map[string]string) error {
 		}
 		if handler, ok := handlerOwn[prom]; ok {
 			if prom == key {
-				return fmt.Errorf("attribute key %q is a label the %s sets itself", key, handler)
+				return fmt.Errorf("attribute key %q is a label %s sets itself", key, handler)
 			}
-			return fmt.Errorf("attribute key %q becomes %q in Prometheus, a label the %s sets itself", key, prom, handler)
+			return fmt.Errorf("attribute key %q becomes %q in Prometheus, a label %s sets itself", key, prom, handler)
 		}
 		if prometheusOwn(prom) {
 			return fmt.Errorf("attribute key %q becomes %q in Prometheus, a label Prometheus sets itself", key, prom)

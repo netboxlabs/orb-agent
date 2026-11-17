@@ -295,7 +295,7 @@ func TestCheckAttributesHandlerLabels(t *testing.T) {
 		body    any
 		wantErr []string // nil means accepted
 	}{
-		{"netprobe status_code", withModules(bodyWith(map[string]any{"status_code": "x"}, nil), netprobe), []string{"policy", `"status_code"`, "netprobe handler"}},
+		{"netprobe status_code", withModules(bodyWith(map[string]any{"status_code": "x"}, nil), netprobe), []string{"policy", `attribute key "status_code" is a label the netprobe handler sets itself`}},
 		{"netprobe rcode on a target", withModules(bodyWith(nil, map[string]any{"rcode": "x"}), netprobe), []string{`target "gw1"`, `"rcode"`, "netprobe handler"}},
 		{"in Prometheus form", withModules(bodyWith(map[string]any{"status.code": "x"}, nil), netprobe), []string{`"status.code"`, `"status_code"`, "netprobe handler"}},
 		{"flow ip", withModules(bodyWith(map[string]any{"ip": "x"}, nil), map[string]any{"f": map[string]any{"type": "flow"}}), []string{`"ip"`, "flow handler"}},
@@ -361,7 +361,13 @@ func TestCheckAttributesEveryHandlerLabel(t *testing.T) {
 	for handler, labels := range own {
 		for _, label := range labels {
 			body := withModules(bodyWith(map[string]any{label: "x"}, nil), map[string]any{"m": map[string]any{"type": handler}})
-			assert.Error(t, checkAttributes(body), "%s %s", handler, label)
+			err := checkAttributes(body)
+			require.Error(t, err, "%s %s", handler, label)
+			want := handler + " handler sets itself"
+			if label == "target" || label == "device" {
+				want = "reserved for the backend's own attributes" // refused for every handler
+			}
+			assert.Contains(t, err.Error(), want, "%s %s", handler, label)
 		}
 	}
 	for _, handler := range []string{"bgp", "pcap", "input_resources"} {
@@ -393,7 +399,7 @@ func TestCheckAttributesHandlerModuleShapes(t *testing.T) {
 		}), []string{`"status_code"`, "netprobe handler"}},
 		{"v1 direction is refused too", withModules(bodyWith(map[string]any{"direction": "x"}, nil), map[string]any{
 			"d": map[string]any{"type": "net"},
-		}), []string{`"direction"`, "version 2 of the net handler"}},
+		}), []string{`attribute key "direction" is a label version 2 of the net handler sets itself`}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
