@@ -103,6 +103,14 @@ func TestCheckAttributes(t *testing.T) {
 	}
 }
 
+// The refusal clips an invalid key as it clips every other, so a key of any
+// size cannot fill the error.
+func TestCheckAttributesInvalidUTF8KeyIsClipped(t *testing.T) {
+	err := checkAttributes(bodyWith(map[string]any{"bad\xff" + strings.Repeat("k", 4*maxKeyBytes): "x"}, nil))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `attribute key "bad\xff`+strings.Repeat("k", 28)+`..." is not valid UTF-8`)
+}
+
 // many2 is many with other keys, so the merge of the two has 2n attributes.
 func many2(n int) map[string]any {
 	out := map[string]any{}

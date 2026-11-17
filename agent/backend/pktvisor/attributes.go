@@ -125,7 +125,7 @@ func (a attributes) validate() error {
 		case key == "":
 			return errors.New("attribute key is empty; give every attribute a name")
 		case !utf8.ValidString(key):
-			return fmt.Errorf("attribute key %q is not valid UTF-8", key)
+			return fmt.Errorf("attribute key %q is not valid UTF-8", clip(key))
 		case !startsWithLetter(key):
 			return fmt.Errorf("attribute key %q must start with a letter (A-Z or a-z)", clip(key))
 		case isOrbKey(key):
