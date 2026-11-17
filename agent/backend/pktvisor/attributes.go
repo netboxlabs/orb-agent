@@ -58,44 +58,59 @@ var handlerLabels = map[string][]string{
 	"netprobe": {"target", "status_code", "rcode"},
 }
 
-// ownLabels maps each label the body's handler modules set to the first
-// handler type, in name order, that sets it. Modules are read in the two forms
-// pktvisord accepts: a mapping of module names, or a list of one-name
-// mappings, each module holding its type, or holding a mapping under its own
-// name that does.
+// ownLabels maps each label the body's handler modules set to the handler
+// that sets it, the first in type order. Modules are read in the two forms
+// pktvisord accepts: a mapping of module names, or a list of mappings from a
+// module name. Every name of a list item counts, although pktvisord reads
+// only the first, so the agent may refuse a key pktvisord takes, never the
+// other way round.
 func ownLabels(doc map[string]any) map[string]string {
 	handlers, _ := asMap(doc["handlers"])
-	named := map[string]any{}
+	var types []string
+	add := func(name string, holder map[string]any) {
+		if t, ok := moduleType(name, holder); ok {
+			types = append(types, t)
+		}
+	}
 	if list, ok := handlers["modules"].([]any); ok {
 		for _, item := range list {
 			one, _ := asMap(item)
 			for name := range one {
-				named[name] = one
+				add(name, one)
 			}
 		}
-	} else if m, ok := asMap(handlers["modules"]); ok {
-		named = m
-	}
-	var types []string
-	for name, raw := range named {
-		module, _ := asMap(raw)
-		if _, ok := module["type"]; !ok {
-			module, _ = asMap(module[name])
-		}
-		if t, ok := module["type"].(string); ok {
-			types = append(types, t)
+	} else if modules, ok := asMap(handlers["modules"]); ok {
+		for name, raw := range modules {
+			module, _ := asMap(raw)
+			add(name, module)
 		}
 	}
 	slices.Sort(types)
 	out := map[string]string{}
 	for _, t := range types {
 		for _, label := range handlerLabels[t] {
-			if _, seen := out[label]; !seen {
-				out[label] = t
+			if _, seen := out[label]; seen {
+				continue
+			}
+			out[label] = t + " handler"
+			if label == "direction" {
+				out[label] = "version 2 of the " + t + " handler"
 			}
 		}
 	}
 	return out
+}
+
+// moduleType is the type of the module named name, held in holder: its type
+// key, or, when that is not a string, the type key of the mapping under the
+// module's own name, as pktvisord reads it.
+func moduleType(name string, holder map[string]any) (string, bool) {
+	if t, ok := holder["type"].(string); ok {
+		return t, true
+	}
+	nested, _ := asMap(holder[name])
+	t, ok := nested["type"].(string)
+	return t, ok
 }
 
 // prometheusOwn reports whether a label name is one Prometheus sets or
@@ -157,7 +172,7 @@ func mergeAttributes(policy, target attributes) attributes {
 
 // validate checks the set's size, then every key and value in key order, and
 // names the first one that cannot be exported. handlerOwn holds the labels the
-// policy's handlers set, each with its handler type (ownLabels).
+// policy's handlers set, each with the handler that sets it (ownLabels).
 //
 // An empty string is refused rather than exported: a Prometheus-style backend
 // reads an empty label as an absent one. Keys are compared in their
@@ -195,9 +210,9 @@ func (a attributes) validate(handlerOwn map[string]string) error {
 		}
 		if handler, ok := handlerOwn[prom]; ok {
 			if prom == key {
-				return fmt.Errorf("attribute key %q is a label the %s handler sets itself", key, handler)
+				return fmt.Errorf("attribute key %q is a label the %s sets itself", key, handler)
 			}
-			return fmt.Errorf("attribute key %q becomes %q in Prometheus, a label the %s handler sets itself", key, prom, handler)
+			return fmt.Errorf("attribute key %q becomes %q in Prometheus, a label the %s sets itself", key, prom, handler)
 		}
 		if prometheusOwn(prom) {
 			return fmt.Errorf("attribute key %q becomes %q in Prometheus, a label Prometheus sets itself", key, prom)

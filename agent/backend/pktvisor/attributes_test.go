@@ -348,3 +348,70 @@ handlers:
 	assert.Contains(t, err.Error(), `target "gw1"`)
 	assert.Contains(t, err.Error(), "netprobe handler")
 }
+
+// Every label each handler sets, as pktvisord's own_label_names lists them.
+func TestCheckAttributesEveryHandlerLabel(t *testing.T) {
+	own := map[string][]string{
+		"dhcp":     {"client", "server"},
+		"dns":      {"direction", "lat", "lon", "geo_loc", "asn", "ecs", "qname", "port", "qtype", "rcode"},
+		"flow":     {"device", "device_interface", "lat", "lon", "conversation", "geo_loc", "asn", "ip", "port", "ip_port", "dscp", "ecn", "interface"},
+		"net":      {"direction", "lat", "lon", "geo_loc", "asn", "ipv4", "ipv6"},
+		"netprobe": {"target", "status_code", "rcode"},
+	}
+	for handler, labels := range own {
+		for _, label := range labels {
+			body := withModules(bodyWith(map[string]any{label: "x"}, nil), map[string]any{"m": map[string]any{"type": handler}})
+			assert.Error(t, checkAttributes(body), "%s %s", handler, label)
+		}
+	}
+	for _, handler := range []string{"bgp", "pcap", "input_resources"} {
+		body := withModules(bodyWith(map[string]any{"client": "x", "status_code": "x", "ip": "x"}, nil), map[string]any{"m": map[string]any{"type": handler}})
+		assert.NoError(t, checkAttributes(body), handler)
+	}
+}
+
+func TestCheckAttributesHandlerModuleShapes(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    any
+		wantErr []string
+	}{
+		// A later item naming a module "probe" too must not hide the earlier one.
+		{"a later list item reuses a module name", withModules(bodyWith(map[string]any{"ip": "x"}, nil), []any{
+			map[string]any{"probe": map[string]any{"type": "flow"}},
+			map[string]any{"a": map[string]any{"type": "dns"}, "probe": map[string]any{"type": "netprobe"}},
+		}), []string{`"ip"`, "flow handler"}},
+		// pktvisord reads the module under its own name whenever type is not a scalar.
+		{"null type falls back to the module's name", withModules(bodyWith(map[string]any{"status_code": "x"}, nil), map[string]any{
+			"probe": map[string]any{"type": nil, "probe": map[string]any{"type": "netprobe"}},
+		}), []string{`"status_code"`, "netprobe handler"}},
+		{"map type falls back to the module's name", withModules(bodyWith(map[string]any{"status_code": "x"}, nil), map[string]any{
+			"probe": map[string]any{"type": map[string]any{"x": "y"}, "probe": map[string]any{"type": "netprobe"}},
+		}), []string{`"status_code"`, "netprobe handler"}},
+		{"modules with non-string keys", withModules(bodyWith(map[string]any{"status_code": "x"}, nil), map[any]any{
+			1: map[string]any{"type": "netprobe"},
+		}), []string{`"status_code"`, "netprobe handler"}},
+		{"v1 direction is refused too", withModules(bodyWith(map[string]any{"direction": "x"}, nil), map[string]any{
+			"d": map[string]any{"type": "net"},
+		}), []string{`"direction"`, "version 2 of the net handler"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkAttributes(tt.body)
+			require.Error(t, err)
+			for _, frag := range tt.wantErr {
+				assert.Contains(t, err.Error(), frag)
+			}
+		})
+	}
+}
+
+// A body decoded from JSON, as Fleet sends it.
+func TestCheckAttributesHandlerLabelsJSON(t *testing.T) {
+	var body any
+	require.NoError(t, json.Unmarshal([]byte(`{"attributes":{"ip":"x"},"input":{"input_type":"flow"},
+		"handlers":{"modules":{"f":{"type":"flow"}}}}`), &body))
+	err := checkAttributes(body)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "flow handler")
+}
