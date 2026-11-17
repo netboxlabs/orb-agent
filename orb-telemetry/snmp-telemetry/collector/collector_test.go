@@ -7389,13 +7389,16 @@ func TestDerivedAttrNames_NoBundledProfileTagIsShadowed(t *testing.T) {
 // tagNameSet holds what a derived attribute could shadow. A tag under a
 // reserved name is already dropped before it reaches a point, so it is left
 // out and reported as an identity collision instead of a shadowed one. A tag
-// that names nothing declares no attribute at all.
+// that names nothing declares no attribute at all, and one naming no OID is
+// skipped by the collection path and reported as unusable.
 func TestTagNameSet_LeavesOutWhatCannotBeShadowed(t *testing.T) {
 	const oid = "1.3.6.1.2.1.2.2.1.2"
 	names := tagNameSet([]profiles.MetricTag{
 		{Tag: rowIndexAttr, Column: &profiles.TagColumn{OID: oid, Name: "ifDescr"}},
 		{Tag: "if_desc", Column: &profiles.TagColumn{OID: oid, Name: "ifDescr"}},
 		{Column: &profiles.TagColumn{OID: oid}},
+		{Tag: "if_position", Index: 1},
+		{Tag: "if_alias", Column: &profiles.TagColumn{Name: "ifAlias"}},
 	})
 	assert.Equal(t, map[string]struct{}{"if_desc": {}}, names)
 }

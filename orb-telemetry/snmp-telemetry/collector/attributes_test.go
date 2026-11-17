@@ -164,7 +164,8 @@ func TestReservedAttributeName_IsTheCollectorsOwnDimensions(t *testing.T) {
 // ProfileAttribute names every attribute key the profile set can put on a
 // series: device tags, row tags, joined tags and the attributes a symbol,
 // scalar or column, derives from its reading. The tags of a `symbol:` entry
-// are never applied, so they are not among them.
+// are never applied, and neither is a tag naming no OID, so they are not
+// among them.
 func TestProfileAttribute_NamesEveryKeyTheProfilesExport(t *testing.T) {
 	enum := profiles.Enum{Values: map[string]int{"up": 1, "down": 2}}
 	device := profileWithOID("1.3.6.1.4.1.9999.63", "vendor-a.yml", []profiles.MetricEntry{
@@ -177,6 +178,9 @@ func TestProfileAttribute_NamesEveryKeyTheProfilesExport(t *testing.T) {
 			MetricTags: []profiles.MetricTag{
 				{Tag: "interface", Column: &profiles.TagColumn{OID: "1.3.6.1.2.1.2.2.1.2", Name: "ifDescr"}},
 				{Column: &profiles.TagColumn{OID: "1.3.6.1.2.1.31.1.1.1.1", Name: "ifName"}},
+				// Neither names an OID, so the collector applies neither.
+				{Tag: "if_position", Index: 1},
+				{Tag: "if_alias", Column: &profiles.TagColumn{Name: "ifAlias"}},
 			},
 		},
 		{Symbol: &profiles.Symbol{Name: "chassisState", OID: "1.3.6.1.4.1.9999.63.1.0", Enum: enum}},
@@ -188,6 +192,7 @@ func TestProfileAttribute_NamesEveryKeyTheProfilesExport(t *testing.T) {
 	device.MetricTags = []profiles.MetricTag{
 		{Tag: "model", Column: &profiles.TagColumn{OID: "1.3.6.1.2.1.47.1.1.1.1.13.1", Name: "entPhysicalModelName"}},
 		{Tag: "chassis_model", Column: &profiles.TagColumn{OID: "1.3.6.1.4.1.9999.63.4.0", Name: "chassisModel"}},
+		{Tag: "rack_position"},
 	}
 	other := profileWithOID("1.3.6.1.4.1.9999.64", "vendor-b.yml", []profiles.MetricEntry{
 		{Symbol: &profiles.Symbol{Name: "cpu", OID: "1.3.6.1.4.1.9999.64.1"}},
@@ -201,7 +206,7 @@ func TestProfileAttribute_NamesEveryKeyTheProfilesExport(t *testing.T) {
 		assert.Equal(t, key, name, key)
 		assert.Equal(t, "vendor-a.yml", profile, "%s is named by the first profile that exports it", key)
 	}
-	for _, key := range []string{"site", "Model", "ifOperStatus", "cpu", "fan_slot"} {
+	for _, key := range []string{"site", "Model", "ifOperStatus", "cpu", "fan_slot", "if_position", "if_alias", "rack_position"} {
 		_, _, ok := c.ProfileAttribute(key)
 		assert.False(t, ok, key)
 	}

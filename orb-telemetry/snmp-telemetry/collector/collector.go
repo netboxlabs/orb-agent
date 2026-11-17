@@ -1429,15 +1429,18 @@ func entryAppliesRowTags(entry *profiles.MetricEntry) bool {
 	return entry.Symbol == nil && len(entry.MetricTags) > 0
 }
 
-// tagNameSet is the set of attribute names a group of metric_tags declares.
-// A tag under a reserved name is left out: the collection path drops it before
-// anything can shadow it, so it is not a declaration a derived attribute takes
-// away.
+// tagNameSet is the set of attribute names a group of metric_tags puts on a
+// point. A tag under a reserved name, or one naming no OID, is left out: the
+// collection path skips it, so no point carries it.
 func tagNameSet(tags []profiles.MetricTag) map[string]struct{} {
 	names := make(map[string]struct{}, len(tags))
 	for i := range tags {
 		mt := &tags[i]
-		if name := metricTagName(mt, metricTagColumn(mt)); name != "" && !reservedTagName(name) {
+		col := metricTagColumn(mt)
+		if col == nil || col.OID == "" {
+			continue
+		}
+		if name := metricTagName(mt, col); name != "" && !reservedTagName(name) {
 			names[name] = struct{}{}
 		}
 	}
