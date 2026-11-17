@@ -147,6 +147,23 @@ func TestNewRunner_RefusesAKeyThatBecomesAProfileAttribute(t *testing.T) {
 	assert.Contains(t, err.Error(), `edge-metrics: invalid policy: scope: attribute key "chassis.model" becomes "chassis_model" in Prometheus, which the SNMP profile vendor-a.yml exports`)
 }
 
+// A policy that only receives traps polls no profile, so its attributes meet
+// no profile attribute. The same policy polling is refused.
+func TestNewRunner_ATrapOnlyPolicyIsNotCheckedAgainstTheProfiles(t *testing.T) {
+	spy := &profileSpy{exported: map[string]string{"model": "vendor-a.yml"}}
+	pol := trapPolicy(nil, "127.0.0.1:1162")
+	pol.Scope.Attributes = config.Attributes{"model": "x"}
+	r, err := NewRunner(t.Context(), testLogger, "edge-traps", pol, spy, newSpyPool())
+	require.NoError(t, err)
+	require.NoError(t, r.Stop())
+
+	sixty := 60
+	pol.Config.MetricsInterval = &sixty
+	_, err = NewRunner(t.Context(), testLogger, "edge-traps", pol, spy, newSpyPool())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `attribute key "model" is exported by the SNMP profile vendor-a.yml`)
+}
+
 // NewRunner checks the attributes again, as it does the interval and the
 // expansion, so a direct caller cannot slip past ParsePolicies.
 func TestNewRunner_ValidatesTheAttributes(t *testing.T) {

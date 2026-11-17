@@ -582,7 +582,8 @@ key, when:
   device matches is only known once it answers, so a key any of them exports
   would meet that profile's attribute on some device.
   This is checked when the policy starts, and the error names the profile. The
-  bundled set exports names such as `model` and `serial_number`;
+  bundled set exports names such as `model` and `serial_number`. A policy that
+  only receives traps polls no profile, so it is not checked;
 - two keys collide once translated to Prometheus, which replaces every
   character outside `[A-Za-z0-9_]` with an underscore and joins two labels
   that land on one name with `;`. A key that becomes a reserved or

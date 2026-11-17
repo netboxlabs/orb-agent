@@ -228,12 +228,15 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	// The attributes are checked here as well as in validatePolicy so a
 	// direct NewRunner call cannot slip past, and checked against the profile
 	// set only here: the set is the collector's, which a policy only has once
-	// it starts.
+	// it starts. A trap-only policy polls no profile, and its trap series
+	// carry no profile attribute, so it is not checked against the set.
 	if err := validateAttributes(runner.scope); err != nil {
 		return nil, fmt.Errorf("%s: invalid policy: %w", name, err)
 	}
-	if err := checkProfileAttributes(name, runner.scope, metricsCollector); err != nil {
-		return nil, err
+	if polls {
+		if err := checkProfileAttributes(name, runner.scope, metricsCollector); err != nil {
+			return nil, err
+		}
 	}
 
 	expanded, collapsed, err := runner.expandTargets()
