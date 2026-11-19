@@ -46,7 +46,7 @@ basic authentication with a username and token, an SSH key, and a GitHub App,
 and each has its own run-time setup as well: SSH needs a `known_hosts` file
 passed as `SSH_KNOWN_HOSTS`, and a GitHub App key wants a read-only mount. Those
 are documented once, with a parameter table and a walkthrough for each method,
-in [Git Config Manager](configs/git.md#config).
+in [Git Config Manager](configs/git.md#authentication).
 
 
 ## Device-discovery backend
@@ -652,7 +652,7 @@ This feature is supported by the [Device Discovery](./backends/device_discovery/
 
 ## Debug Logging
 
-Setting `orb.debug.enable: true` in the config file enables debug-level logging, equivalent to running the agent with the `-d` flag, except that debug messages emitted while the config file is still being parsed (such as the skipped `ORB_*` override diagnostics described in [Environment-Driven Configuration](./advanced_config/env_config.md)) are only captured with `-d`.
+Setting `orb.debug.enable: true` in the config file enables debug-level logging, equivalent to running the agent with the `-d` flag, except that debug messages emitted while the config file is still being parsed (such as the skipped `ORB_*` override diagnostics described in [Environment Variables](./advanced_config/env_config.md#troubleshooting)) are only captured with `-d`.
 
 ```yaml
 orb:
