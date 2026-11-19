@@ -1,68 +1,68 @@
 # Agent Configuration File (`agent.yaml`)
 
-The agent configuration file is the single file passed to the agent at startup via the `-c` flag. It defines the agent's identity, how policies are loaded, which backends are active, and optional secrets management.
+The Orb agent reads its configuration from a YAML file that you pass with `-c` when you start it:
 
-```bash
+```sh
 docker run ... netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
-## Top-Level Structure
+The file tells the agent which backends to run, where to get its policies, and how to reach Diode, the service that delivers discovered data to NetBox. This page lists every key the file supports.
 
-```yaml
-version: 1.0          # Optional
-orb:
-  labels: ...         # Agent identity labels
-  config_manager: ... # How policies are loaded (required)
-  backends: ...       # Which backends are enabled (required)
-  policies: ...       # Inline policies (only with config_manager.active: local)
-  secrets_manager: .. # Optional: Vault secret resolution
-```
+## Minimal file example
 
-| Key | Required | Description |
-|-----|----------|-------------|
-| `version` | No | Config schema version (informational) |
-| `orb.labels` | No | Key/value pairs that identify this agent instance. Used by the Git config manager to match `selector.yaml` entries |
-| `orb.config_manager` | Yes | Defines where policies come from (`local` or `git`) |
-| `orb.backends` | Yes | Declares which discovery backends to run and their common settings |
-| `orb.policies` | Only with `local` | Inline policy definitions. Ignored when `config_manager.active` is `git` |
-| `orb.secrets_manager` | No | Configures Vault to resolve `${vault://...}` references at runtime |
-
----
-
-## `orb.labels`
-
-Free-form key/value pairs that identify this agent instance. When using the Git config manager, labels are matched against `selector.yaml` to determine which policies apply to this agent.
-
-```yaml
-orb:
-  labels:
-    region: EU
-    pop: ams02
-    environment: production
-```
-
----
-
-## `orb.config_manager`
-
-Controls how the agent loads policies. Exactly one source is active at a time.
+This file runs network discovery on one subnet every two hours and sends the results to Diode:
 
 ```yaml
 orb:
   config_manager:
-    active: local   # or: git
-    sources:
-      local: ...
-      git: ...
+    active: local
+  backends:
+    common:
+      diode:
+        target: grpc://diode.example.com:8080/diode
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
+        agent_name: agent01
+    network_discovery:
+  policies:
+    network_discovery:
+      office_scan:
+        config:
+          schedule: "0 */2 * * *"
+        scope:
+          targets: [192.168.1.0/24]
 ```
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `active` | string | Yes | Which source to use: `local` or `git` |
+`${DIODE_CLIENT_ID}` and `${DIODE_CLIENT_SECRET}` are read from the environment when the agent starts. See [Environment variables in the file](#environment-variables-in-the-file).
 
-### `local`
+## Top-level keys
 
-Policies are read directly from `orb.policies` in the same config file. No additional parameters required.
+All keys sit under `orb`, except `version`.
+
+| Key | Required | Description |
+|:--|:--|:--|
+| `version` | No | Schema version. Informational only; the agent ignores it. |
+| `orb.config_manager` | No | Where the agent gets its policies. Defaults to `local`. |
+| `orb.backends` | Yes | Which backends to run, and settings they share. |
+| `orb.policies` | With `local` | Policies defined in this file. |
+| `orb.secrets_manager` | No | An external secrets store for credentials. |
+| `orb.labels` | No | Key/value pairs that identify this agent. |
+| `orb.debug` | No | Turns on debug logging. |
+| `orb.files_manager` | No | Where files delivered by Fleet are stored. |
+
+### `orb.config_manager`
+
+Sets where the agent gets its policies. One source is active at a time.
+
+| `active` | Policies come from |
+|:--|:--|
+| `local` | `orb.policies` in this file. This is the default if `active` is unset. |
+| `git` | A Git repository, re-checked on a schedule. |
+| `fleet` | NetBox Labs cloud. |
+
+#### `local`
+
+Needs no other settings:
 
 ```yaml
 orb:
@@ -70,9 +70,9 @@ orb:
     active: local
 ```
 
-### `git`
+See [Local](local.md).
 
-Policies are fetched from a Git repository. See the full [Git configuration manager documentation](git.md).
+#### `git`
 
 ```yaml
 orb:
@@ -89,24 +89,24 @@ orb:
 ```
 
 | Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `url` | string | Yes | Git repository URL |
-| `branch` | string | No | Branch to use (default: repository default branch) |
-| `schedule` | cron | No | How often to poll for changes. If omitted, policies are fetched once at startup |
-| `auth` | string | No | `basic` (password or token), `ssh`, or `github_app`. Omit for public repositories |
-| `username` | string | No | Username for basic auth |
-| `password` | string | No | Password or token for basic auth; passphrase for SSH keys |
-| `private_key` | string | No | Path to SSH private key file |
-| `skip_tls` | bool | No | Skip TLS certificate verification (default: `false`) |
-| `github_app.client_id` | string | With `github_app` | GitHub App Client ID (preferred) or numeric App ID |
-| `github_app.installation_id` | string | With `github_app` | Numeric id of the app's installation on the repo owner |
-| `github_app.private_key` | string | With `github_app` | Path to the app's `.pem` key, or the PEM content itself |
+|:--|:--|:--|:--|
+| `url` | string | Yes | Repository URL. |
+| `branch` | string | No | Branch to read. Defaults to the repository's default branch. |
+| `schedule` | cron | No | How often to check for changes. If unset, policies are read once at startup. |
+| `auth` | string | No | `basic`, `ssh` or `github_app`. Omit for a public repository. |
+| `username` | string | No | Username for `basic`. |
+| `password` | string | No | Password or token for `basic`, or the key passphrase for `ssh`. |
+| `private_key` | string | No | Path to the SSH private key, for `ssh`. |
+| `skip_tls` | bool | No | Skip TLS certificate verification. Defaults to `false`. |
+| `github_app.client_id` | string | With `github_app` | The app's Client ID. The numeric App ID also works. |
+| `github_app.installation_id` | string | With `github_app` | The numeric ID of the app's installation on the repository owner. |
+| `github_app.private_key` | string | With `github_app` | Path to the app's `.pem` key, or the key itself. |
 
----
+See [Git](git.md) for repository layout and how the agent selects policies.
 
-## `orb.backends`
+### `orb.backends`
 
-Declares which backends are enabled. Each key activates a backend. The `common` sub-key holds settings shared across all backends.
+Each key under `backends` turns on that backend. A key with no settings uses the defaults. The `common` key holds settings that all backends share.
 
 ```yaml
 orb:
@@ -117,57 +117,73 @@ orb:
         client_id: ${DIODE_CLIENT_ID}
         client_secret: ${DIODE_CLIENT_SECRET}
         agent_name: agent01
-    device_discovery:   # enabled, using defaults
-    snmp_discovery:     # enabled, using defaults
+    device_discovery:
+    snmp_discovery:
 ```
 
-### `common.diode`
+#### `common.diode`
 
-Shared Diode connection settings used by all discovery backends.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `target` | string | Yes* | Diode server gRPC endpoint, e.g. `grpc://host:8080/diode` |
-| `client_id` | string | Yes* | Diode client ID |
-| `client_secret` | string | Yes* | Diode client secret |
-| `agent_name` | string | No | Label attached to all ingested data |
-| `dry_run` | bool | No | When `true`, writes output to files instead of sending to Diode (default: `false`) |
-| `dry_run_output_dir` | string | No | Directory for dry-run output files (default: current directory) |
-
-\* Not required when `dry_run: true`.
-
-### `common.otlp`
-
-Optional OpenTelemetry export for backend metrics.
+How discovery backends connect to Diode.
 
 | Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `grpc` | string | No | gRPC endpoint for OTLP export, e.g. `grpc://collector:4317` |
-| `http` | string | No | HTTP endpoint for OTLP export, e.g. `http://collector:4318` (used by pktvisor) |
-| `agent_labels` | map | No | Extra key/value labels attached to all exported telemetry |
+|:--|:--|:--|:--|
+| `target` | string | Yes, unless `dry_run` | Diode gRPC endpoint, for example `grpc://host:8080/diode`. |
+| `client_id` | string | Yes, unless `dry_run` | Diode client ID. |
+| `client_secret` | string | Yes, unless `dry_run` | Diode client secret. |
+| `agent_name` | string | No | A name attached to all data this agent sends. |
+| `dry_run` | bool | No | Write results to files instead of sending them to Diode. Defaults to `false`. |
+| `dry_run_output_dir` | string | No | Where dry-run files are written. Defaults to the current directory. |
 
-### Backend keys
+#### `common.otlp`
 
-Each backend key enables that backend. An empty value (no sub-keys) uses all defaults. All discovery backends, `snmp_telemetry` and `gnmi_telemetry` accept optional `host` and `port` overrides.
+Where backends export metrics with OpenTelemetry (OTLP).
 
-Every backend, these and `pktvisor` and `opentelemetry_infinity` alike, is refused before it is spawned when another process already holds the `host`:`port` it would listen on, with an error naming the address. Its readiness check asks that address and would otherwise take the other process's answer as its own, which happens when two agents share a host network (`network_mode: host`) with the same backend ports, or when a backend process from an earlier run of the agent is still alive. Give each agent its own ports in the first case; end the leftover process in the second.
+| Parameter | Type | Required | Description |
+|:--|:--|:--|:--|
+| `grpc` | string | No | OTLP gRPC endpoint, for example `grpc://collector:4317`. Required by `snmp_telemetry` and `gnmi_telemetry`. |
+| `http` | string | No | OTLP HTTP endpoint, for example `http://collector:4318`. Used by pktvisor. |
+| `agent_labels` | map | No | Labels added to all exported metrics. |
 
-| Key | Backend | Default port | Notes |
-|-----|---------|-------------|-------|
-| `device_discovery` | NAPALM-based device discovery | 8072 | Optional `host`/`port` overrides |
-| `snmp_discovery` | SNMP-based discovery | 8070 | Optional `host`/`port` overrides |
-| `network_discovery` | Network/port scan discovery | 8073 | Optional `host`/`port` overrides |
-| `worker` | Custom worker backend | 8071 | Optional `host`/`port` overrides |
-| `pktvisor` | pktvisor packet analytics | — | See [pktvisor docs](../backends/pktvisor/README.md) |
-| `opentelemetry_infinity` | OpenTelemetry Infinity | — | See [OTel Infinity docs](../backends/opentelemetry_infinity.md) |
-| `snmp_telemetry` | SNMP metrics and traps | 8078 | Optional `host`/`port` overrides; requires `common.otlp.grpc`. See [SNMP Telemetry docs](../backends/snmp_telemetry.md) |
-| `gnmi_telemetry` | gNMI streaming telemetry metrics | 8079 | Optional `host`/`port` overrides; requires `common.otlp.grpc`. See [gNMI Telemetry docs](../backends/gnmi_telemetry.md) |
+#### Backends
 
----
+| Key | Backend | Default port |
+|:--|:--|:--|
+| `device_discovery` | [Device discovery](../backends/device_discovery/README.md) | 8072 |
+| `network_discovery` | [Network discovery](../backends/network_discovery.md) | 8073 |
+| `snmp_discovery` | [SNMP discovery](../backends/snmp_discovery/README.md) | 8070 |
+| `gnmi_discovery` | [gNMI discovery](../backends/gnmi_discovery.md) | 8075 |
+| `worker` | [Worker](../backends/worker.md) | 8071 |
+| `snmp_telemetry` | [SNMP telemetry](../backends/snmp_telemetry.md) | 8078 |
+| `gnmi_telemetry` | [gNMI telemetry](../backends/gnmi_telemetry.md) | 8079 |
+| `pktvisor` | [pktvisor](../backends/pktvisor/README.md) | 10853 |
+| `opentelemetry_infinity` | [OpenTelemetry Infinity](../backends/opentelemetry_infinity.md) | 10222 |
 
-## `orb.policies`
+Each backend listens on a local port that the agent uses to control it. To change it, set `host` and `port` under the backend's key.
 
-Defines policies inline. Only used when `config_manager.active: local`. Each top-level key matches a backend name; beneath it, each named entry is an independent policy.
+:::note
+A backend won't start if another process is already using its port. This happens when two agents share the host network with the same ports, or when a backend from an earlier run is still running. Give each agent its own ports, or stop the leftover process.
+:::
+
+Any backend can also take these keys:
+
+| Key | Values | Default | Description |
+|:--|:--|:--|:--|
+| `start_mode` | `eager`, `on_demand` | `eager` | `eager` starts the backend with the agent, and a failed start stops the agent. `on_demand` starts it when its first policy arrives, and retries a failed start every five minutes. |
+| `start_timeout` | 1–300 | 30 | Seconds an `on_demand` backend has to become ready. Valid only with `on_demand`. |
+
+```yaml
+orb:
+  backends:
+    gnmi_telemetry:
+      start_mode: on_demand
+      start_timeout: 60
+```
+
+### `orb.policies`
+
+Policies tell each backend what to discover and when. Define them here when `config_manager.active` is `local`. With `git` or `fleet`, the agent ignores this section.
+
+Group policies under the backend that runs them. Each key beneath a backend is a policy name.
 
 ```yaml
 orb:
@@ -191,66 +207,30 @@ orb:
           targets: [192.168.1.0/24]
 ```
 
-### Policy names
+The settings for each policy depend on the backend. See the page for each backend in the [Backends](#backends) table.
 
-The key beneath a backend is the policy name. `my_policy` and `scan_policy` above are names, not reserved words.
+#### Policy names
 
-- **Forwarded verbatim.** Nothing along the path slugifies, trims or case-folds the name, and it is the name that appears in backend status and in telemetry.
-- **Spaces and non-ASCII are supported.** `My Office Network #2` and `café` are valid. The agent percent-escapes the name when it addresses the policy over the backend's API, so `#`, `?` and `%` are safe to use.
-- **A name must not contain `/`.** It is the one character escaping cannot carry: the backend decodes the escape before routing, so the name would address a different policy. The agent refuses such a policy at apply time and reports it as failed, rather than starting one it could never remove.
-- **Must be distinct within a backend.** The name is a YAML mapping key, and a duplicate key is a YAML error, so the agent rejects the whole configuration file rather than starting with one of the two.
-- **Best kept distinct across backends too.** The agent indexes policies by name alone, so the same name under two backends can attach one policy's dataset IDs to the other's telemetry.
+The agent uses the name exactly as written, in backend status and in telemetry.
 
-For the full list of parameters per backend, see:
-- [Device Discovery](../backends/device_discovery/README.md)
-- [SNMP Discovery](../backends/snmp_discovery/README.md)
-- [Network Discovery](../backends/network_discovery.md)
-- [Worker](../backends/worker.md)
-- [SNMP Telemetry](../backends/snmp_telemetry.md)
-- [gNMI Telemetry](../backends/gnmi_telemetry.md)
+- **Any characters except `/`.** Spaces, `#`, `?`, `%` and non-ASCII characters all work. A policy whose name contains `/` fails to apply.
+- **Unique within a backend.** A duplicate name is a YAML error, and the agent rejects the whole file.
+- **Best kept unique across backends.** If two backends have a policy with the same name, their telemetry can be mixed up.
 
----
+### `orb.secrets_manager`
 
-## `orb.secrets_manager`
+Connects the agent to a secrets store, so the file can refer to credentials instead of containing them. Each store has its own placeholder, such as `${vault://...}`, that you can use in policies and in other settings.
 
-Configures an external secrets source. When active, `${<scheme>://...}` references in policy and config values are resolved at runtime against the selected backend.
+| `active` | Secrets store | Placeholder |
+|:--|:--|:--|
+| `vault` | [HashiCorp Vault](../secretsmgr/vault.md) | `${vault://...}` |
+| `doppler` | [Doppler](../secretsmgr/doppler.md) | `${doppler://...}` |
+| `cyberark` | [CyberArk Central Credential Provider](../secretsmgr/cyberark.md) | `${cyberark://...}` |
+| `delinea` | [Delinea Secret Server](../secretsmgr/delinea.md) | `${delinea://...}` |
+| `dsv` | [Delinea DevOps Secrets Vault](../secretsmgr/dsv.md) | `${dsv://...}` |
+| `fleet` | NetBox Labs cloud | — |
 
-Supported backends (set one in `active`):
-
-| `active` | Backend | Placeholder scheme | Docs |
-|---|---|---|---|
-| `vault` | HashiCorp Vault (KV v2) | `${vault://...}` | [Vault](../secretsmgr/vault.md) |
-| `delinea` | Delinea Secret Server | `${delinea://...}` | [Delinea](../secretsmgr/delinea.md) |
-| `doppler` | Doppler | `${doppler://...}` | [Doppler](../secretsmgr/doppler.md) |
-| `cyberark` | CyberArk PAM (Central Credential Provider) | `${cyberark://...}` | [CyberArk](../secretsmgr/cyberark.md) |
-| `dsv` | Delinea DevOps Secrets Vault | `${dsv://...}` | [DSV](../secretsmgr/dsv.md) |
-| `fleet` | Fleet (NetBox Labs cloud) | — | — |
-
-### Vault
-
-Three placeholder grammars are supported, in priority order:
-
-- **Fully qualified** — `${vault://<mount>//<path>/<key>}`. The `//` separator delimits the mount, so multi-segment mounts (e.g. `foo/bar`) work unambiguously.
-- **Short form** — `${vault://<path>/<key>}`. Requires `sources.vault.mount` to be configured; the configured mount is used.
-- **Legacy** — `${vault://<mount>/<path>/<key>}`. Single-segment mount only; preserved for backward compatibility with placeholders that pre-date the `//` separator.
-
-Single-segment mount, legacy form:
-
-```yaml
-password: ${vault://kv/myapp/db/password}
-```
-
-Single-segment mount, qualified form (recommended for new configs):
-
-```yaml
-password: ${vault://kv//myapp/db/password}
-```
-
-Multi-segment mount — only the qualified form parses correctly:
-
-```yaml
-password: ${vault://foo/bar//myapp/db/password}
-```
+For example, with Vault:
 
 ```yaml
 orb:
@@ -265,113 +245,67 @@ orb:
         schedule: "*/5 * * * *"
 ```
 
-See the full [Vault secrets manager documentation](../secretsmgr/vault.md) for all parameters and authentication methods.
+Each store's page lists its settings and placeholder formats. If `active` is unset, the agent runs without a secrets manager.
 
-### Doppler
+### `orb.labels`
 
-Doppler placeholders take a short form (using project/config defaults from the agent config) or a fully qualified form:
-
-```yaml
-# Short form — uses sources.doppler.project and sources.doppler.config defaults
-password: ${doppler://API_KEY}
-
-# Fully qualified — useful with Service Account / Personal tokens spanning configs
-password: ${doppler://orb/prd/API_KEY}
-```
+Key/value pairs that identify this agent. With the Git config manager, the agent matches its labels against `selector.yaml` in the repository to choose its policies.
 
 ```yaml
 orb:
-  secrets_manager:
-    active: doppler
-    sources:
-      doppler:
-        token: ${DOPPLER_TOKEN}
-        project: orb
-        config: prd
-        schedule: "*/5 * * * *"
+  labels:
+    region: EU
+    pop: ams02
+    environment: production
 ```
 
-See the full [Doppler secrets manager documentation](../secretsmgr/doppler.md) for all parameters, authentication, and change-detection semantics.
+### `orb.debug`
 
-### CyberArk
-
-CyberArk placeholders take a short form (using the AppID default from the agent config) or a fully qualified form, with an optional field selector for non-password fields:
-
-```yaml
-# Short form — returns the Content (password) field
-password: ${cyberark://<Safe>/<Object>}
-
-# Short form with field selector
-username: ${cyberark://<Safe>/<Object>/UserName}
-
-# Fully qualified, overriding the configured AppID
-password: ${cyberark://<AppID>//<Safe>/<Object>}
-```
+Turns on debug logging, the same as starting the agent with `-d`:
 
 ```yaml
 orb:
-  secrets_manager:
-    active: cyberark
-    sources:
-      cyberark:
-        url: https://ccp.corp.example.com
-        app_id: orb-agent
-        client_cert: /opt/orb/secrets/orb.crt
-        client_key:  /opt/orb/secrets/orb.key
-        schedule: "*/5 * * * *"
+  debug:
+    enable: true
 ```
 
-See the full [CyberArk secrets manager documentation](../secretsmgr/cyberark.md) for all parameters and authentication options.
+### `orb.files_manager`
 
-### DSV
+Used only with Fleet. Sets where the agent stores files that Fleet delivers.
 
-Delinea DevOps Secrets Vault placeholders reference a secret path plus a key in the secret's data map (split on the last `/`):
+| Parameter | Type | Description |
+|:--|:--|:--|
+| `root` | string | Directory for delivered files. Defaults to `/opt/orb/files`. |
 
-```yaml
-password: ${dsv://servers/prod-db/password}
-```
+## Environment variables in the file
 
-```yaml
-orb:
-  secrets_manager:
-    active: dsv
-    sources:
-      dsv:
-        tenant: acme
-        client_id: ${DSV_CLIENT_ID}
-        client_secret: ${DSV_CLIENT_SECRET}
-        schedule: "*/5 * * * *"
-```
+A value written as `${VAR_NAME}` is replaced with the environment variable `VAR_NAME`. Keep credentials such as Diode client secrets out of the file this way.
 
-See the full [DSV secrets manager documentation](../secretsmgr/dsv.md) for all parameters and authentication.
+Which values are replaced depends on what reads them:
 
-Plain `${VAR_NAME}` references are **not** resolved by the secrets manager — those are handled by environment variable substitution as described below.
+| Section | Values replaced | Replaced by |
+|:--|:--|:--|
+| `config_manager.sources.git` | `url`, `password`, and the three `github_app` values | The agent, at startup |
+| `config_manager.sources.fleet` | `token_url`, `client_id`, `client_secret` | The agent, at startup |
+| `secrets_manager.sources.vault` | Everything under `auth_args` | The agent, at startup |
+| `secrets_manager.sources.doppler` | `token`, `api_host`, `project`, `config` | The agent, at startup |
+| `secrets_manager.sources.cyberark` | `url`, `app_id`, `reason`, `ca_bundle`, `client_cert`, `client_key` | The agent, at startup |
+| `secrets_manager.sources.delinea` | `server_url`, `tenant`, `username`, `password` | The agent, at startup |
+| `secrets_manager.sources.dsv` | `tenant`, `client_id`, `client_secret`, `tld`, `url_template`, `schedule` | The agent, at startup |
+| `device_discovery` policies | Any text value in `scope` and `defaults` | The backend, when the policy runs |
+| `snmp_discovery` policies | `community`, `username`, `auth_passphrase`, `priv_passphrase`, `context_name` | The backend, when the policy runs |
+| `snmp_telemetry` policies | `community`, `username`, `auth_passphrase`, `priv_passphrase` | The backend, when the policy runs |
+| `gnmi_telemetry` policies | `username`, `password`, `tls.ca`, `tls.cert`, `tls.key` | The backend, when the policy runs |
 
----
+For the values the agent replaces at startup:
 
-## Environment Variable Substitution
+- **The placeholder must be the whole value.** `password: ${GIT_TOKEN}` works. `url: https://${GIT_HOST}/repo` is left as written.
+- **The variable must be set.** If it isn't, the agent stops with the error `a provided environment variable is not set`.
 
-Values can reference environment variables using `${VAR_NAME}` syntax. Resolution is handled at different layers depending on the field:
+`snmp_telemetry` and `gnmi_telemetry` replace only variables you allow. List them in `policy_env_vars` under the backend's key; if you don't, every reference is refused. See [SNMP telemetry](../backends/snmp_telemetry.md) and [gNMI telemetry](../backends/gnmi_telemetry.md).
 
-| Scope | Supported fields | Resolved by |
-|-------|-----------------|-------------|
-| Git config manager | `url`, `password` | Go agent at startup |
-| Vault secrets manager `auth_args` | All fields | Go agent at startup |
-| CyberArk secrets manager | `url`, `app_id`, `reason`, `ca_bundle`, `client_cert`, `client_key` | Go agent at startup |
-| `device_discovery` policy (all fields) | Any string value in `scope` and `defaults` | Python backend at policy execution |
-| `snmp_discovery` policy authentication | `community`, `username`, `auth_passphrase`, `priv_passphrase`, `context_name` | Go SNMP backend at policy execution |
-| `snmp_telemetry` policy authentication | `community`, `username`, `auth_passphrase`, `priv_passphrase`, only for variables named in `backends.snmp_telemetry.policy_env_vars`; unset refuses every reference | Go SNMP telemetry backend at policy execution |
-| `gnmi_telemetry` policy credentials | `username`, `password`, `tls.ca`, `tls.cert`, `tls.key`, only for variables named in `backends.gnmi_telemetry.policy_env_vars`; unset refuses every reference | Go gNMI telemetry backend at policy execution |
+For a value not listed here, such as a `network_discovery` target, use a [secrets manager](#orbsecrets_manager) instead.
 
-```yaml
-# Git config (resolved by Go agent)
-password: ${GIT_TOKEN}
-
-# device_discovery policy scope (resolved by Python backend)
-scope:
-  - hostname: 192.168.0.5
-    username: admin
-    password: ${DEVICE_PASS}
-```
-
-For fields not listed above (e.g. `network_discovery` scope), use the Vault secrets manager to inject values at runtime.
+:::note
+To set or override any key from the environment without writing a placeholder in the file, see [Environment-Driven Configuration](../advanced_config/env_config.md).
+:::

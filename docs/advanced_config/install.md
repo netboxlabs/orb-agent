@@ -25,7 +25,7 @@ The image contains only the agent itself. You will need to create two files that
 
 - **`agent.yaml`**
 
-  The agent's configuration file. It sets which backends to run, how to reach Diode, and the policies that say what to discover and when. The agent won't start without it. For more information, see [Agent Configuration File](../configs/agent_yaml.md) and [Environment-Driven Configuration](../configs/env_config.md)
+  The agent's configuration file. It sets which backends to run, how to reach Diode, and the policies that say what to discover and when. The agent won't start without it. For more information, see [Agent Configuration File](../configs/agent_yaml.md) and [Environment-Driven Configuration](env_config.md)
 
 - **`.env`**
 
