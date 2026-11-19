@@ -1,5 +1,16 @@
 # Deploy and Operate
 
+The Orb agent runs as a Docker or Podman container on a host inside your network. Once started, it stays running and carries out each policy on its schedule. It sends what it discovers to Diode, which writes the data into NetBox.
+
+Choose a host that can reach both sides:
+
+- **The devices and networks you want to discover**
+  The agent connects to them directly, for example over SSH, SNMP or a network scan. A Linux host works best, because discovery needs host networking, which Docker and Podman support fully only on Linux.
+- **Your Diode endpoint**
+  On NetBox Cloud and NetBox Enterprise, Diode is part of your NetBox instance. On NetBox Community, it's a Diode server that you run yourself. If outbound traffic must go through a proxy, see [Outbound Proxy Support](outbound_proxy.md).
+
+One agent can run many policies. For large networks, or sites that can't reach each other, deploy an agent in each location.
+
 To set up NetBox Discovery for the first time, including Diode credentials, start with [Getting started](https://netboxlabs.com/docs/discovery/getting-started/). To change what the agent discovers, see [Configuration](../configs/README.md).
 
 - **[Install and Run the Agent](install.md)**
