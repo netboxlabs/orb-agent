@@ -63,9 +63,9 @@ Only policies come from the config manager. The agent always reads `backends`, `
 The file usually needs credentials, such as the Diode client secret and device passwords. There are three ways to keep them out of it:
 
 - **`${VAR}` placeholders**
-  Write `client_secret: ${DIODE_CLIENT_SECRET}` in the file, and set the variable in the container's environment. See [Environment variables in the file](agent_yaml.md#environment-variables-in-the-file).
+  Write `client_secret: ${DIODE_CLIENT_SECRET}` in the file, and set the variable in the container's environment. See [Placeholders in `agent.yaml`](../advanced_config/env_config.md#placeholders-in-agentyaml).
 - **`ORB_*` overrides**
-  Set any setting from the environment without mentioning it in the file, for example `ORB_SECRETS_MANAGER__ACTIVE=vault`. Useful when one file serves several deployments. See [Environment-Driven Configuration](../advanced_config/env_config.md).
+  Set any setting from the environment without mentioning it in the file, for example `ORB_SECRETS_MANAGER__ACTIVE=vault`. Useful when one file serves several deployments. See [`ORB_*` overrides](../advanced_config/env_config.md#orb_-overrides).
 - **A secrets manager**
   Fetch credentials from HashiCorp Vault, Doppler, CyberArk or Delinea when a policy runs. See [Secrets managers](../secretsmgr/README.md).
 
@@ -79,8 +79,8 @@ The file usually needs credentials, such as the Diode client secret and device p
   Define policies in `agent.yaml`.
 - **[Git](git.md)**
   Read policies from a Git repository, and choose which agents run which policies.
-- **[Environment-Driven Configuration](../advanced_config/env_config.md)**
-  Set or override any setting with `ORB_*` environment variables.
+- **[Environment Variables](../advanced_config/env_config.md)**
+  Fill in values with `${VAR}` placeholders, or set any setting with `ORB_*` overrides.
 - **[Configuration Samples](../config_samples.md)**
   Complete example files for each backend.
 

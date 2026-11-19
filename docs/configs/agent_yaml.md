@@ -33,7 +33,7 @@ orb:
           targets: [192.168.1.0/24]
 ```
 
-`${DIODE_CLIENT_ID}` and `${DIODE_CLIENT_SECRET}` are read from the environment when the agent starts. See [Environment variables in the file](#environment-variables-in-the-file).
+`${DIODE_CLIENT_ID}` and `${DIODE_CLIENT_SECRET}` are read from the environment. See [Placeholders in `agent.yaml`](../advanced_config/env_config.md#placeholders-in-agentyaml).
 
 ## Top-level keys
 
@@ -277,35 +277,6 @@ Used only with Fleet. Sets where the agent stores files that Fleet delivers.
 |:--|:--|:--|
 | `root` | string | Directory for delivered files. Defaults to `/opt/orb/files`. |
 
-## Environment variables in the file
+## Environment variables
 
-A value written as `${VAR_NAME}` is replaced with the environment variable `VAR_NAME`. Keep credentials such as Diode client secrets out of the file this way.
-
-Which values are replaced depends on what reads them:
-
-| Section | Values replaced | Replaced by |
-|:--|:--|:--|
-| `config_manager.sources.git` | `url`, `password`, and the three `github_app` values | The agent, at startup |
-| `config_manager.sources.fleet` | `token_url`, `client_id`, `client_secret` | The agent, at startup |
-| `secrets_manager.sources.vault` | Everything under `auth_args` | The agent, at startup |
-| `secrets_manager.sources.doppler` | `token`, `api_host`, `project`, `config` | The agent, at startup |
-| `secrets_manager.sources.cyberark` | `url`, `app_id`, `reason`, `ca_bundle`, `client_cert`, `client_key` | The agent, at startup |
-| `secrets_manager.sources.delinea` | `server_url`, `tenant`, `username`, `password` | The agent, at startup |
-| `secrets_manager.sources.dsv` | `tenant`, `client_id`, `client_secret`, `tld`, `url_template`, `schedule` | The agent, at startup |
-| `device_discovery` policies | Any text value in `scope` and `defaults` | The backend, when the policy runs |
-| `snmp_discovery` policies | `community`, `username`, `auth_passphrase`, `priv_passphrase`, `context_name` | The backend, when the policy runs |
-| `snmp_telemetry` policies | `community`, `username`, `auth_passphrase`, `priv_passphrase` | The backend, when the policy runs |
-| `gnmi_telemetry` policies | `username`, `password`, `tls.ca`, `tls.cert`, `tls.key` | The backend, when the policy runs |
-
-For the values the agent replaces at startup:
-
-- **The placeholder must be the whole value.** `password: ${GIT_TOKEN}` works. `url: https://${GIT_HOST}/repo` is left as written.
-- **The variable must be set.** If it isn't, the agent stops with the error `a provided environment variable is not set`.
-
-`snmp_telemetry` and `gnmi_telemetry` replace only variables you allow. List them in `policy_env_vars` under the backend's key; if you don't, every reference is refused. See [SNMP telemetry](../backends/snmp_telemetry.md) and [gNMI telemetry](../backends/gnmi_telemetry.md).
-
-For a value not listed here, such as a `network_discovery` target, use a [secrets manager](#orbsecrets_manager) instead.
-
-:::note
-To set or override any key from the environment without writing a placeholder in the file, see [Environment-Driven Configuration](../advanced_config/env_config.md).
-:::
+Many values in this file can be written as `${VAR}` placeholders, which are replaced with environment variables. You can also set settings from the environment with `ORB_*` variables, without mentioning them in the file. For which values support placeholders and how overrides work, see [Environment Variables](../advanced_config/env_config.md).

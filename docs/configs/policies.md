@@ -96,7 +96,7 @@ Policies often need credentials, such as device passwords or SNMP communities. T
 - **A secrets manager**
   Refer to a secret with a placeholder such as `${vault://secret//devices/password}`. The agent fetches the value from the secrets store. See [Secrets managers](../secretsmgr/README.md).
 - **An environment variable**
-  Some backends replace `${VAR}` with the environment variable `VAR`. Which values support this depends on the backend. See [Environment variables in the file](agent_yaml.md#environment-variables-in-the-file).
+  Some backends replace `${VAR}` with the environment variable `VAR`. Which values support this depends on the backend. See [Where placeholders work](../advanced_config/env_config.md#where-placeholders-work).
 
 ## Policy names
 

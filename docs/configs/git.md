@@ -298,7 +298,7 @@ With `github_app`, `skip_tls: true` also turns off certificate checks for GitHub
 Don't commit credentials to the repository. That includes Diode secrets, device passwords and API tokens.
 
 - **In `agent.yaml`,** use `${VAR}` placeholders, as in the examples above.
-- **In policy files,** whether `${VAR}` works depends on the backend. Device discovery accepts it in any `scope` or `defaults` value. SNMP discovery accepts it only in credential fields. Network discovery doesn't accept it. See [Environment variables in the file](agent_yaml.md#environment-variables-in-the-file).
+- **In policy files,** whether `${VAR}` works depends on the backend. Device discovery and the worker accept it in any value. SNMP discovery accepts it only in credential fields. Network discovery doesn't accept it. See [Where placeholders work](../advanced_config/env_config.md#where-placeholders-work).
 - **Anywhere else,** use a [secrets manager](agent_yaml.md#orbsecrets_manager).
 
 ## Example

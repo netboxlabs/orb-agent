@@ -25,7 +25,7 @@ The image contains only the agent itself. You will need to create two files that
 
 - **`agent.yaml`**
 
-  The agent's configuration file. It sets which backends to run, how to reach Diode, and the policies that say what to discover and when. The agent won't start without it. For more information, see [Agent Configuration File](../configs/agent_yaml.md) and [Environment-Driven Configuration](env_config.md)
+  The agent's configuration file. It sets which backends to run, how to reach Diode, and the policies that say what to discover and when. The agent won't start without it. For more information, see [Agent Configuration File](../configs/agent_yaml.md) and [Environment Variables](env_config.md)
 
 - **`.env`**
 
@@ -119,7 +119,7 @@ Where:
 | `--restart unless-stopped` | Restarts the agent if it crashes or the host reboots, unless you stopped it yourself. |
 | `--stop-timeout 60` | Gives the agent 60 seconds to shut down. It stops its backends one at a time and finishes policy runs in progress, which can take longer than Docker's default of 10 seconds. |
 | `--log-driver local` | Rotates the logs. Docker's default `json-file` driver never rotates them, so an agent that runs for months can fill the disk. The `local` driver keeps five compressed files of 20 MB each. |
-| `--env-file` | Reads environment variables, such as Diode credentials, from a file. See [Environment-Driven Configuration](env_config.md). |
+| `--env-file` | Reads environment variables, such as Diode credentials, from a file. See [Environment Variables](env_config.md). |
 
 ### Start the container runtime at boot
 

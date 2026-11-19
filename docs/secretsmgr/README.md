@@ -41,7 +41,7 @@ naming the supported types.
 
 The provider and its settings can also be chosen entirely from the environment,
 without editing the YAML, which suits injecting them at deploy time. See
-[Environment-Driven Configuration](../advanced_config/env_config.md).
+[`ORB_*` overrides](../advanced_config/env_config.md#orb_-overrides).
 
 ## Rotation
 
