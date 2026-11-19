@@ -1,41 +1,32 @@
 # Outbound Proxy Support
 
-Some environments require all outbound traffic to leave the network through a corporate forward proxy. Orb Agent's outbound connection to your [Diode](https://github.com/netboxlabs/diode) target (used to send discovered data to NetBox) honors the standard proxy environment variables, so no extra configuration flags are required.
+The Orb agent sends the data it discovers to NetBox through [Diode](https://github.com/netboxlabs/diode), the NetBox Labs ingestion service. 
 
-This applies to deployments where the agent runs on-premises and must reach a remote (for example, cloud-hosted) Diode endpoint through a proxy.
+If your network sends outbound traffic through a corporate forward proxy, the agent can reach Diode through it. For example, you might run the agent on-premises and send data to a cloud-hosted Diode.
 
-## How it works
+You configure the proxy with the standard proxy environment variables. There are no proxy settings in `agent.yaml`, and the Diode `target` in the file stays the same.
 
-Orb Agent sends data to Diode through one of two clients, depending on the backend:
+## Set the proxy variables
 
-- the [Diode Go SDK](https://github.com/netboxlabs/diode-sdk-go) — used by the **network discovery** and **SNMP discovery** backends
-- the [Diode Python SDK](https://github.com/netboxlabs/diode-sdk-python) — used by the **device discovery** and **worker** backends
+Set these variables in the agent's container environment:
 
-Both clients respect the conventional proxy environment variables used by Go and Python:
+| Variable | Value |
+|:--|:--|
+| `HTTP_PROXY` | Your proxy URL, for example `http://proxy.example.com:8080` |
+| `HTTPS_PROXY` | The same proxy URL |
+| `NO_PROXY` | Comma-separated hosts, domains and IP ranges the agent should reach directly |
 
-| Variable | Purpose |
-|----------|---------|
-| `HTTPS_PROXY` | Proxy URL consulted for a TLS Diode target (`grpcs://`), and for the Go SDK's gRPC data stream regardless of scheme (see note). |
-| `HTTP_PROXY` | Proxy URL consulted for a plain Diode target (`grpc://`) (see note). |
-| `NO_PROXY` | Comma-separated list of hosts, domains, or IPs that must bypass the proxy and be reached directly. |
+Set **both** `HTTP_PROXY` and `HTTPS_PROXY` to the same URL. Different backends choose between them in different ways, and setting both covers every backend and Diode target. See [How the agent chooses a proxy](#how-the-agent-chooses-a-proxy) for more information.
 
-Both uppercase and lowercase forms (`HTTPS_PROXY` / `https_proxy`, etc.) are accepted by both SDKs.
+Lower-case names, such as `https_proxy`, also work.
 
-> **Which variable applies depends on the backend's SDK and the target scheme.** The two clients select the proxy slightly differently:
-> - **Go SDK** (network & SNMP discovery): the gRPC data stream is resolved by `grpc-go` from `HTTPS_PROXY` / `NO_PROXY` whether the target is `grpcs://` or plain `grpc://`, while the OAuth token request follows the target scheme (`http://`/`grpc://` → `HTTP_PROXY`, `https://`/`grpcs://` → `HTTPS_PROXY`).
-> - **Python SDK** (device discovery & worker): a secure `grpcs://` target uses `HTTPS_PROXY` (falling back to `HTTP_PROXY`); a plain `grpc://` target uses `HTTP_PROXY`.
->
-> Rather than reason about every combination, the robust approach — especially when an agent runs multiple backends — is to **set both `HTTP_PROXY` and `HTTPS_PROXY` to the same proxy URL** (plus `NO_PROXY`). That covers every backend and target scheme. The examples below do this.
+:::note
+Add your network devices and internal ranges to `NO_PROXY`. A forward proxy is usually meant only for traffic leaving your network. Discovery traffic to devices, SNMP hosts and other internal targets should not go through it.
+:::
 
-When a proxy variable is set, the agent routes the Diode connection — both the initial authentication request and the data stream — through the proxy using the standard `CONNECT` tunneling method. The `target` in your `agent.yaml` stays unchanged; the proxy is selected purely from the environment.
+## Example
 
-> **Keep internal discovery traffic direct.** A forward proxy is typically only appropriate for the outbound Diode/egress connection. Traffic from discovery backends to internal targets (network devices, SNMP hosts, etc.) usually must *not* go through the proxy. Add those internal hosts and ranges to `NO_PROXY` so they are reached directly.
-
-## Configuration
-
-Set the proxy variables in the agent's container environment. The `target` and credentials in `agent.yaml` are unchanged.
-
-### Example `agent.yaml`
+`agent.yaml` uses `${VAR}` placeholders for the Diode settings, as it would without a proxy:
 
 ```yaml
 orb:
@@ -51,25 +42,24 @@ orb:
         agent_name: agent01
 ```
 
-### Example environment file
+Put the Diode settings and the proxy variables in an environment file, `.env`:
 
 ```sh
 # Diode endpoint and credentials.
-# docker --env-file does not expand ${...}, so use concrete values here.
+# docker --env-file does not expand ${...}, so use literal values.
 DIODE_URL=grpcs://diode.example.com/diode
 DIODE_CLIENT_ID=your-diode-client-id
 DIODE_CLIENT_SECRET=your-diode-client-secret
 
-# Route outbound Diode traffic through the corporate proxy.
-# Set both so it applies to every backend SDK and target scheme.
+# Send outbound Diode traffic through the proxy.
 HTTP_PROXY=http://proxy.example.com:8080
 HTTPS_PROXY=http://proxy.example.com:8080
 
-# Reach internal discovery targets directly (bypass the proxy)
+# Reach internal discovery targets directly.
 NO_PROXY=internal-target.example.com,10.0.0.0/8
 ```
 
-### Running the agent
+Start the agent with the environment file:
 
 ```sh
 docker run --net=host \
@@ -78,36 +68,51 @@ docker run --net=host \
   netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
-Or pass the variables individually (the Diode credentials must be supplied alongside the proxy variables):
-
-```sh
-docker run --net=host \
-  -v ${PWD}:/opt/orb/ \
-  -e DIODE_URL=grpcs://diode.example.com/diode \
-  -e DIODE_CLIENT_ID=your-diode-client-id \
-  -e DIODE_CLIENT_SECRET=your-diode-client-secret \
-  -e HTTP_PROXY=http://proxy.example.com:8080 \
-  -e HTTPS_PROXY=http://proxy.example.com:8080 \
-  -e NO_PROXY=internal-target.example.com,10.0.0.0/8 \
-  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
-```
+You can also pass each variable with `-e` instead of using `--env-file`.
 
 ## TLS-intercepting proxies
 
-If the proxy terminates and re-signs TLS (TLS interception / "MITM"), the agent must trust the proxy's CA certificate, or the Diode connection will fail certificate verification. Provide the proxy CA certificate to the Diode client:
+Some proxies decrypt and re-sign TLS traffic. If yours does, the agent must trust the proxy's CA certificate, or the connection to Diode fails certificate verification.
 
-```sh
-# Mount the proxy CA bundle into the container and point the Diode client at it
--e DIODE_CERT_FILE=/opt/orb/proxy-ca.pem
-```
+1. Save the proxy's CA certificate as `proxy-ca.pem` in the directory you mount at `/opt/orb`.
+2. Add this line to your `.env` file:
 
-Both SDKs read the CA certificate from `DIODE_CERT_FILE`. For the full list of TLS-related options, see the SDK references — the [Diode Go SDK](https://github.com/netboxlabs/diode-sdk-go) and the [Diode Python SDK environment variables reference](https://github.com/netboxlabs/diode-sdk-python?tab=readme-ov-file#environment-variables). Disabling certificate verification entirely (`DIODE_SKIP_TLS_VERIFY`) is possible for quick testing but is not recommended for production.
+   ```sh
+   DIODE_CERT_FILE=/opt/orb/proxy-ca.pem
+   ```
 
-## Verifying
+Both Diode SDKs read the certificate from `DIODE_CERT_FILE`. For other TLS options, see the [Diode Go SDK](https://github.com/netboxlabs/diode-sdk-go) and the [Diode Python SDK environment variables](https://github.com/netboxlabs/diode-sdk-python?tab=readme-ov-file#environment-variables).
 
-After setting the proxy variables, start the agent and confirm in the proxy's access logs that the outbound connection to the Diode endpoint is observed, and that discovered data reaches NetBox. Running the agent with debug logging (`-d`) helps confirm the connection is established. Any proxy or TLS errors will surface in the agent logs.
+:::note
 
-## Notes and limitations
+`DIODE_SKIP_TLS_VERIFY` turns off certificate verification entirely. Use it only for quick tests, never in production.
 
-- Proxy selection is currently driven entirely by environment variables. A first-class, `agent.yaml`-based proxy setting is planned as a future enhancement.
-- Only the outbound Diode connection is covered here. If you need to proxy other agent egress paths, please open an issue describing the use case.
+:::
+
+## Check the connection
+
+1. Start the agent with debug logging by adding `-d` after `run`.
+2. In the proxy's access logs, check for a connection to your Diode endpoint.
+3. Check that discovered data arrives in NetBox.
+
+Proxy and TLS errors appear in the agent's logs.
+
+## How the agent chooses a proxy
+
+Each backend sends data to Diode through one of two SDKs. They choose a proxy variable differently, which is why you should set both.
+
+| Backends | SDK | `grpc://` target | `grpcs://` target |
+|:--|:--|:--|:--|
+| Network discovery, SNMP discovery, gNMI discovery | [Diode Go SDK](https://github.com/netboxlabs/diode-sdk-go) | Data: `HTTPS_PROXY`<br>Sign-in: `HTTP_PROXY` | `HTTPS_PROXY` |
+| Device discovery, worker | [Diode Python SDK](https://github.com/netboxlabs/diode-sdk-python) | `HTTP_PROXY` | `HTTPS_PROXY`, or `HTTP_PROXY` if that is not set |
+
+The Go SDK makes two connections: a sign-in request to get an access token, and the data stream. With a `grpc://` target, they use different variables.
+
+Both the sign-in request and the data stream go through the proxy, using standard `CONNECT` tunneling.
+
+## Limitations
+
+- Only the connection to Diode is covered. Other outbound traffic, such as telemetry exports, does not necessarily follow these variables.
+- You can set the proxy only with environment variables, not in `agent.yaml`.
+
+If you need to send other traffic through a proxy, [open an issue](https://github.com/netboxlabs/orb-agent/issues) describing your setup.
