@@ -179,6 +179,8 @@ orb:
       start_timeout: 60
 ```
 
+`on_demand` suits any backend this agent might never get a policy for. The image's built-in configuration, used with Fleet, sets `snmp_telemetry` and `gnmi_telemetry` to `on_demand`.
+
 ### `orb.policies`
 
 Policies tell each backend what to discover and when. Define them here when `config_manager.active` is `local`. With `git` or `fleet`, the agent ignores this section.

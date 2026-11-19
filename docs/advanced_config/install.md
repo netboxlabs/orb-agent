@@ -8,6 +8,18 @@ Before you begin, review [Getting started](../../getting-started.md) for informa
 
 :::
 
+## System requirements
+
+| Resource | Minimum | Recommended |
+|:--|:--|:--|
+| CPU | 2 cores | 4 cores |
+| Memory | 1.5 GB | 2 GB |
+| Disk space | 1 GB | 2 GB |
+| Docker Engine | 20.10 | 24.0 or later |
+| Podman | 4.0 | 5.0 or later |
+
+Run the agent on Linux, on x86_64 or arm64. Discovery needs host networking (`--net=host`), which Docker and Podman support fully only on Linux. On macOS and Windows, the agent runs with limited functionality.
+
 ## 1. Get the Docker image
 
 The image is published on [Docker Hub](https://hub.docker.com/r/netboxlabs/orb-agent):
