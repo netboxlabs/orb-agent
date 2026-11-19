@@ -196,16 +196,17 @@ func convertRunsToStateInfo(runs []policies.RunData) []messages.RunStateInfo {
 	runInfos := make([]messages.RunStateInfo, len(runs))
 	for i, run := range runs {
 		runInfos[i] = messages.RunStateInfo{
-			ID:          run.ID,
-			PolicyID:    run.PolicyID,
-			Status:      run.Status,
-			Reason:      run.Reason,
-			EntityCount: run.EntityCount,
-			CreatedAt:   run.CreatedAt,
-			UpdatedAt:   run.UpdatedAt,
-			Targets:     run.Targets,
-			Driver:      run.Driver,
-			Kind:        run.Kind,
+			ID:            run.ID,
+			PolicyID:      run.PolicyID,
+			Status:        run.Status,
+			Reason:        run.Reason,
+			EntityCount:   run.EntityCount,
+			CreatedAt:     run.CreatedAt,
+			UpdatedAt:     run.UpdatedAt,
+			Targets:       run.Targets,
+			Driver:        run.Driver,
+			Kind:          run.Kind,
+			PolicyVersion: run.PolicyVersion,
 		}
 	}
 	return runInfos

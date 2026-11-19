@@ -41,6 +41,9 @@ type RunStateInfo struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	Targets     []string  `json:"targets,omitempty"`
 	Driver      string    `json:"driver,omitempty"`
+	// PolicyVersion is the policy version the run started under, left out
+	// when the agent could not tell. Fleet then uses the heartbeat's version.
+	PolicyVersion int32 `json:"policy_version,omitempty"`
 	// Kind distinguishes runs describing different work. See
 	// backend.PolicyStatusRun.Kind.
 	Kind string `json:"kind,omitempty"`
