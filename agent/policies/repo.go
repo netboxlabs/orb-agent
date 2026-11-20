@@ -134,6 +134,8 @@ func (p *policyMemRepo) Update(data PolicyData) error {
 // UpdateKeepingRuns replaces the stored record with data but keeps the runs
 // already held for that ID, merging under the same lock used to store it so
 // a concurrent run update is never discarded between a read and this write.
+// Applied comes from data, which the caller read from the store and may have
+// added to.
 func (p *policyMemRepo) UpdateKeepingRuns(data PolicyData) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -234,8 +236,16 @@ func (p *policyMemRepo) UpdateRunsWith(policyName string, runs []RunData, prepar
 			if runs[i].Driver == "" {
 				runs[i].Driver = existing.Driver
 			}
+			// A run keeps the version it was first given, even once a
+			// later version is applied.
+			runs[i].PolicyVersion = existing.PolicyVersion
 		} else {
-			// New run: use the backend's timestamps if provided; fall back to now.
+			// New run: it gets the version that was applied when it started.
+			// This reads the backend's created_at before the fallback below:
+			// a run with none gets 0, since now would only say when the agent
+			// first saw it.
+			runs[i].PolicyVersion = policy.VersionAt(runs[i].CreatedAt)
+			// Use the backend's timestamps if provided; fall back to now.
 			if runs[i].CreatedAt.IsZero() {
 				runs[i].CreatedAt = now
 			}

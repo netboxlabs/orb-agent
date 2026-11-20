@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -25,4 +26,18 @@ func TestRunKindReachesTheHeartbeat(t *testing.T) {
 	require.Equal(t, "sweep", infos[0].Kind)
 	require.Equal(t, "flush", infos[1].Kind)
 	require.Empty(t, infos[2].Kind, "a backend that emits no kind is unaffected")
+}
+
+func TestRunPolicyVersionReachesTheHeartbeat(t *testing.T) {
+	infos := convertRunsToStateInfo([]policies.RunData{
+		{ID: "r1", Status: "completed", PolicyVersion: 3},
+		{ID: "r2", Status: "completed"}, // a run the agent could not stamp
+	})
+
+	require.Len(t, infos, 2)
+	require.Equal(t, int32(3), infos[0].PolicyVersion)
+
+	raw, err := json.Marshal(infos[1])
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "policy_version", "an unknown version is left out")
 }

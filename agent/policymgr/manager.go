@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -317,6 +318,9 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 			pd.Datasets = currentPolicy.Datasets
 			pd.GroupIDs = currentPolicy.GroupIDs
 			pd.NotOnBackend = currentPolicy.NotOnBackend
+			// The record is replaced below; the versions applied so far are
+			// still needed to stamp the runs the backend still holds.
+			pd.Applied = currentPolicy.Applied
 		} else {
 			// new policy we have not seen before, associate with this dataset
 			// on first time we see policy, we *require* dataset
@@ -624,11 +628,20 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 	notOnBackend := pd.NotOnBackend
 	updatePolicy = updatePolicy && !notOnBackend
 	pd.NotOnBackend = false
+	// The time is taken before the call: the backend can start a run as soon
+	// as the apply lands, and that run must get this version. Known gap: on
+	// an update the backend removes the old policy first, so a run the old
+	// policy starts between this time and that removal gets this version.
+	appliedAt := time.Now()
 	err = be.ApplyPolicy(*pd, updatePolicy)
 	if backend.PolicyNotSent(err) {
 		// The backend refused the policy before sending its process
 		// anything: it holds no more of the policy than it did before.
 		pd.NotOnBackend = notOnBackend
+	} else {
+		// Recorded even when the apply failed: one that timed out may still
+		// have reached the backend and started runs.
+		pd.RecordApplied(pd.Version, appliedAt)
 	}
 	if err != nil {
 		// The backend's error can quote the policy's data, which carries its

@@ -16,6 +16,10 @@ type RunData struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	Targets     []string  `json:"targets,omitempty"`
 	Driver      string    `json:"driver,omitempty"`
+	// PolicyVersion is the policy version the run started under, worked out
+	// by the agent from when it applied each version (see
+	// PolicyData.Applied). 0 when unknown.
+	PolicyVersion int32 `json:"policy_version,omitempty"`
 	// Kind distinguishes runs describing different work, for a backend that
 	// emits more than one shape. See backend.PolicyStatusRun.Kind.
 	Kind string `json:"kind,omitempty"`
@@ -46,6 +50,60 @@ type PolicyData struct {
 	// to apply the policy clears it, unless the backend refused the policy
 	// before sending its process anything.
 	NotOnBackend bool
+	// Applied lists the last versions the agent sent to the backend, oldest
+	// first, with when it sent each. A new run gets the last version sent at
+	// or before the run's created_at. It lives on the record, and every
+	// write of the record carries it over, because a new version replaces
+	// the record and drops its runs: the backend still holds the old runs,
+	// and they come back as new runs that must still get the old version.
+	Applied []AppliedVersion
+}
+
+// AppliedVersion is one policy version and the time the agent began
+// sending it to the backend.
+type AppliedVersion struct {
+	Version int32
+	At      time.Time
+}
+
+// maxAppliedVersions bounds PolicyData.Applied. Only a run that started
+// before the last few applies and is first seen after them needs an older
+// entry, and it then gets no version, so Fleet falls back as before.
+const maxAppliedVersions = 5
+
+// RecordApplied adds version, sent to the backend at at, to Applied. A
+// version of 0 means the policy has no version, and adds nothing, as does a
+// re-apply of the last version. Applied is rebuilt rather than appended to, so a
+// copy of the record read from the repo never shares its storage.
+func (d *PolicyData) RecordApplied(version int32, at time.Time) {
+	if version == 0 {
+		return
+	}
+	if n := len(d.Applied); n > 0 && d.Applied[n-1].Version == version {
+		return
+	}
+	kept := d.Applied
+	if len(kept) >= maxAppliedVersions {
+		kept = kept[len(kept)-maxAppliedVersions+1:]
+	}
+	applied := make([]AppliedVersion, 0, len(kept)+1)
+	applied = append(applied, kept...)
+	d.Applied = append(applied, AppliedVersion{Version: version, At: at})
+}
+
+// VersionAt returns the version a run created at createdAt started under:
+// the last one applied at or before it. It returns 0 when createdAt is zero
+// or before every entry, or there are none.
+func (d *PolicyData) VersionAt(createdAt time.Time) int32 {
+	if createdAt.IsZero() {
+		return 0
+	}
+	for i := len(d.Applied) - 1; i >= 0; i-- {
+		if !d.Applied[i].At.After(createdAt) {
+			return d.Applied[i].Version
+		}
+	}
+	return 0
 }
 
 // GetDatasetIDs returns the dataset IDs
