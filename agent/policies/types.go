@@ -72,8 +72,8 @@ type AppliedVersion struct {
 const maxAppliedVersions = 5
 
 // RecordApplied adds version, sent to the backend at at, to Applied. A
-// version of 0 (a config manager with no versions) and a re-apply of the
-// last version add nothing. Applied is rebuilt rather than appended to, so a
+// version of 0 means the policy has no version, and adds nothing, as does a
+// re-apply of the last version. Applied is rebuilt rather than appended to, so a
 // copy of the record read from the repo never shares its storage.
 func (d *PolicyData) RecordApplied(version int32, at time.Time) {
 	if version == 0 {
