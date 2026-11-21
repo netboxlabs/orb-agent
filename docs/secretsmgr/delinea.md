@@ -69,7 +69,7 @@ The access token is kept in the agent's memory, and requested again when it expi
 
 ## Usage
 
-To use a secret from Delinea in your policy configuration, use one of the two reference forms:
+To use a secret from Delinea in your policy configuration, use one of the two reference forms. In either form, `${secret://…}` may be used instead of `${delinea://…}` — see [Provider-agnostic secret references](./secret_references.md).
 
 ### By numeric secret ID
 
