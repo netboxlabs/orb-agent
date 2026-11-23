@@ -332,10 +332,22 @@ func (f *FleetSecretsManager) refresh(path string, version int, changed map[stri
 		// the request that one scheduled stands.
 		return
 	}
-	if r, ok := f.retries[path]; ok && version >= r.version {
-		// Fleet answered a request for the version the scheduled one is
-		// for: no further request is needed. An answer to a request for an
-		// older version leaves it scheduled.
+	if secret.Version < version {
+		// Fleet answered with an older version than the one it announced,
+		// as a replica that lags would: the value is applied below when it is
+		// newer than the one held, and the announced version is requested
+		// again, as after a request that failed.
+		first, wait := f.retryLaterLocked(path, version, false)
+		log := f.logger.Debug
+		if first {
+			log = f.logger.Warn
+		}
+		log("Fleet answered an older version of the secret than it announced; requesting it again",
+			"path", path, "announced_version", version, "version", secret.Version, "retry_in", wait)
+	} else if r, ok := f.retries[path]; ok && secret.Version >= r.version {
+		// Fleet answered with the version the scheduled request is for, or
+		// a newer one: no further request is needed. An answer with an
+		// older version, to a request for one, leaves it scheduled.
 		f.dropRetryLocked(path)
 		f.logger.Info("Fleet answered the secret request again", "path", path, "version", secret.Version)
 	}

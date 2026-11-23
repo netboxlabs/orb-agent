@@ -3,6 +3,7 @@ package secretsmgr
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -255,6 +256,65 @@ func TestFleetSecretsManager_aLateAnswerForAnOlderVersionKeepsTheRetry(t *testin
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
 	assert.Equal(t, "v3", fm.usedVars["snmp/community"].Value)
+}
+
+// An answer with an older version than Fleet announced, as from a replica
+// that lags, is applied when it is newer than the value held, and the
+// announced version is requested again until Fleet answers with it.
+func TestFleetSecretsManager_anAnswerOlderThanAnnouncedIsRequestedAgain(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// held is the version the agent holds; lagging, the one Fleet answers
+		// first for the announced version 3.
+		held, lagging int
+		// applied are the reports of the first answer.
+		applied []map[string]error
+	}{
+		{name: "newer than the one held", held: 1, lagging: 2, applied: []map[string]error{{"policy1": nil}}},
+		{name: "older than the one held", held: 2, lagging: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fm, pub := newScriptedFleetManager(t, 5, func(n int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+				switch n {
+				case 1:
+					return fleetAnswer(req, fmt.Sprintf("v%d", tc.lagging), tc.lagging), nil
+				case 2:
+					return fleetAnswer(req, "v1", 1), nil // still behind: requested again later
+				default:
+					return fleetAnswer(req, "v3", 3), nil
+				}
+			})
+			timers := &fakeRetryTimers{}
+			fm.afterFunc = timers.afterFunc
+			fm.usedVars = map[string]fleetCachedSecret{
+				"snmp/community": {Value: fmt.Sprintf("v%d", tc.held), Version: tc.held, policyIDs: map[string]bool{"policy1": true}},
+			}
+			reports := &recordedReports{}
+			fm.callback = reports.record
+
+			notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 3})
+			assert.Equal(t, tc.applied, reports.all())
+			waits := timers.pending()
+			require.Len(t, waits, 1, "the announced version is requested again")
+			assertWait(t, time.Minute, waits[0])
+
+			timers.fire(t)
+			waits = timers.pending()
+			require.Len(t, waits, 1, "still behind")
+			assertWait(t, 2*time.Minute, waits[0])
+
+			timers.fire(t)
+			assert.Equal(t, append(tc.applied, map[string]error{"policy1": nil}), reports.all(), "applied with the announced version")
+			assert.Empty(t, timers.pending())
+			fm.mu.Lock()
+			defer fm.mu.Unlock()
+			assert.Equal(t, "v3", fm.usedVars["snmp/community"].Value)
+			assert.Zero(t, len(fm.retries))
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			assert.Equal(t, 3, pub.n)
+		})
+	}
 }
 
 // A request scheduled for a path is cancelled, its timer stopped, once no
