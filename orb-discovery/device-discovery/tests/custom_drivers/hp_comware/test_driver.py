@@ -4,6 +4,8 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from custom_napalm.hp_comware import (
     _COMWARE_FAMILY_PREFIXES,
     _COMWARE_SUPERVISOR_TOKENS,
@@ -355,17 +357,16 @@ def test_vlan_getters_send_display_vlan_all_once():
     assert result["GigabitEthernet1/0/24"]["tagged"] == [100]
 
 
-def test_failed_display_vlan_all_is_not_reused():
-    """When get_vlans' send fails, get_interfaces_vlans sends the command again."""
-    responses = {"display vlan all": OSError("channel closed"), "display interface brief": _BRIEF}
+def test_failed_display_vlan_all_is_not_sent_again():
+    """A failed send raises from get_vlans and is not retried by get_interfaces_vlans."""
+    responses = {"display vlan all": OSError("read timeout"), "display interface brief": _BRIEF}
     driver = _vlan_driver(responses)
-    try:
+    with pytest.raises(OSError):
         driver.get_vlans()
-    except OSError:
-        pass
     responses["display vlan all"] = _VLAN_ALL
-    driver.get_interfaces_vlans()
-    assert _sent(driver, "display vlan all") == 2
+    assert driver.get_interfaces_vlans() == {}
+    assert _sent(driver, "display vlan all") == 1
+    assert _sent(driver, "display interface brief") == 0
 
 
 def test_open_drops_display_vlan_all_from_previous_connection():

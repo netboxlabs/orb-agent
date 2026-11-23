@@ -418,7 +418,6 @@ def test_comware_invert_vlan_all():
     }
 
 
-
 def test_comware_vlan_names_keep_spaces_and_punctuation():
     """Names come whole from the `Name:` line, spaces and hyphens included."""
     text = (
@@ -453,6 +452,7 @@ def test_comware_vlan_names_ignore_description_and_missing_name():
 def test_comware_vlan_names_ignore_lines_before_first_vlan():
     """A `Name:` line outside any VLAN section is ignored."""
     assert _parse_comware_vlan_names(" Name: stray\n VLAN ID: 5\n Name: Five\n") == {5: "Five"}
+
 
 # ----- Extreme EXOS ---------------------------------------------------------
 

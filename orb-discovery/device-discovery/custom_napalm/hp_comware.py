@@ -846,6 +846,7 @@ class ComwareDriver(_napalm_base.NetworkDriver):
         self.netmiko_optional_args.setdefault("port", 22)
         # Comware has no enable mode — tell NAPALM not to call enable()
         self.force_no_enable = True
+        self._vlan_all_raw: str | Exception | None = None
 
     def open(self):
         """Open an SSH connection to the device via Netmiko."""
@@ -1021,12 +1022,22 @@ class ComwareDriver(_napalm_base.NetworkDriver):
         return config
 
     def _display_vlan_all(self) -> str:
-        """Return ``display vlan all`` output, sent at most once per connection."""
-        raw = getattr(self, "_vlan_all_raw", None)
-        if raw is None:
-            raw = self.device.send_command("display vlan all") or ""
-            self._vlan_all_raw = raw
-        return raw
+        """
+        Return ``display vlan all`` output, sent at most once per connection.
+
+        A failed send is remembered and re-raised, so a slow VLAN table
+        costs one timeout per run, not one per getter.
+        """
+        cached = getattr(self, "_vlan_all_raw", None)
+        if cached is None:
+            try:
+                cached = self.device.send_command("display vlan all") or ""
+            except Exception as e:
+                cached = e
+            self._vlan_all_raw = cached
+        if isinstance(cached, Exception):
+            raise cached
+        return cached
 
     def get_vlans(self) -> dict:
         """
@@ -1122,8 +1133,8 @@ class ComwareDriver(_napalm_base.NetworkDriver):
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """Return per-interface VLAN config from `display interface brief` + `display vlan all`."""
         try:
-            brief_raw = self.device.send_command("display interface brief")
             vlan_raw = self._display_vlan_all()
+            brief_raw = self.device.send_command("display interface brief")
         except Exception:
             logger.debug("Comware switchport command failed", exc_info=True)
             return {}
