@@ -1,6 +1,6 @@
 module github.com/netboxlabs/orb-agent
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/DelineaXPM/tss-sdk-go/v3 v3.1.0
