@@ -389,6 +389,20 @@ def test_comware_strips_port_status_suffix():
     }
 
 
+def test_comware_reads_padded_tagged_heading():
+    """Comware 5 pads the heading to `Tagged   Ports:`; its ports are still tagged."""
+    text = (
+        " VLAN ID: 100\n"
+        " Tagged   Ports:\n"
+        "    GigabitEthernet1/0/24\n"
+        " Untagged Ports: none\n"
+    )
+    membership = _parse_comware_display_vlan_all(text)
+    assert membership == {
+        "GigabitEthernet1/0/24": {"tagged": [100], "untagged": []},
+    }
+
+
 def test_comware_invert_vlan_all():
     """Inverter builds per-port membership from per-VLAN sections; expands abbrevs."""
     text = (

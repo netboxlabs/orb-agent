@@ -153,8 +153,8 @@ def _parse_comware_display_vlan_all(text: str) -> dict[str, dict]:
 
     Returns ``{ifname: {tagged: list[int], untagged: list[int]}}``. Each VLAN
     section is delimited by ``VLAN ID: <n>`` and exposes ports under
-    ``Tagged Ports:`` and ``Untagged Ports:`` headings; ``None`` is the empty
-    marker.
+    ``Tagged Ports:`` and ``Untagged Ports:`` headings; ``None``/``none`` is the
+    empty marker. Comware 5 pads the first heading to ``Tagged   Ports:``.
     """
     out: dict[str, dict] = {}
     current_vid: int | None = None
@@ -172,7 +172,7 @@ def _parse_comware_display_vlan_all(text: str) -> dict[str, dict]:
         if not stripped:
             section = None
             continue
-        low = stripped.lower()
+        low = " ".join(stripped.lower().split())
         if low.startswith("tagged ports") and current_vid is not None:
             section = "tagged"
             continue
