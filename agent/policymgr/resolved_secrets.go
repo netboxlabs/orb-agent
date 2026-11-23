@@ -125,7 +125,7 @@ type departedSecrets struct {
 	// earlier are the values of the resolution before those (see
 	// policySecrets). An error the backend reported for the policy, stored
 	// under one of its names after it departed, can quote them as its runs
-	// could, so they mask that (see maskDeparted), not the backend's output.
+	// could, so they mask that (see maskOthers), not the backend's output.
 	earlier []resolvedValue
 	// at is when the policy departed, and seen when the backend last
 	// reported a run of it still running, or at.
@@ -358,18 +358,25 @@ func (s *resolvedSecrets) currentAt(policyID string, at time.Time) bool {
 	return ok && !at.Before(ps.since)
 }
 
-// maskDeparted masks, in text a backend reported under the name policyName,
-// the values of the policies it knew by that name that departed lately (see
-// removedGrace), those of their last three resolutions as their runs are
-// masked: a report read before one departed can be stored on the policy that
-// holds the name by now.
-func (s *resolvedSecrets) maskDeparted(policyName, text string) string {
+// maskOthers masks, in text a backend reported under the name policyName,
+// the values of the policies other than policyID it knew by that name: those
+// it runs, and those that departed lately (see removedGrace), each with the
+// values of its last three resolutions, as its runs are masked. A report read
+// before one of them departed can be stored on the policy that holds the
+// name by now. A policy is in one of the two sets, whatever the store holds
+// of it at the moment: removed moves it from one to the other at once.
+func (s *resolvedSecrets) maskOthers(policyName, policyID, text string) string {
 	if text == "" {
 		return text
 	}
 	s.mu.Lock()
 	s.pruneLocked()
 	var values []string
+	for id, ps := range s.byPolicy {
+		if id != policyID && slices.Contains(ps.names, policyName) {
+			values = appendNew(values, ps.forRuns())
+		}
+	}
 	for _, d := range s.departed {
 		if slices.Contains(d.names, policyName) {
 			values = appendNew(appendNew(values, d.values), d.earlier)
@@ -490,37 +497,31 @@ func (r *maskingRepo) UpdateRunsWith(policyName string, runs []policies.RunData,
 // resolved to in the error a backend reports for the policy's last
 // collection, and keeps it to the bound a refusal is kept to, as a run's
 // reason is: the error rides every heartbeat to Fleet, and a telemetry
-// binary quotes in it the targets it was given and what they answered. As in
-// UpdateRuns, it is masked before the store's lock for the policy the name
-// maps to then, and again under the lock, from what was reported, only when
-// the name maps to another policy by then or that policy's values changed.
+// binary quotes in it the targets it was given and what they answered. It is
+// masked under the store's lock, for the policy the name maps to then.
 //
 // The backend read the error before the store looks the name up, so the
 // policy it was read for can have departed meanwhile, and another hold its
 // name: an error recorded (at) before the policy the name maps to began to
 // run on the backend is that other one's, and is not stored, as a run from
 // before is not (see currentAt). The error is masked with the values of the
-// policies that departed under the name too, since one the backend gives no
-// time for can be theirs.
+// other policies the backend knew by the name too, running or departed, read
+// under the store's lock, since one the backend gives no time for can be
+// theirs however the name changed hands before the store was locked, and
+// with those of the policy the name mapped to when it was looked up first.
 func (r *maskingRepo) UpdateCollectionError(policyName string, message string, at time.Time) error {
-	message = r.secrets.maskDeparted(policyName, message)
 	var maskedFor string
 	var maskedWith *refusalMasks
-	masked := message
 	if pd, err := r.GetByName(policyName); err == nil {
 		maskedFor, maskedWith = pd.ID, r.secrets.masksOf(pd.ID)
-		masked = maskedWith.collectionError(message)
 	}
-	return r.PolicyRepo.UpdateCollectionErrorWith(policyName, masked, func(policyID string, masked string) string {
+	return r.PolicyRepo.UpdateCollectionErrorWith(policyName, message, func(policyID string, message string) string {
 		if !r.secrets.currentAt(policyID, at) {
 			return ""
 		}
+		reported := r.secrets.maskOthers(policyName, policyID, message)
 		masks := r.secrets.masksOf(policyID)
-		if policyID == maskedFor && masks == maskedWith {
-			return masked
-		}
-		reported := message
-		if maskedWith != nil {
+		if maskedWith != nil && (policyID != maskedFor || masks != maskedWith) {
 			// The error was reported for the policy looked up first, and can
 			// quote its values whatever the name maps to by now.
 			reported = maskedWith.all.Mask(reported)

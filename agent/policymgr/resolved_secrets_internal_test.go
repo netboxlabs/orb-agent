@@ -1153,6 +1153,37 @@ func TestCollectionErrorOfAReplacedPolicyIsMaskedWithItsLastThreeResolutions(t *
 	}
 }
 
+// TestCollectionErrorIsMaskedWithAPolicyReplacedBeforeTheLookup removes a
+// policy and applies another under its name between the backend's read of an
+// error without a time and the masking repo's look-up of the name, as far as
+// the store holding the new one with the old one's values not yet departed:
+// the error, the old policy's, is masked with its values all the same.
+func TestCollectionErrorIsMaskedWithAPolicyReplacedBeforeTheLookup(t *testing.T) {
+	const oldSecret = "0ld-p4ssw0rd"
+	for name, remove := range map[string]func(t *testing.T, repo *maskingRepo){
+		"removed":                func(t *testing.T, repo *maskingRepo) { require.NoError(t, repo.Remove("p1")) },
+		"removed from the store": func(t *testing.T, repo *maskingRepo) { require.NoError(t, repo.PolicyRepo.Remove("p1")) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			now := time.Date(2026, 11, 23, 15, 0, 0, 0, time.UTC)
+			resolved, repo := newTestMaskingRepo(t, &now)
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "p1", Name: "core", Backend: "snmp_telemetry"}))
+			resolved.remember("p1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: oldSecret}}, "core")
+			store := repo.PolicyRepo
+			repo.PolicyRepo = &changedBeforeLookup{PolicyRepo: store, change: func() {
+				remove(t, repo)
+				require.NoError(t, store.Update(policies.PolicyData{ID: "q1", Name: "core", Backend: "snmp_telemetry"}))
+				resolved.remember("q1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: "n3w-k3y-v4lue"}}, "core")
+			}}
+
+			require.NoError(t, repo.UpdateCollectionError("core", "auth of 192.0.2.10 failed with "+oldSecret, time.Time{}))
+			pd, err := store.Get("q1")
+			require.NoError(t, err)
+			assert.Equal(t, "auth of 192.0.2.10 failed with ********", pd.CollectionErr)
+		})
+	}
+}
+
 // TestCollectionErrorOfThePreviousResolutionIsStored has a policy's secret
 // references resolve to other values while the backend still reports an
 // error it recorded with the earlier ones: the error is the policy's own,
@@ -1186,6 +1217,23 @@ func (s *changedBeforeStore) UpdateRunsWith(name string, runs []policies.RunData
 func (s *changedBeforeStore) UpdateCollectionErrorWith(name string, message string, prepare func(string, string) string) error {
 	s.change()
 	return s.PolicyRepo.UpdateCollectionErrorWith(name, message, prepare)
+}
+
+// changedBeforeLookup is a store that change changes once, right before the
+// first look-up of a policy by name: after whatever the masking repo masked
+// before it.
+type changedBeforeLookup struct {
+	policies.PolicyRepo
+	change func()
+	done   bool
+}
+
+func (s *changedBeforeLookup) GetByName(name string) (policies.PolicyData, error) {
+	if !s.done {
+		s.done = true
+		s.change()
+	}
+	return s.PolicyRepo.GetByName(name)
 }
 
 // handedRuns is a store that records the reasons of the runs handed to it.
