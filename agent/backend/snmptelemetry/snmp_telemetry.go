@@ -518,17 +518,18 @@ func (d *snmpTelemetryBackend) GetCapabilities() (map[string]any, error) {
 }
 
 // GetPolicyErrors reads the binary's status: each policy it runs, with
-// last_error set while the policy runs with errors (running_with_errors).
-func (d *snmpTelemetryBackend) GetPolicyErrors() (map[string]string, error) {
+// last_error and last_error_at set while the policy runs with errors
+// (running_with_errors).
+func (d *snmpTelemetryBackend) GetPolicyErrors() (map[string]backend.PolicyError, error) {
 	var resp backend.StatusResponse
 	err := backend.CommonRequest("snmp-telemetry", d.proc, d.logger, d.apiURL("status"), &resp, http.MethodGet,
 		http.NoBody, "application/json", policyStatusTimeout, "detail")
 	if err != nil {
 		return nil, err
 	}
-	errs := make(map[string]string, len(resp.Policies))
+	errs := make(map[string]backend.PolicyError, len(resp.Policies))
 	for _, policy := range resp.Policies {
-		errs[policy.Name] = policy.LastError
+		errs[policy.Name] = backend.PolicyError{Message: policy.LastError, At: policy.LastErrorAt}
 	}
 	return errs, nil
 }

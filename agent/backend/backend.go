@@ -39,6 +39,9 @@ type PolicyStatus struct {
 	// telemetry binaries report for a policy running with errors
 	// (status running_with_errors); empty otherwise.
 	LastError string `json:"last_error,omitempty"`
+	// LastErrorAt is when the binary recorded LastError; zero when it gives
+	// no time.
+	LastErrorAt time.Time `json:"last_error_at,omitzero"`
 }
 
 // StatusResponse represents the full status response from backend
@@ -61,8 +64,16 @@ type PolicyStatusProvider interface {
 // it as the error of a running policy.
 type PolicyErrorProvider interface {
 	// GetPolicyErrors returns the last collection error of each policy the
-	// backend runs, by policy name: "" for one collecting without errors.
-	GetPolicyErrors() (map[string]string, error)
+	// backend runs, by policy name: an empty message for one collecting
+	// without errors.
+	GetPolicyErrors() (map[string]PolicyError, error)
+}
+
+// PolicyError is the error a backend reports for a policy's last collection,
+// and when it recorded it: zero when it gives no time.
+type PolicyError struct {
+	Message string
+	At      time.Time
 }
 
 // Running Status types

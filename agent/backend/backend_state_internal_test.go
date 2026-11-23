@@ -279,18 +279,20 @@ func TestMonitorClearsTheErrorWhenABackendRecovers(t *testing.T) {
 type erroringBackend struct {
 	countingBackend
 	errMu sync.Mutex
-	errs  map[string]string
+	errs  map[string]PolicyError
 }
 
-func (e *erroringBackend) GetPolicyErrors() (map[string]string, error) {
+var _ PolicyErrorProvider = (*erroringBackend)(nil)
+
+func (e *erroringBackend) GetPolicyErrors() (map[string]PolicyError, error) {
 	e.errMu.Lock()
 	defer e.errMu.Unlock()
-	errs := make(map[string]string, len(e.errs))
+	errs := make(map[string]PolicyError, len(e.errs))
 	maps.Copy(errs, e.errs)
 	return errs, nil
 }
 
-func (e *erroringBackend) report(errs map[string]string) {
+func (e *erroringBackend) report(errs map[string]PolicyError) {
 	e.errMu.Lock()
 	defer e.errMu.Unlock()
 	e.errs = errs
@@ -304,7 +306,10 @@ func TestMonitorStoresTheCollectionErrorOfEachPolicy(t *testing.T) {
 	manager, channels := newTestManager(t, make(chan string, 1))
 	require.NoError(t, manager.policyRepo.Update(policies.PolicyData{ID: "policy-1", Name: "core", Backend: "snmp_telemetry", State: policies.Running}))
 	be := &erroringBackend{countingBackend: countingBackend{status: Running, started: time.Now()}}
-	be.report(map[string]string{"core": "metrics collection failed: 10.0.0.1:161: request timeout", "gone": "timeout"})
+	be.report(map[string]PolicyError{
+		"core": {Message: "metrics collection failed: 10.0.0.1:161: request timeout", At: time.Now()},
+		"gone": {Message: "timeout"},
+	})
 	manager.StartBackendMonitor("snmp_telemetry", be)
 	require.Len(t, *channels, 1)
 	tick := (*channels)[0]
@@ -320,7 +325,7 @@ func TestMonitorStoresTheCollectionErrorOfEachPolicy(t *testing.T) {
 	sendTick(t, tick)
 	require.Equal(t, "metrics collection failed: 10.0.0.1:161: request timeout", collectionErr())
 
-	be.report(map[string]string{"core": ""})
+	be.report(map[string]PolicyError{"core": {}})
 	sendTick(t, tick)
 	sendTick(t, tick)
 	require.Empty(t, collectionErr(), "cleared once the policy collects again")

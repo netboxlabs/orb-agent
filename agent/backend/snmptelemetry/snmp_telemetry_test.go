@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -463,12 +464,14 @@ func TestSnmpTelemetryBackendReportsEachPolicysCollectionError(t *testing.T) {
 	require.True(t, ok, "the backend reports its policies' collection errors")
 	errs, err := provider.GetPolicyErrors()
 	require.NoError(t, err)
-	assert.Equal(t, map[string]string{"core": lastError, "edge": ""}, errs)
+	at, err := time.Parse(time.RFC3339, "2026-11-23T15:00:00Z")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]backend.PolicyError{"core": {Message: lastError, At: at}, "edge": {}}, errs)
 
 	mu.Lock()
 	reported = []map[string]any{{"name": "core", "status": "running"}}
 	mu.Unlock()
 	errs, err = provider.GetPolicyErrors()
 	require.NoError(t, err)
-	assert.Equal(t, map[string]string{"core": ""}, errs, "the target answers again")
+	assert.Equal(t, map[string]backend.PolicyError{"core": {}}, errs, "the target answers again")
 }

@@ -1016,7 +1016,7 @@ func TestCollectionErrorIsMaskedAndBounded(t *testing.T) {
 	resolved, repo := newTestMaskingRepo(t, &now, "policy-1", "policy-2")
 	resolved.remember("policy-1", "snmp_telemetry", []resolvedValue{{path: "scope.targets[0].host", value: "Pl41n-credential"}})
 
-	require.NoError(t, repo.UpdateCollectionError("policy-1", "metrics collection failed: Pl41n-credential:161: request timeout"))
+	require.NoError(t, repo.UpdateCollectionError("policy-1", "metrics collection failed: Pl41n-credential:161: request timeout", time.Time{}))
 	stored, err := repo.Get("policy-1")
 	require.NoError(t, err)
 	assert.Contains(t, stored.CollectionErr, "metrics collection failed: ********:161: request timeout")
@@ -1026,13 +1026,13 @@ func TestCollectionErrorIsMaskedAndBounded(t *testing.T) {
 	for i := range 200 {
 		failing = append(failing, fmt.Sprintf("10.0.%d.%d:161: request timeout", i/250, i%250))
 	}
-	require.NoError(t, repo.UpdateCollectionError("policy-2", "metrics collection failed: "+strings.Join(failing, "; ")))
+	require.NoError(t, repo.UpdateCollectionError("policy-2", "metrics collection failed: "+strings.Join(failing, "; "), time.Time{}))
 	stored, err = repo.Get("policy-2")
 	require.NoError(t, err)
 	assert.LessOrEqual(t, len(stored.CollectionErr), maxBackendErrLen, "bounded however many targets fail")
 	assert.True(t, strings.HasSuffix(stored.CollectionErr, truncationMarker), stored.CollectionErr)
 
-	require.NoError(t, repo.UpdateCollectionError("policy-1", ""))
+	require.NoError(t, repo.UpdateCollectionError("policy-1", "", time.Time{}))
 	stored, err = repo.Get("policy-1")
 	require.NoError(t, err)
 	assert.Empty(t, stored.CollectionErr)
@@ -1061,7 +1061,7 @@ func TestCollectionErrorIsMaskedForThePolicyItIsStoredOn(t *testing.T) {
 			store := repo.PolicyRepo
 			repo.PolicyRepo = &changedBeforeStore{PolicyRepo: store, change: func() { meanwhile(t, resolved, store) }}
 
-			require.NoError(t, repo.UpdateCollectionError("shared", "auth of 192.0.2.10 failed with "+secret+", then 0ther-credential"))
+			require.NoError(t, repo.UpdateCollectionError("shared", "auth of 192.0.2.10 failed with "+secret+", then 0ther-credential", time.Time{}))
 			all, err := repo.GetAll()
 			require.NoError(t, err)
 			var errs []string
@@ -1091,6 +1091,58 @@ func TestCollectionErrorACallerPreparesIsMaskedToo(t *testing.T) {
 	stored, err := repo.Get("policy-1")
 	require.NoError(t, err)
 	assert.Contains(t, stored.CollectionErr, "auth of 192.0.2.10 failed with ********")
+}
+
+// TestCollectionErrorOfAPolicyReplacedUnderTheNameIsNotStoredOnTheNewOne
+// removes a policy and applies another under its name, the way a telemetry
+// backend's error for the first can still be waiting to be stored: an error
+// the backend recorded before the new policy began to run is the old one's,
+// and is not stored; one without a time is masked with the old policy's
+// values as well as the new one's; one recorded since is stored.
+func TestCollectionErrorOfAPolicyReplacedUnderTheNameIsNotStoredOnTheNewOne(t *testing.T) {
+	const oldSecret, newSecret = "0ld-p4ssw0rd", "n3w-k3y-v4lue"
+	now := time.Date(2026, 11, 23, 15, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now)
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "p1", Name: "core", Backend: "snmp_telemetry"}))
+	resolved.remember("p1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: oldSecret}}, "core")
+	recordedForP1 := now.Add(time.Minute)
+	now = now.Add(2 * time.Minute)
+	require.NoError(t, repo.Remove("p1"))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "q1", Name: "core", Backend: "snmp_telemetry"}))
+	resolved.remember("q1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: newSecret}}, "core")
+	stored := func() string {
+		t.Helper()
+		pd, err := repo.Get("q1")
+		require.NoError(t, err)
+		return pd.CollectionErr
+	}
+
+	require.NoError(t, repo.UpdateCollectionError("core", "auth of 192.0.2.10 failed with "+oldSecret, recordedForP1))
+	assert.Empty(t, stored(), "recorded before the policy under the name began to run")
+
+	require.NoError(t, repo.UpdateCollectionError("core", "auth failed with "+oldSecret+", then "+newSecret, time.Time{}))
+	assert.True(t, strings.HasPrefix(stored(), "auth failed with ********, then ******** "), "no time: masked with both policies' values: %s", stored())
+
+	require.NoError(t, repo.UpdateCollectionError("core", "auth of 192.0.2.10 failed with "+newSecret, now.Add(time.Second)))
+	assert.True(t, strings.HasPrefix(stored(), "auth of 192.0.2.10 failed with ******** "), "recorded since the policy began to run: %s", stored())
+}
+
+// TestCollectionErrorOfThePreviousResolutionIsStored has a policy's secret
+// references resolve to other values while the backend still reports an
+// error it recorded with the earlier ones: the error is the policy's own,
+// and is stored, masked with both.
+func TestCollectionErrorOfThePreviousResolutionIsStored(t *testing.T) {
+	now := time.Date(2026, 11, 23, 15, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	resolved.remember("policy-1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: "f1rst-credential"}})
+	recorded := now.Add(time.Minute)
+	now = now.Add(2 * time.Minute)
+	resolved.remember("policy-1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: "s3cond-credential"}})
+
+	require.NoError(t, repo.UpdateCollectionError("policy-1", "auth failed with f1rst-credential", recorded))
+	pd, err := repo.Get("policy-1")
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(pd.CollectionErr, "auth failed with ******** "), pd.CollectionErr)
 }
 
 // changedBeforeStore is a store that change changes right before runs are

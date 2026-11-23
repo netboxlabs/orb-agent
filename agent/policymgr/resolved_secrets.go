@@ -339,6 +339,43 @@ func (s *resolvedSecrets) current(policyID string, runs []policies.RunData) []po
 	})
 }
 
+// currentAt reports whether something a backend recorded at at for the
+// policy policyID is the policy's own, as current does for runs: recorded at
+// or after the policy's since. A policy the agent never gave the backend has
+// none. A time of zero, which tells nothing, is kept.
+func (s *resolvedSecrets) currentAt(policyID string, at time.Time) bool {
+	if at.IsZero() {
+		return true
+	}
+	s.mu.Lock()
+	ps, ok := s.byPolicy[policyID]
+	s.mu.Unlock()
+	return ok && !at.Before(ps.since)
+}
+
+// maskDeparted masks, in text a backend reported under the name policyName,
+// the values of the policies it knew by that name that departed lately (see
+// removedGrace): a report read before one departed can be stored on the
+// policy that holds the name by now.
+func (s *resolvedSecrets) maskDeparted(policyName, text string) string {
+	if text == "" {
+		return text
+	}
+	s.mu.Lock()
+	s.pruneLocked()
+	var values []string
+	for _, d := range s.departed {
+		if slices.Contains(d.names, policyName) {
+			values = appendNew(values, d.values)
+		}
+	}
+	s.mu.Unlock()
+	if len(values) == 0 {
+		return text
+	}
+	return redact.NewMasker(append(values, newHostSet(values).forms()...)).Mask(text)
+}
+
 // maskOutput masks, in a line a backend's process printed, the values of
 // every policy the backend runs, or ran lately (see removedGrace): a line
 // names no policy.
@@ -451,7 +488,16 @@ func (r *maskingRepo) UpdateRunsWith(policyName string, runs []policies.RunData,
 // UpdateRuns, it is masked before the store's lock for the policy the name
 // maps to then, and again under the lock, from what was reported, only when
 // the name maps to another policy by then or that policy's values changed.
-func (r *maskingRepo) UpdateCollectionError(policyName string, message string) error {
+//
+// The backend read the error before the store looks the name up, so the
+// policy it was read for can have departed meanwhile, and another hold its
+// name: an error recorded (at) before the policy the name maps to began to
+// run on the backend is that other one's, and is not stored, as a run from
+// before is not (see currentAt). The error is masked with the values of the
+// policies that departed under the name too, since one the backend gives no
+// time for can be theirs.
+func (r *maskingRepo) UpdateCollectionError(policyName string, message string, at time.Time) error {
+	message = r.secrets.maskDeparted(policyName, message)
 	var maskedFor string
 	var maskedWith *refusalMasks
 	masked := message
@@ -460,6 +506,9 @@ func (r *maskingRepo) UpdateCollectionError(policyName string, message string) e
 		masked = maskedWith.collectionError(message)
 	}
 	return r.PolicyRepo.UpdateCollectionErrorWith(policyName, masked, func(policyID string, masked string) string {
+		if !r.secrets.currentAt(policyID, at) {
+			return ""
+		}
 		masks := r.secrets.masksOf(policyID)
 		if policyID == maskedFor && masks == maskedWith {
 			return masked

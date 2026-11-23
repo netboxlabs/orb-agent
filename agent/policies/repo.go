@@ -36,8 +36,11 @@ type PolicyRepo interface {
 	UpdateRunsWith(policyName string, runs []RunData, prepare func(policyID string, runs []RunData) []RunData) error
 	// UpdateCollectionError stores message, the error the backend reports
 	// for the last collection of the policy named policyName, "" for none,
-	// as the policy's CollectionErr.
-	UpdateCollectionError(policyName string, message string) error
+	// as the policy's CollectionErr. at is when the backend recorded it, zero
+	// when it gives no time: the store keeps the message alone, and the
+	// policy manager's masking repo leaves out an error recorded before the
+	// policy the name maps to began to run.
+	UpdateCollectionError(policyName string, message string, at time.Time) error
 	// UpdateCollectionErrorWith stores message as UpdateCollectionError
 	// does, once prepare has rewritten it for the ID of the policy
 	// policyName maps to, in the same locked operation, as UpdateRunsWith
@@ -274,7 +277,7 @@ func (p *policyMemRepo) UpdateRunsWith(policyName string, runs []RunData, prepar
 	return nil
 }
 
-func (p *policyMemRepo) UpdateCollectionError(policyName string, message string) error {
+func (p *policyMemRepo) UpdateCollectionError(policyName string, message string, _ time.Time) error {
 	return p.UpdateCollectionErrorWith(policyName, message, nil)
 }
 

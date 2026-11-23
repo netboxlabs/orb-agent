@@ -134,8 +134,8 @@ func (m *mockPolicyRepo) UpdateRunsWith(policyName string, runs []policies.RunDa
 	return args.Error(0)
 }
 
-func (m *mockPolicyRepo) UpdateCollectionError(policyName string, message string) error {
-	args := m.Called(policyName, message)
+func (m *mockPolicyRepo) UpdateCollectionError(policyName string, message string, at time.Time) error {
+	args := m.Called(policyName, message, at)
 	return args.Error(0)
 }
 

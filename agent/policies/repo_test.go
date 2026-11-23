@@ -1244,16 +1244,16 @@ func TestUpdateCollectionErrorSetsAndClearsIt(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, repo.Update(policies.PolicyData{ID: "test-id", Name: "test-policy", State: policies.Running}))
 
-	require.ErrorIs(t, repo.UpdateCollectionError("other-policy", "timeout"), policies.ErrPolicyNotFound)
+	require.ErrorIs(t, repo.UpdateCollectionError("other-policy", "timeout", time.Time{}), policies.ErrPolicyNotFound)
 
-	require.NoError(t, repo.UpdateCollectionError("test-policy", "metrics collection failed: 10.0.0.1:161: timeout"))
+	require.NoError(t, repo.UpdateCollectionError("test-policy", "metrics collection failed: 10.0.0.1:161: timeout", time.Time{}))
 	got, err := repo.Get("test-id")
 	require.NoError(t, err)
 	assert.Equal(t, "metrics collection failed: 10.0.0.1:161: timeout", got.CollectionErr)
 	assert.Equal(t, policies.Running, got.State, "a collection error does not stop the policy")
 	assert.Empty(t, got.BackendErr)
 
-	require.NoError(t, repo.UpdateCollectionError("test-policy", ""))
+	require.NoError(t, repo.UpdateCollectionError("test-policy", "", time.Time{}))
 	got, err = repo.Get("test-id")
 	require.NoError(t, err)
 	assert.Empty(t, got.CollectionErr, "cleared once collection works again")
@@ -1287,7 +1287,7 @@ func TestUpdateKeepingRunsKeepsTheCollectionError(t *testing.T) {
 	require.NoError(t, err)
 	pd := policies.PolicyData{ID: "test-id", Name: "test-policy", State: policies.Running}
 	require.NoError(t, repo.Update(pd))
-	require.NoError(t, repo.UpdateCollectionError("test-policy", "timeout"))
+	require.NoError(t, repo.UpdateCollectionError("test-policy", "timeout", time.Time{}))
 
 	require.NoError(t, repo.UpdateKeepingRuns(pd))
 	got, err := repo.Get("test-id")

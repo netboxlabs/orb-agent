@@ -213,8 +213,8 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 				if err != nil {
 					manager.logger.Debug("failed to get policy errors", "backend", name, "error", err)
 				} else {
-					for policyName, message := range errs {
-						if err := manager.policyRepo.UpdateCollectionError(policyName, message); err != nil {
+					for policyName, pe := range errs {
+						if err := manager.policyRepo.UpdateCollectionError(policyName, pe.Message, pe.At); err != nil {
 							manager.logger.Debug("failed to update the collection error for policy", "policy", policyName, "error", err)
 						}
 					}
