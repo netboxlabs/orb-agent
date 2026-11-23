@@ -4,6 +4,8 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from custom_napalm.hp_comware import (
     _COMWARE_FAMILY_PREFIXES,
     _COMWARE_SUPERVISOR_TOKENS,
@@ -293,3 +295,86 @@ def test_is_modular_rejects_fixed_families():
     assert not _comware_is_modular("S6800-54QF")
     assert not _comware_is_modular("")
     assert not _comware_is_modular("Unknown")
+
+
+# --- VLAN getters share `display vlan all` ----------------------------------
+
+_VLAN_ALL = (
+    " VLAN ID: 100\n"
+    " Name: Servers A\n"
+    " Tagged Ports:\n"
+    "    GigabitEthernet1/0/24\n"
+    " Untagged Ports: none\n"
+    "\n"
+    " VLAN ID: 400\n"
+    " Tagged   Ports: none\n"
+    " Untagged Ports: none\n"
+)
+_BRIEF = (
+    "Interface            Link Speed   Duplex Type PVID Description\n"
+    "GE1/0/24             UP   1G(a)   F(a)   T    1\n"
+)
+
+
+def _vlan_driver(responses: dict) -> ComwareDriver:
+    driver = object.__new__(ComwareDriver)
+    driver.device = MagicMock()
+
+    def send(command, **kwargs):
+        value = responses[command]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    driver.device.send_command.side_effect = send
+    return driver
+
+
+def _sent(driver: ComwareDriver, command: str) -> int:
+    return sum(1 for c in driver.device.send_command.call_args_list if c.args[0] == command)
+
+
+def test_get_vlans_names_a_vlan_without_name_line_by_vid():
+    """A VLAN section with no `Name:` line is named after its VID."""
+    driver = _vlan_driver({"display vlan all": _VLAN_ALL})
+    assert driver.get_vlans() == {
+        "100": {"name": "Servers A", "interfaces": []},
+        "400": {"name": "400", "interfaces": []},
+    }
+
+
+def test_get_vlans_empty_output_returns_empty():
+    """No `display vlan all` output means no VLANs."""
+    assert _vlan_driver({"display vlan all": ""}).get_vlans() == {}
+
+
+def test_vlan_getters_send_display_vlan_all_once():
+    """get_vlans and get_interfaces_vlans in one run reuse one `display vlan all`."""
+    driver = _vlan_driver({"display vlan all": _VLAN_ALL, "display interface brief": _BRIEF})
+    driver.get_vlans()
+    result = driver.get_interfaces_vlans()
+    assert _sent(driver, "display vlan all") == 1
+    assert result["GigabitEthernet1/0/24"]["tagged"] == [100]
+
+
+def test_failed_display_vlan_all_is_not_sent_again():
+    """A failed send raises from get_vlans and is not retried by get_interfaces_vlans."""
+    responses = {"display vlan all": OSError("read timeout"), "display interface brief": _BRIEF}
+    driver = _vlan_driver(responses)
+    with pytest.raises(OSError):
+        driver.get_vlans()
+    responses["display vlan all"] = _VLAN_ALL
+    assert driver.get_interfaces_vlans() == {}
+    assert _sent(driver, "display vlan all") == 1
+    assert _sent(driver, "display interface brief") == 0
+
+
+def test_open_drops_display_vlan_all_from_previous_connection():
+    """A reconnect sends `display vlan all` again instead of reusing old output."""
+    driver = _vlan_driver({"display vlan all": _VLAN_ALL})
+    driver.get_vlans()
+    driver.netmiko_optional_args = {}
+    reopened = _vlan_driver({"display vlan all": " VLAN ID: 7\n Name: Seven\n"}).device
+    driver._netmiko_open = MagicMock(return_value=reopened)
+    driver.open()
+    assert driver.get_vlans() == {"7": {"name": "Seven", "interfaces": []}}

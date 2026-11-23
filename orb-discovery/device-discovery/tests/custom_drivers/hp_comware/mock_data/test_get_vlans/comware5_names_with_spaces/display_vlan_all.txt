@@ -1,0 +1,42 @@
+ VLAN ID: 1
+ VLAN Type: static
+ Route Interface: not configured
+ Description: VLAN 0001
+ Name: VLAN 0001
+ Broadcast MAX-ratio: 100%
+ Tagged   Ports: none
+ Untagged Ports:
+    GigabitEthernet1/0/1     GigabitEthernet1/0/2
+
+ VLAN ID: 120
+ VLAN Type: static
+ Route Interface: not configured
+ Description: Printers
+ Name: VLAN 0120
+ Broadcast MAX-ratio: 100%
+ Tagged   Ports:
+    GigabitEthernet1/0/23
+ Untagged Ports:
+    GigabitEthernet1/0/5
+
+ VLAN ID: 300
+ VLAN Type: static
+ Route Interface: configured
+ IP Address: 192.0.2.1
+ Subnet Mask: 255.255.255.0
+ Description: VLAN 0300
+ Name: MGMT-NET
+ Broadcast MAX-ratio: 100%
+ Tagged   Ports:
+    GigabitEthernet1/0/23
+ Untagged Ports: none
+
+ VLAN ID: 310
+ VLAN Type: static
+ Route Interface: not configured
+ Description: VLAN 0310
+ Name: Guest WiFi
+ Broadcast MAX-ratio: 100%
+ Tagged   Ports:
+    GigabitEthernet1/0/23
+ Untagged Ports: none
