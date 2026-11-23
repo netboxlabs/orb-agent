@@ -1127,6 +1127,32 @@ func TestCollectionErrorOfAPolicyReplacedUnderTheNameIsNotStoredOnTheNewOne(t *t
 	assert.True(t, strings.HasPrefix(stored(), "auth of 192.0.2.10 failed with ******** "), "recorded since the policy began to run: %s", stored())
 }
 
+// TestCollectionErrorOfAReplacedPolicyIsMaskedWithItsLastThreeResolutions
+// resolves a policy's secret reference to three values in turn, then removes
+// the policy and applies another under its name: an error without a time the
+// backend reported for the first can quote any of the three, as its runs
+// can, and each is masked.
+func TestCollectionErrorOfAReplacedPolicyIsMaskedWithItsLastThreeResolutions(t *testing.T) {
+	resolutions := []string{"f1rst-p4ss", "s3cond-k3y", "th1rd-t0ken"}
+	now := time.Date(2026, 11, 23, 15, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now)
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "p1", Name: "core", Backend: "snmp_telemetry"}))
+	for _, value := range resolutions {
+		now = now.Add(time.Minute)
+		resolved.remember("p1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: value}}, "core")
+	}
+	require.NoError(t, repo.Remove("p1"))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "q1", Name: "core", Backend: "snmp_telemetry"}))
+	resolved.remember("q1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: "n3w-v4lue"}}, "core")
+
+	for _, value := range resolutions {
+		require.NoError(t, repo.UpdateCollectionError("core", "auth of 192.0.2.10 failed with "+value, time.Time{}))
+		pd, err := repo.Get("q1")
+		require.NoError(t, err)
+		assert.Equal(t, "auth of 192.0.2.10 failed with ********", pd.CollectionErr, "the error quotes %s", value)
+	}
+}
+
 // TestCollectionErrorOfThePreviousResolutionIsStored has a policy's secret
 // references resolve to other values while the backend still reports an
 // error it recorded with the earlier ones: the error is the policy's own,

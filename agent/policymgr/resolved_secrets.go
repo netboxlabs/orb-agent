@@ -122,6 +122,11 @@ type departedSecrets struct {
 	// policySecrets), and those it had when it was removed.
 	names  []string
 	values []resolvedValue
+	// earlier are the values of the resolution before those (see
+	// policySecrets). An error the backend reported for the policy, stored
+	// under one of its names after it departed, can quote them as its runs
+	// could, so they mask that (see maskDeparted), not the backend's output.
+	earlier []resolvedValue
 	// at is when the policy departed, and seen when the backend last
 	// reported a run of it still running, or at.
 	at, seen time.Time
@@ -209,7 +214,7 @@ func (s *resolvedSecrets) departLocked(policyID string, ps policySecrets) {
 	now := s.now()
 	s.departed = append(s.departed, departedSecrets{
 		policyID: policyID, backend: ps.backend, names: slices.Clone(ps.names), values: ps.both(),
-		at: now, seen: now, prune: s.afterFunc(removedGrace, s.prune),
+		earlier: slices.Clone(ps.earlier), at: now, seen: now, prune: s.afterFunc(removedGrace, s.prune),
 	})
 }
 
@@ -355,8 +360,9 @@ func (s *resolvedSecrets) currentAt(policyID string, at time.Time) bool {
 
 // maskDeparted masks, in text a backend reported under the name policyName,
 // the values of the policies it knew by that name that departed lately (see
-// removedGrace): a report read before one departed can be stored on the
-// policy that holds the name by now.
+// removedGrace), those of their last three resolutions as their runs are
+// masked: a report read before one departed can be stored on the policy that
+// holds the name by now.
 func (s *resolvedSecrets) maskDeparted(policyName, text string) string {
 	if text == "" {
 		return text
@@ -366,7 +372,7 @@ func (s *resolvedSecrets) maskDeparted(policyName, text string) string {
 	var values []string
 	for _, d := range s.departed {
 		if slices.Contains(d.names, policyName) {
-			values = appendNew(values, d.values)
+			values = appendNew(appendNew(values, d.values), d.earlier)
 		}
 	}
 	s.mu.Unlock()
