@@ -22,11 +22,15 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
-var _ backend.Backend = (*gnmiTelemetryBackend)(nil)
+var (
+	_ backend.Backend             = (*gnmiTelemetryBackend)(nil)
+	_ backend.PolicyErrorProvider = (*gnmiTelemetryBackend)(nil)
+)
 
 const (
 	versionTimeout      = 2
 	capabilitiesTimeout = 5
+	policyStatusTimeout = 5
 	// The binary's DELETE waits for the policy's runners to unwind, and a
 	// sweep in flight notices the stop between addresses, so the wait is
 	// bounded by one probe timeout: three seconds by default, or the
@@ -57,11 +61,11 @@ var stopProcess = backend.StopProcess
 // refuses to configure without common.otlp.grpc rather than start a process
 // with nowhere to export.
 //
-// It does not implement backend.PolicyStatusProvider. The agent uses that
-// provider only to feed each policy's runs into the policy repo, and a
-// telemetry policy is a continuous collector with no runs to report: its
-// status carries a name, a state and a last error. Implementing the provider
-// would poll the status endpoint every cycle to update nothing.
+// It does not implement backend.PolicyStatusProvider, which feeds each
+// policy's runs into the policy repo: a telemetry policy is a continuous
+// collector with no runs to report. It implements backend.PolicyErrorProvider
+// instead, since the status of each of its policies carries the error of the
+// policy's last collection.
 type gnmiTelemetryBackend struct {
 	logger     *slog.Logger
 	policyRepo policies.PolicyRepo
@@ -517,6 +521,22 @@ func (d *gnmiTelemetryBackend) GetCapabilities() (map[string]any, error) {
 		return nil, err
 	}
 	return caps, nil
+}
+
+// GetPolicyErrors reads the binary's status: each policy it runs, with
+// last_error set while the policy runs with errors (running_with_errors).
+func (d *gnmiTelemetryBackend) GetPolicyErrors() (map[string]string, error) {
+	var resp backend.StatusResponse
+	err := backend.CommonRequest("gnmi-telemetry", d.proc, d.logger, d.apiURL("status"), &resp, http.MethodGet,
+		http.NoBody, "application/json", policyStatusTimeout, "detail")
+	if err != nil {
+		return nil, err
+	}
+	errs := make(map[string]string, len(resp.Policies))
+	for _, policy := range resp.Policies {
+		errs[policy.Name] = policy.LastError
+	}
+	return errs, nil
 }
 
 func (d *gnmiTelemetryBackend) GetRunningStatus() (backend.RunningStatus, string, error) {

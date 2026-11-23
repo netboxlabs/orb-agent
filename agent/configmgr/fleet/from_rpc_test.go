@@ -134,6 +134,16 @@ func (m *mockPolicyRepo) UpdateRunsWith(policyName string, runs []policies.RunDa
 	return args.Error(0)
 }
 
+func (m *mockPolicyRepo) UpdateCollectionError(policyName string, message string) error {
+	args := m.Called(policyName, message)
+	return args.Error(0)
+}
+
+func (m *mockPolicyRepo) UpdateCollectionErrorWith(policyName string, message string, _ func(string, string) string) error {
+	args := m.Called(policyName, message)
+	return args.Error(0)
+}
+
 func (m *mockPolicyRepo) FailNonTerminalRuns(reason string) error {
 	args := m.Called(reason)
 	return args.Error(0)

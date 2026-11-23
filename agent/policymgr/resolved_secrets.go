@@ -443,6 +443,60 @@ func (r *maskingRepo) UpdateRunsWith(policyName string, runs []policies.RunData,
 	})
 }
 
+// UpdateCollectionError masks the values the policy's secret references
+// resolved to in the error a backend reports for the policy's last
+// collection, and keeps it to the bound a refusal is kept to, as a run's
+// reason is: the error rides every heartbeat to Fleet, and a telemetry
+// binary quotes in it the targets it was given and what they answered. As in
+// UpdateRuns, it is masked before the store's lock for the policy the name
+// maps to then, and again under the lock, from what was reported, only when
+// the name maps to another policy by then or that policy's values changed.
+func (r *maskingRepo) UpdateCollectionError(policyName string, message string) error {
+	var maskedFor string
+	var maskedWith *refusalMasks
+	masked := message
+	if pd, err := r.GetByName(policyName); err == nil {
+		maskedFor, maskedWith = pd.ID, r.secrets.masksOf(pd.ID)
+		masked = maskedWith.collectionError(message)
+	}
+	return r.PolicyRepo.UpdateCollectionErrorWith(policyName, masked, func(policyID string, masked string) string {
+		masks := r.secrets.masksOf(policyID)
+		if policyID == maskedFor && masks == maskedWith {
+			return masked
+		}
+		reported := message
+		if maskedWith != nil {
+			// The error was reported for the policy looked up first, and can
+			// quote its values whatever the name maps to by now.
+			reported = maskedWith.all.Mask(reported)
+		}
+		return masks.collectionError(reported)
+	})
+}
+
+// UpdateCollectionErrorWith masks the error as UpdateCollectionError does
+// once prepare has rewritten it, under the store's lock.
+func (r *maskingRepo) UpdateCollectionErrorWith(policyName string, message string, prepare func(policyID string, message string) string) error {
+	return r.PolicyRepo.UpdateCollectionErrorWith(policyName, message, func(policyID string, message string) string {
+		if prepare != nil {
+			message = prepare(policyID, message)
+		}
+		return r.secrets.masksOf(policyID).collectionError(message)
+	})
+}
+
+// collectionError masks, in the error a backend reported for the last
+// collection of the policy m was built for, the values its secret references
+// resolved to, as a run's reason is masked, and keeps it to the bound of a
+// policy's reason. "" stays "": the policy collects without errors.
+func (m *refusalMasks) collectionError(message string) string {
+	if message == "" {
+		return ""
+	}
+	_, reason := m.refusal("", message)
+	return reason
+}
+
 // maskRuns masks, in runs a backend reported for the policy m was built for,
 // the values its secret references resolved to.
 func (m *refusalMasks) maskRuns(runs []policies.RunData) {

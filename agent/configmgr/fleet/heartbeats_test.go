@@ -955,6 +955,27 @@ func TestHeartbeater_GetPolicyState_Success(t *testing.T) {
 	mockPMgr.AssertExpectations(t)
 }
 
+// A telemetry policy whose device times out keeps running, and its state
+// carries the error its backend reports for its last collection; one that
+// collects without errors carries none, and a failed apply keeps its own
+// reason, not a collection error from before it failed.
+func TestHeartbeater_GetPolicyState_CarriesTheCollectionErrorOfARunningPolicy(t *testing.T) {
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{ID: "failing", Name: "core", Backend: "snmp_telemetry", State: policies.Running, CollectionErr: "metrics collection failed: 10.0.0.1:161: request timeout"},
+		{ID: "healthy", Name: "edge", Backend: "gnmi_telemetry", State: policies.Running},
+		{ID: "refused", Name: "lab", Backend: "snmp_telemetry", State: policies.FailedToApply, BackendErr: "backend not available", CollectionErr: "metrics collection failed: 10.0.0.2:161: request timeout"},
+	}, nil)
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+
+	policyState := hb.getPolicyState()
+	assert.Equal(t, [2]string{"running", "metrics collection failed: 10.0.0.1:161: request timeout"},
+		[2]string{policyState["failing"].State, policyState["failing"].Error})
+	assert.Equal(t, [2]string{"running", ""}, [2]string{policyState["healthy"].State, policyState["healthy"].Error})
+	assert.Equal(t, [2]string{"failed_to_apply", "backend not available"}, [2]string{policyState["refused"].State, policyState["refused"].Error})
+	mockPMgr.AssertExpectations(t)
+}
+
 func TestHeartbeater_GetPolicyState_Error(t *testing.T) {
 	// Arrange
 	mockPMgr := &mockPolicyManagerForHeartbeat{}

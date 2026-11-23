@@ -176,13 +176,25 @@ func (hb *heartbeater) getPolicyState() map[string]messages.PolicyStateInfo {
 			Name:     policyState.Name,
 			Datasets: policyState.GetDatasetIDs(),
 			State:    policyState.State.String(),
-			Error:    policyState.BackendErr,
+			Error:    policyError(policyState),
 			Version:  policyState.Version,
 			Backend:  policyState.Backend,
 			Runs:     convertRunsToStateInfo(policyState.Runs),
 		}
 	}
 	return ps
+}
+
+// policyError is the error a policy's state carries: why it failed to apply,
+// or, for a running policy, the error its backend reports for its last
+// collection (a telemetry policy whose device times out keeps running, with
+// the device's error), which is masked and bounded as it is stored. It is ""
+// for a running policy collecting without errors.
+func policyError(policy policies.PolicyData) string {
+	if policy.BackendErr == "" && policy.State == policies.Running {
+		return policy.CollectionErr
+	}
+	return policy.BackendErr
 }
 
 // convertRunsToStateInfo converts policies.RunData to messages.RunStateInfo.

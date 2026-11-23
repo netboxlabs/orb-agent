@@ -35,6 +35,10 @@ type PolicyStatus struct {
 	Name   string            `json:"name"`
 	Status string            `json:"status"`
 	Runs   []PolicyStatusRun `json:"runs"`
+	// LastError is the error of the policy's last collection, which the
+	// telemetry binaries report for a policy running with errors
+	// (status running_with_errors); empty otherwise.
+	LastError string `json:"last_error,omitempty"`
 }
 
 // StatusResponse represents the full status response from backend
@@ -48,6 +52,17 @@ type StatusResponse struct {
 // PolicyStatusProvider is an optional interface for backends that support policy status polling
 type PolicyStatusProvider interface {
 	GetPolicyStatus() ([]PolicyStatus, error)
+}
+
+// PolicyErrorProvider is an optional interface for a backend whose policies
+// collect continuously, and report the error of each one's last collection
+// instead of runs: the telemetry backends. The state monitor stores each
+// error as the policy's CollectionErr on every poll, and the heartbeat sends
+// it as the error of a running policy.
+type PolicyErrorProvider interface {
+	// GetPolicyErrors returns the last collection error of each policy the
+	// backend runs, by policy name: "" for one collecting without errors.
+	GetPolicyErrors() (map[string]string, error)
 }
 
 // Running Status types

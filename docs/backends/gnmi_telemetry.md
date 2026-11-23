@@ -129,3 +129,5 @@ Why this way. The backend used to export every `otel_export_period` whatever the
 
 So the backend keeps one periodic export and hands each update to it once.
 
+## A policy's errors in the heartbeat
+Every 10 seconds the agent reads the backend's status (`GET /api/v1/status`), which lists each policy it runs with `running`, or `running_with_errors` and the policy's `last_error`: the most recent error of its targets, or of the sweep that found them. A policy running with errors stays `running` in the heartbeat, its `error` set to that `last_error`, and the next read that finds it `running` sends an empty `error` again. The error is masked as a run's reason is, so a value of one of the policy's secret references that it quotes is sent as `********`, and it is kept to 1 KB, ending `... (truncated)` past that, since the heartbeat goes out every few seconds. A policy that failed to apply keeps sending why, not its collection error. The per-target status the backend also reports is not sent.

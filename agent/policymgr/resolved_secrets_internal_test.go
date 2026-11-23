@@ -1007,6 +1007,92 @@ func TestRunsACallerPreparesAreMaskedToo(t *testing.T) {
 	assert.Contains(t, stored.Runs[0].Reason, "auth of 192.0.2.10 failed with ********")
 }
 
+// TestCollectionErrorIsMaskedAndBounded stores the error a telemetry binary
+// reports for a policy's last collection: a value of the policy's secret
+// references it quotes is masked, as in a run's reason, the error is kept to
+// the bound of a policy's reason however many targets fail, and "" clears it.
+func TestCollectionErrorIsMaskedAndBounded(t *testing.T) {
+	now := time.Now()
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1", "policy-2")
+	resolved.remember("policy-1", "snmp_telemetry", []resolvedValue{{path: "scope.targets[0].host", value: "Pl41n-credential"}})
+
+	require.NoError(t, repo.UpdateCollectionError("policy-1", "metrics collection failed: Pl41n-credential:161: request timeout"))
+	stored, err := repo.Get("policy-1")
+	require.NoError(t, err)
+	assert.Contains(t, stored.CollectionErr, "metrics collection failed: ********:161: request timeout")
+	assert.NotContains(t, stored.CollectionErr, "Pl41n-credential")
+
+	var failing []string
+	for i := range 200 {
+		failing = append(failing, fmt.Sprintf("10.0.%d.%d:161: request timeout", i/250, i%250))
+	}
+	require.NoError(t, repo.UpdateCollectionError("policy-2", "metrics collection failed: "+strings.Join(failing, "; ")))
+	stored, err = repo.Get("policy-2")
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(stored.CollectionErr), maxBackendErrLen, "bounded however many targets fail")
+	assert.True(t, strings.HasSuffix(stored.CollectionErr, truncationMarker), stored.CollectionErr)
+
+	require.NoError(t, repo.UpdateCollectionError("policy-1", ""))
+	stored, err = repo.Get("policy-1")
+	require.NoError(t, err)
+	assert.Empty(t, stored.CollectionErr)
+}
+
+// TestCollectionErrorIsMaskedForThePolicyItIsStoredOn has another policy
+// stored under the name, or the policy's values change, between the masking
+// repo's look-up and the store: the error is masked again for the policy it
+// is stored on, and still with the values of the one it was reported for.
+func TestCollectionErrorIsMaskedForThePolicyItIsStoredOn(t *testing.T) {
+	const secret = "Pl41n-credential"
+	for name, meanwhile := range map[string]func(t *testing.T, resolved *resolvedSecrets, repo policies.PolicyRepo){
+		"another policy is stored under the name": func(t *testing.T, resolved *resolvedSecrets, repo policies.PolicyRepo) {
+			resolved.remember("policy-2", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: "0ther-credential"}})
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-2", Name: "shared", Backend: "snmp_telemetry"}))
+		},
+		"the policy's values change": func(_ *testing.T, resolved *resolvedSecrets, _ policies.PolicyRepo) {
+			resolved.remember("policy-1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: "0ther-credential"}})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			now := time.Now()
+			resolved, repo := newTestMaskingRepo(t, &now)
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-1", Name: "shared", Backend: "snmp_telemetry"}))
+			resolved.remember("policy-1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: secret}})
+			store := repo.PolicyRepo
+			repo.PolicyRepo = &changedBeforeStore{PolicyRepo: store, change: func() { meanwhile(t, resolved, store) }}
+
+			require.NoError(t, repo.UpdateCollectionError("shared", "auth of 192.0.2.10 failed with "+secret+", then 0ther-credential"))
+			all, err := repo.GetAll()
+			require.NoError(t, err)
+			var errs []string
+			for _, pd := range all {
+				if pd.CollectionErr != "" {
+					errs = append(errs, pd.CollectionErr)
+				}
+			}
+			require.Len(t, errs, 1, "stored on one policy")
+			assert.NotContains(t, errs[0], secret, "masked with the values of the policy it was reported for")
+			assert.NotContains(t, errs[0], "0ther-credential", "masked with the values of the policy it is stored on")
+			assert.Contains(t, errs[0], "auth of 192.0.2.10 failed with ********")
+		})
+	}
+}
+
+// TestCollectionErrorACallerPreparesIsMaskedToo stores an error through the
+// masking repo's UpdateCollectionErrorWith: what the caller writes is masked
+// like what the backend reported.
+func TestCollectionErrorACallerPreparesIsMaskedToo(t *testing.T) {
+	now := time.Now()
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	resolved.remember("policy-1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: "Pl41n-credential"}})
+
+	quote := func(string, string) string { return "auth of 192.0.2.10 failed with Pl41n-credential" }
+	require.NoError(t, repo.UpdateCollectionErrorWith("policy-1", "", quote))
+	stored, err := repo.Get("policy-1")
+	require.NoError(t, err)
+	assert.Contains(t, stored.CollectionErr, "auth of 192.0.2.10 failed with ********")
+}
+
 // changedBeforeStore is a store that change changes right before runs are
 // handed to it: after whatever the masking repo looked up or masked before.
 type changedBeforeStore struct {
@@ -1017,6 +1103,11 @@ type changedBeforeStore struct {
 func (s *changedBeforeStore) UpdateRunsWith(name string, runs []policies.RunData, prepare func(string, []policies.RunData) []policies.RunData) error {
 	s.change()
 	return s.PolicyRepo.UpdateRunsWith(name, runs, prepare)
+}
+
+func (s *changedBeforeStore) UpdateCollectionErrorWith(name string, message string, prepare func(string, string) string) error {
+	s.change()
+	return s.PolicyRepo.UpdateCollectionErrorWith(name, message, prepare)
 }
 
 // handedRuns is a store that records the reasons of the runs handed to it.
