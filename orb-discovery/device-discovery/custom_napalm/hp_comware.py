@@ -118,7 +118,28 @@ def _parse_comware_interface_brief_modes(rows: list[dict]) -> dict[str, dict]:
 
 
 _COMWARE_VLAN_HEADER_RE = re.compile(r"^\s*VLAN\s+ID\s*:\s*(\d+)\s*$", re.IGNORECASE)
+_COMWARE_VLAN_NAME_RE = re.compile(r"^\s*Name\s*:(.*)$")
 _COMWARE_PORT_STATUS_SUFFIX_RE = re.compile(r"\([A-Za-z]+\)$")
+
+
+def _parse_comware_vlan_names(text: str) -> dict[int, str]:
+    """
+    Map each VLAN ID in ``display vlan all`` to its ``Name:`` value, whole.
+
+    A section with no ``Name:`` line maps to ``""``.
+    """
+    names: dict[int, str] = {}
+    current_vid: int | None = None
+    for line in text.splitlines():
+        header = _COMWARE_VLAN_HEADER_RE.match(line)
+        if header:
+            current_vid = int(header.group(1))
+            names.setdefault(current_vid, "")
+            continue
+        name = _COMWARE_VLAN_NAME_RE.match(line)
+        if name and current_vid is not None:
+            names[current_vid] = name.group(1).strip()
+    return names
 
 
 def _strip_comware_port_status(token: str) -> str:
@@ -828,6 +849,7 @@ class ComwareDriver(_napalm_base.NetworkDriver):
 
     def open(self):
         """Open an SSH connection to the device via Netmiko."""
+        self._vlan_all_raw = None
         self.device = self._netmiko_open(
             "hp_comware", netmiko_optional_args=self.netmiko_optional_args
         )
@@ -998,22 +1020,25 @@ class ComwareDriver(_napalm_base.NetworkDriver):
 
         return config
 
+    def _display_vlan_all(self) -> str:
+        """Return ``display vlan all`` output, sent at most once per connection."""
+        raw = getattr(self, "_vlan_all_raw", None)
+        if raw is None:
+            raw = self.device.send_command("display vlan all") or ""
+            self._vlan_all_raw = raw
+        return raw
+
     def get_vlans(self) -> dict:
-        """Return VLAN information keyed by VLAN ID string."""
-        raw = self.device.send_command("display vlan brief")
-        if not raw:
-            return {}
+        """
+        Return VLAN information keyed by VLAN ID string.
 
-        parsed = parse_output(platform="hp_comware", command="display vlan brief", data=raw)
-        vlans: dict = {}
-        for row in parsed:
-            vlan_id = row.get("vlan_id", "")
-            if not vlan_id:
-                continue
-            vlan_name = row.get("vlan_name", "").strip() or vlan_id
-            vlans[vlan_id] = {"name": vlan_name, "interfaces": []}
-
-        return vlans
+        Names come from ``display vlan all``: the ``display vlan brief``
+        template cuts a name at its first non-word character.
+        """
+        names = _parse_comware_vlan_names(self._display_vlan_all())
+        return {
+            str(vid): {"name": name or str(vid), "interfaces": []} for vid, name in names.items()
+        }
 
     def get_chassis_members(self) -> dict | None:
         """
@@ -1098,7 +1123,7 @@ class ComwareDriver(_napalm_base.NetworkDriver):
         """Return per-interface VLAN config from `display interface brief` + `display vlan all`."""
         try:
             brief_raw = self.device.send_command("display interface brief")
-            vlan_raw = self.device.send_command("display vlan all")
+            vlan_raw = self._display_vlan_all()
         except Exception:
             logger.debug("Comware switchport command failed", exc_info=True)
             return {}

@@ -17,6 +17,7 @@ from custom_napalm.hp_comware import (
     _expand_comware_iface,
     _parse_comware_display_vlan_all,
     _parse_comware_interface_brief_modes,
+    _parse_comware_vlan_names,
 )
 from custom_napalm.huawei_vrp import _huawei_row_to_switchport_info
 
@@ -416,6 +417,42 @@ def test_comware_invert_vlan_all():
         "GigabitEthernet1/0/2": {"tagged": [100, 200], "untagged": []},
     }
 
+
+
+def test_comware_vlan_names_keep_spaces_and_punctuation():
+    """Names come whole from the `Name:` line, spaces and hyphens included."""
+    text = (
+        " VLAN ID: 1\n"
+        " VLAN Type: static\n"
+        " Description: VLAN 0001\n"
+        " Name: VLAN 0001\n"
+        " Tagged   Ports: none\n"
+        "\n"
+        " VLAN ID: 300\n"
+        " Name: MGMT-NET\n"
+        "\n"
+        " VLAN ID: 310\n"
+        " Name: Guest WiFi  \n"
+    )
+    assert _parse_comware_vlan_names(text) == {1: "VLAN 0001", 300: "MGMT-NET", 310: "Guest WiFi"}
+
+
+def test_comware_vlan_names_ignore_description_and_missing_name():
+    """A VLAN with no `Name:` line maps to an empty name; Description is never used."""
+    text = (
+        " VLAN ID: 20\n"
+        " Description: Name: not this\n"
+        "\n"
+        " VLAN ID: 30\n"
+        " Description: Users\n"
+        " Name: Users\n"
+    )
+    assert _parse_comware_vlan_names(text) == {20: "", 30: "Users"}
+
+
+def test_comware_vlan_names_ignore_lines_before_first_vlan():
+    """A `Name:` line outside any VLAN section is ignored."""
+    assert _parse_comware_vlan_names(" Name: stray\n VLAN ID: 5\n Name: Five\n") == {5: "Five"}
 
 # ----- Extreme EXOS ---------------------------------------------------------
 
