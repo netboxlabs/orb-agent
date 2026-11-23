@@ -118,7 +118,7 @@ def _parse_comware_interface_brief_modes(rows: list[dict]) -> dict[str, dict]:
 
 
 _COMWARE_VLAN_HEADER_RE = re.compile(r"^\s*VLAN\s+ID\s*:\s*(\d+)\s*$", re.IGNORECASE)
-_COMWARE_VLAN_NAME_RE = re.compile(r"^\s*Name\s*:(.*)$")
+_COMWARE_VLAN_NAME_RE = re.compile(r"^\s*Name\s*:(.*)$", re.IGNORECASE)
 _COMWARE_PORT_STATUS_SUFFIX_RE = re.compile(r"\([A-Za-z]+\)$")
 
 

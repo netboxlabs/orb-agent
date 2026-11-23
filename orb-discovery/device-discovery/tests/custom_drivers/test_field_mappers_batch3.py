@@ -454,6 +454,11 @@ def test_comware_vlan_names_ignore_lines_before_first_vlan():
     assert _parse_comware_vlan_names(" Name: stray\n VLAN ID: 5\n Name: Five\n") == {5: "Five"}
 
 
+def test_comware_vlan_names_label_case_varies():
+    """Label casing varies across Comware releases, so `name:` is read like `Name:`."""
+    assert _parse_comware_vlan_names(" vlan id: 6\n name: Six Lab\n") == {6: "Six Lab"}
+
+
 # ----- Extreme EXOS ---------------------------------------------------------
 
 
