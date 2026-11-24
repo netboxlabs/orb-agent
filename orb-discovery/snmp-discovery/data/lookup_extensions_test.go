@@ -521,27 +521,31 @@ func TestEmbeddedLookupExtensions_CiscoCatalyst1200And1300(t *testing.T) {
 }
 
 func TestEmbeddedLookupExtensions_ExtremeBaseMIB(t *testing.T) {
-	// Product OIDs from EXTREME-BASE-MIB (extremeProduct, .1916.2), named by
-	// their MIB object names.
+	// Product OIDs from EXTREME-BASE-MIB (extremeProduct, .1916.2). A product
+	// NDX catalogs is named as its NDX device type; the others keep their MIB
+	// object names.
 	deviceLookup, err := LoadDeviceLookupExtensions("")
 	require.NoError(t, err)
 
 	for oid, want := range map[string]string{
-		".1.3.6.1.4.1.1916.2.1":   "summit1",                           // lowest suffix in the MIB
-		".1.3.6.1.4.1.1916.2.325": "vsp7400-48Y-8C",                    // VSP 7400-48Y-8C
-		".1.3.6.1.4.1.1916.2.352": "extreme552048WEXOS",                // 5520-48W, EXOS
-		".1.3.6.1.4.1.1916.2.361": "extreme552048WVOSS",                // 5520-48W, VOSS
-		".1.3.6.1.4.1.1916.2.433": "extreme552048WSwitchEngine",        // 5520-48W, Switch Engine
-		".1.3.6.1.4.1.1916.2.440": "extreme552048WFabricEngine",        // 5520-48W, Fabric Engine
-		".1.3.6.1.4.1.1916.2.549": "extreme5420M24W24S4YESwitchEngine", // highest suffix; only in the 2025-04-02 revision
+		".1.3.6.1.4.1.1916.2.1":   "summit1",               // lowest suffix in the MIB
+		".1.3.6.1.4.1.1916.2.227": "X440-G2-12p-10GE4",     // summitX440G2-12p-10G4
+		".1.3.6.1.4.1.1916.2.325": "VSP-7400-48Y-8C",       // vsp7400-48Y-8C
+		".1.3.6.1.4.1.1916.2.352": "5520-48W",              // 5520-48W, EXOS
+		".1.3.6.1.4.1.1916.2.361": "FabricEngine-5520-48W", // 5520-48W, VOSS
+		".1.3.6.1.4.1.1916.2.433": "5520-48W",              // 5520-48W, Switch Engine
+		".1.3.6.1.4.1.1916.2.440": "FabricEngine-5520-48W", // 5520-48W, Fabric Engine
+		// Highest suffix; only in the 2025-04-02 revision. NDX has only the
+		// Fabric Engine type of this switch, so the Switch Engine OID keeps
+		// its MIB name.
+		".1.3.6.1.4.1.1916.2.549": "extreme5420M24W24S4YESwitchEngine",
 		// Products registered under a series node.
 		".1.3.6.1.4.1.1916.2.131.15":  "summitWM3700",
-		".1.3.6.1.4.1.1916.2.504.1.1": "extreme873032D",
-		// Entries that predate the MIB import keep their names, so devices
-		// already in NetBox keep their device type.
+		".1.3.6.1.4.1.1916.2.504.1.1": "8730-32D", // extreme873032D
+		// Entries that predate the MIB import. NDX catalogs only the last.
 		".1.3.6.1.4.1.1916.2":     "extremeSwitch",
 		".1.3.6.1.4.1.1916.2.89":  "extremeSummitX250e",
-		".1.3.6.1.4.1.1916.2.343": "extremeSwitchingX435",
+		".1.3.6.1.4.1.1916.2.343": "X435-24P-4S",
 	} {
 		model, err := deviceLookup.GetDeviceModel(oid, map[string]string{})
 		assert.NoError(t, err, "OID %s should resolve", oid)
