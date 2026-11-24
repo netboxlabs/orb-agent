@@ -515,6 +515,10 @@ func TestURL_MasksEveryURLAStringHolds(t *testing.T) {
 		"https://u:p@h/x ${vault://kv//a/b}": "https://********@h/x ${vault://kv//a/b}",
 		"${vault://kv//a/b},https://u:p@h":   "${vault://kv//a/b}********@h",
 		"${vault://secret/data/git/token}":   "${vault://secret/data/git/token}",
+		// ${secret://...}, which the active secrets manager resolves, is one
+		// as much as the manager's own scheme is.
+		"${secret://kv//a/b},https://u:p@h": "${secret://kv//a/b}********@h",
+		"${secret://kv//db/user}@db:5432":   "********@db:5432",
 		// But for one an @ follows in its word, as a user or a password: it is
 		// masked with the user info.
 		"${vault://m/p/k}tok@":                 "${vault://********@",
