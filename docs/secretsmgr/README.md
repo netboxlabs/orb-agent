@@ -38,8 +38,9 @@ accept more than one. Whichever provider is active also resolves
 [Provider-agnostic secret references](secret_references.md).
 
 Leaving `active` unset or empty skips the secrets manager and the agent starts
-normally. A value that is set but not recognised fails startup with an error
-naming the supported types.
+normally, unless `backends` or `config_manager` holds a `${secret://…}`
+reference, which then fails startup, as it fails a policy that holds one. A value that is set
+but not recognised fails startup with an error naming the supported types.
 
 The provider and its settings can also be chosen entirely from the environment,
 without editing the YAML, which suits injecting them at deploy time. See

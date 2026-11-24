@@ -58,6 +58,10 @@ and pass through unresolved in this case.
 
 ## Fleet secrets manager and config-level references
 
+The **fleet** secrets manager reads secrets over the MQTT session of the fleet config
+manager, so it needs `config_manager.active: fleet`; with another config manager, none
+of its references resolve, in policies or in configuration.
+
 With the **fleet** secrets manager active, secret references inside the agent's own
 configuration (backend settings, `config_manager` fields) cannot be resolved: config
 resolution runs at startup, before the MQTT session that fleet secret requests
