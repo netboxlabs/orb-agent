@@ -97,3 +97,27 @@ func TestDummyManager_SolveConfigSecrets_Passthrough(t *testing.T) {
 	assert.Equal(t, backends, gotBackends)
 	assert.Equal(t, cm, gotCM)
 }
+
+// With no secrets manager a ${secret://…} reference never resolves, so
+// Unresolved answers the refusal until the policy resolves or is forgotten: a
+// manage that failed on it is not retried as if a concurrent read had
+// resolved it.
+func TestDummyManager_UnresolvedAnswersRefusal(t *testing.T) {
+	dm := &dummyManager{}
+
+	bad := config.PolicyPayload{ID: "p1", Data: map[string]any{"key": "${secret://x}"}}
+	_, err := dm.SolvePolicySecrets(bad)
+	require.Error(t, err)
+	assert.ErrorContains(t, dm.Unresolved("p1"), "no secrets manager is configured")
+	assert.NoError(t, dm.Unresolved("p2"))
+
+	fixed := config.PolicyPayload{ID: "p1", Data: map[string]any{"key": "plain"}}
+	_, err = dm.SolvePolicySecrets(fixed)
+	require.NoError(t, err)
+	assert.NoError(t, dm.Unresolved("p1"))
+
+	_, err = dm.SolvePolicySecrets(bad)
+	require.Error(t, err)
+	dm.ForgetPolicy("p1")
+	assert.NoError(t, dm.Unresolved("p1"))
+}
