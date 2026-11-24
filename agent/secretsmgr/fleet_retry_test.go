@@ -317,6 +317,76 @@ func TestFleetSecretsManager_anAnswerOlderThanAnnouncedIsRequestedAgain(t *testi
 	}
 }
 
+// A path whose refresh Fleet refused stays stale, its policies stopped, when
+// Fleet answers with the version the agent holds, older than the one it
+// announced, as a replica that lags would: whether the scheduled request or a
+// delivery gets that answer. The announced version is requested again, and
+// the policies are applied once Fleet answers with it.
+func TestFleetSecretsManager_anAnswerAtTheHeldVersionKeepsARefusedPathStopped(t *testing.T) {
+	for _, tc := range []struct {
+		via string
+		// applied is what the answer with the announced version reports.
+		applied map[string]error
+	}{
+		{via: "the scheduled request", applied: map[string]error{"policy1": nil}},
+		{via: "a delivery", applied: map[string]error{"policy1": nil, "policy2": nil}},
+	} {
+		t.Run(tc.via, func(t *testing.T) {
+			fm, pub := newScriptedFleetManager(t, 5, func(n int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+				switch n {
+				case 1:
+					return fleetRefuses(req, messages.ErrorCodeNotFound), nil
+				case 2:
+					return fleetAnswer(req, "v1", 1), nil // behind the announced version
+				default:
+					return fleetAnswer(req, "v2", 2), nil
+				}
+			})
+			timers := &fakeRetryTimers{}
+			fm.afterFunc = timers.afterFunc
+			fm.usedVars = map[string]fleetCachedSecret{
+				"snmp/community": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true}},
+			}
+			reports := &recordedReports{}
+			fm.callback = reports.record
+
+			notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 2})
+			require.Len(t, reports.all(), 1, "the policy is stopped")
+
+			if tc.via == "a delivery" {
+				_, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy2", Data: map[string]any{"c": "${fleet://snmp/community}"}})
+				require.ErrorContains(t, err, messages.ErrorCodeNotFound, "not applied with the value Fleet replaced")
+				waits := timers.pending()
+				require.Len(t, waits, 1, "the announced version is still to be requested")
+				assertWait(t, time.Minute, waits[0])
+			} else {
+				timers.fire(t)
+				waits := timers.pending()
+				require.Len(t, waits, 1, "the announced version is requested again")
+				assertWait(t, 2*time.Minute, waits[0])
+			}
+			assert.Len(t, reports.all(), 1, "the policy stays stopped")
+			require.ErrorContains(t, fm.Unresolved("policy1"), messages.ErrorCodeNotFound)
+
+			timers.fire(t)
+			got := reports.all()
+			require.Len(t, got, 2)
+			assert.Equal(t, tc.applied, got[1], "applied with the announced version")
+			assert.NoError(t, fm.Unresolved("policy1"))
+			assert.Empty(t, timers.pending())
+			fm.mu.Lock()
+			entry, retries := fm.usedVars["snmp/community"], len(fm.retries)
+			fm.mu.Unlock()
+			assert.False(t, entry.stale)
+			assert.Equal(t, "v2", entry.Value)
+			assert.Zero(t, retries)
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			assert.Equal(t, 3, pub.n)
+		})
+	}
+}
+
 // A request scheduled for a path is cancelled, its timer stopped, once no
 // policy uses the path, and makes none once the agent is stopping.
 func TestFleetSecretsManager_aRetryIsDroppedWhenNotNeeded(t *testing.T) {

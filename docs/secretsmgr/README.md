@@ -323,8 +323,9 @@ it, those it stopped included, with no new delivery from Fleet. A newer
 version announced meanwhile is requested at once. An answer with an older
 version than Fleet announced, as from a replica that lags, is applied when
 it is newer than the value the agent holds, and the announced version is
-requested again the same way until Fleet answers with it or a newer one. The first failure is logged
-at ERROR, saying whether the policies stop or keep running, as is a refusal
-that stops them later; the other requests that fail are logged at DEBUG, and
-the answer that ends the failures as `Fleet answered the secret request
-again` at INFO.
+requested again the same way until Fleet answers with it or a newer one. At
+the version the agent holds, that answer changes nothing: policies the agent
+stopped stay stopped. The first failure is logged at ERROR, saying whether
+the policies stop or keep running, as is a refusal that stops them later;
+the other requests that fail are logged at DEBUG, and the answer that ends
+the failures as `Fleet answered the secret request again` at INFO.

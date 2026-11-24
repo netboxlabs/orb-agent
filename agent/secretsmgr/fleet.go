@@ -336,7 +336,8 @@ func (f *FleetSecretsManager) refresh(path string, version int, changed map[stri
 		// Fleet answered with an older version than the one it announced,
 		// as a replica that lags would: the value is applied below when it is
 		// newer than the one held, and the announced version is requested
-		// again, as after a request that failed.
+		// again, as after a request that failed. At the version held, a path
+		// whose refresh Fleet refused stays stale, its policies stopped.
 		first, wait := f.retryLaterLocked(path, version, false)
 		log := f.logger.Debug
 		if first {
@@ -351,10 +352,13 @@ func (f *FleetSecretsManager) refresh(path string, version int, changed map[stri
 		f.dropRetryLocked(path)
 		f.logger.Info("Fleet answered the secret request again", "path", path, "version", secret.Version)
 	}
-	// If the version is already up-to-date or newer, skip overwriting,
-	// unless its refresh failed: Fleet answering the version held means
-	// that value is current, and its policies were stopped for it.
-	if cached.Version > secret.Version || cached.Version == secret.Version && !cached.stale {
+	// An answer at the version held, or an older one, changes nothing. A
+	// refresh is for a version newer than the one held, which a stale path
+	// keeps until an answer replaces it, so for a stale path that answer is
+	// older than the version announced, as from a replica that lags: the
+	// value held is not current, and the policies stopped for it stay
+	// stopped until Fleet answers with a newer one.
+	if cached.Version >= secret.Version {
 		return
 	}
 
@@ -962,7 +966,11 @@ func (f *FleetSecretsManager) requestSecrets(ctx context.Context, paths []string
 				// notification stored meanwhile, nor clears a failure that
 				// came after its request started.
 				outdated := cached.stale && cached.staleAt > started
-				if !outdated && (!exists || sv.Version >= cached.Version) {
+				// Nor does an answer at the version held clear a path whose
+				// refresh failed while a request for a newer version is
+				// scheduled: it comes from a replica that lags (see refresh).
+				lagging := cached.stale && sv.Version == cached.Version && f.retries[p] != nil
+				if !outdated && !lagging && (!exists || sv.Version >= cached.Version) {
 					cached.Value = sv.Value
 					cached.Version = sv.Version
 					cached.stale, cached.err = false, nil
