@@ -91,6 +91,11 @@ type fleetRetry struct {
 	// stopped: when a delivery fetches the path again first, the request
 	// finds it current and applies them again (see retry).
 	stopped bool
+	// applied holds the policies whose secrets resolved since Fleet last
+	// refused the path (see markApplied): the delivery that resolved them
+	// applies them with the value held, so the request, finding the path
+	// current, leaves them as they are and applies the others.
+	applied map[string]bool
 }
 
 type fleetCachedSecret struct {
@@ -407,7 +412,11 @@ func (f *FleetSecretsManager) retryLaterLocked(path string, version int, refused
 		r.delay = min(2*r.delay, fleetRetryMax)
 	}
 	r.version = max(r.version, version)
-	r.stopped = r.stopped || refused
+	if refused {
+		// The policies that use the path are stopped, those a delivery
+		// applied since the last refusal too.
+		r.stopped, r.applied = true, nil
+	}
 	wait = r.delay
 	if r.timer == nil {
 		wait = time.Duration(float64(r.delay) * (0.8 + 0.4*rand.Float64()))
@@ -434,8 +443,10 @@ func (f *FleetSecretsManager) dropRetryLocked(path string) bool {
 // once the value held, cached, is current at the version the request is for
 // or a newer one, as a delivery that fetched the path before or while the
 // request was made leaves it. The policies a refusal stopped for the path are
-// recorded in changed to apply again, unless another path failed for them:
-// the delivery applied its own policy only. The caller holds f.mu.
+// recorded in changed to apply again, unless another path failed for them.
+// A policy whose secrets resolved since the refusal is not one of them: its
+// own delivery applies it with this value (fleetRetry.applied), and applying
+// it again would run it twice. The caller holds f.mu.
 func (f *FleetSecretsManager) completeRetryLocked(path string, cached fleetCachedSecret, changed map[string]error) {
 	r, ok := f.retries[path]
 	if !ok || cached.stale || cached.Version < r.version {
@@ -447,9 +458,38 @@ func (f *FleetSecretsManager) completeRetryLocked(path string, cached fleetCache
 		return
 	}
 	for id := range cached.policyIDs {
+		if r.applied[id] {
+			continue
+		}
 		if _, failed := changed[id]; !failed {
 			changed[id] = nil
 		}
+	}
+}
+
+// markApplied records that policyID's secrets resolved, in a resolve that
+// started at the invalidation started, for each of paths whose scheduled
+// request is to apply the policies a refusal stopped (fleetRetry.applied):
+// the caller applies the policy with the values held. A path Fleet refused
+// since the resolve started is left out, since that refusal stops the policy
+// whatever value it was given. A scheduled request that finds the path
+// current between the fetch and this record still applies the policy, once
+// more than needed: it is never left stopped.
+func (f *FleetSecretsManager) markApplied(policyID string, paths map[string]struct{}, started uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for path := range paths {
+		r, ok := f.retries[path]
+		if !ok || !r.stopped {
+			continue
+		}
+		if cached := f.usedVars[path]; cached.stale || cached.staleAt > started {
+			continue
+		}
+		if r.applied == nil {
+			r.applied = make(map[string]bool)
+		}
+		r.applied[policyID] = true
 	}
 }
 
@@ -601,6 +641,9 @@ func (f *FleetSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	f.mu.RLock()
+	started := f.invalidations
+	f.mu.RUnlock()
 	if err := f.ensureSecrets(ctx, setToSortedSlice(pathSet), payload.ID); err != nil {
 		return payload, err
 	}
@@ -611,6 +654,7 @@ func (f *FleetSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (
 	}
 
 	newPayload.Data = processedData
+	f.markApplied(payload.ID, pathSet, started)
 	return newPayload, nil
 }
 

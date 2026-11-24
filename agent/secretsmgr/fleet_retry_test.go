@@ -189,7 +189,7 @@ func TestFleetSecretsManager_anAnswerWithoutTheSecretStopsThePolicies(t *testing
 
 // A delivery that fetches a refused path before the retry does applies its
 // own policy only: the retry finds the path current, requests nothing, and
-// applies the other policies stopped for it.
+// applies the other policies stopped for it, not the delivered one again.
 func TestFleetSecretsManager_aRetryAppliesThePoliciesStoppedForAPathADeliveryFetched(t *testing.T) {
 	fm, pub := newScriptedFleetManager(t, 5, func(n int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
 		if n == 1 {
@@ -213,7 +213,7 @@ func TestFleetSecretsManager_aRetryAppliesThePoliciesStoppedForAPathADeliveryFet
 	timers.fire(t)
 	got := reports.all()
 	require.Len(t, got, 2)
-	assert.Equal(t, map[string]error{"policy1": nil, "policy2": nil}, got[1])
+	assert.Equal(t, map[string]error{"policy1": nil}, got[1], "policy2's delivery applied it")
 	pub.mu.Lock()
 	defer pub.mu.Unlock()
 	assert.Equal(t, 2, pub.n, "the retry requests nothing")
@@ -269,7 +269,7 @@ func TestFleetSecretsManager_aDeliveryDuringTheScheduledRequestCompletesIt(t *te
 
 			got := reports.all()
 			require.Len(t, got, 2, "the scheduled request reports the policies stopped for the path")
-			assert.Equal(t, map[string]error{"policy1": nil, "policy2": nil}, got[1])
+			assert.Equal(t, map[string]error{"policy1": nil}, got[1], "policy2's delivery applied it")
 			assert.NoError(t, fm.Unresolved("policy1"))
 			assert.Empty(t, timers.pending())
 			fm.mu.Lock()
@@ -281,6 +281,127 @@ func TestFleetSecretsManager_aDeliveryDuringTheScheduledRequestCompletesIt(t *te
 			assert.Equal(t, 3, pub.n)
 		})
 	}
+}
+
+// The scheduled request applies again the policies a refusal left stopped,
+// and none that a delivery applied since, which would run twice (a policy
+// that runs once would run again): not the policy whose delivery fetched the
+// path, new to the path or not, nor one delivered after it, which is given
+// the value held. A policy whose delivery did not resolve is applied with the
+// stopped ones: one Fleet still refused, and one given this path's value
+// whose other secret Fleet refuses.
+func TestFleetSecretsManager_aRetryLeavesThePoliciesADeliveryApplied(t *testing.T) {
+	fm, pub := newScriptedFleetManager(t, 5, func(n int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+		switch n {
+		case 1, 2, 4: // the refresh, refusedSince's delivery, and otherRefused's other secret
+			return fleetRefuses(req, messages.ErrorCodeForbidden), nil
+		default:
+			return fleetAnswer(req, "v2", 2), nil
+		}
+	})
+	timers := &fakeRetryTimers{}
+	fm.afterFunc = timers.afterFunc
+	fm.usedVars = map[string]fleetCachedSecret{
+		"snmp/community": {Value: "v1", Version: 1, policyIDs: map[string]bool{"stopped": true, "redelivered": true, "otherRefused": true}},
+	}
+	reports := &recordedReports{}
+	fm.callback = reports.record
+	community := map[string]any{"c": "${fleet://snmp/community}"}
+	solve := func(id string, data map[string]any) error {
+		out, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: id, Data: data})
+		if err == nil {
+			assert.Equal(t, "v2", out.Data.(map[string]any)["c"], id)
+		}
+		return err
+	}
+
+	notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 2})
+	require.Len(t, reports.all(), 1, "the three policies are stopped")
+	require.Error(t, solve("refusedSince", community), "Fleet still refuses the path")
+	require.NoError(t, solve("fetched", community), "its delivery fetches the path")
+	require.NoError(t, solve("redelivered", community), "given the value held")
+	require.Error(t, solve("otherRefused", map[string]any{"c": "${fleet://snmp/community}", "k": "${fleet://snmp/key}"}),
+		"its other secret is refused")
+
+	timers.fire(t)
+	got := reports.all()
+	require.Len(t, got, 2)
+	assert.Equal(t, map[string]error{"stopped": nil, "refusedSince": nil, "otherRefused": nil}, got[1],
+		"neither fetched nor redelivered, which their deliveries applied")
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	assert.Equal(t, 4, pub.n, "the retry requests nothing")
+}
+
+// A policy a delivery applied is stopped with the others when Fleet refuses
+// the path again, so the scheduled request applies it again with them: here
+// the delivery was answered with a version older than the one announced, the
+// request for that one is refused, and another policy's delivery then fetches
+// it.
+func TestFleetSecretsManager_aPolicyAppliedBeforeFleetRefusesAgainIsAppliedAgain(t *testing.T) {
+	fm, _ := newScriptedFleetManager(t, 5, func(n int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+		switch n {
+		case 1, 3: // the refresh and the scheduled request
+			return fleetRefuses(req, messages.ErrorCodeForbidden), nil
+		case 2: // policy2's delivery
+			return fleetAnswer(req, "v2", 2), nil
+		default: // policy1's delivery
+			return fleetAnswer(req, "v3", 3), nil
+		}
+	})
+	timers := &fakeRetryTimers{}
+	fm.afterFunc = timers.afterFunc
+	fm.usedVars = map[string]fleetCachedSecret{
+		"snmp/community": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true, "policy2": true}},
+	}
+	reports := &recordedReports{}
+	fm.callback = reports.record
+	solve := func(id, want string) {
+		out, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: id, Data: map[string]any{"c": "${fleet://snmp/community}"}})
+		require.NoError(t, err, id)
+		assert.Equal(t, want, out.Data.(map[string]any)["c"], id)
+	}
+
+	notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 3})
+	solve("policy2", "v2")
+	timers.fire(t)
+	got := reports.all()
+	require.Len(t, got, 2)
+	assert.Error(t, got[1]["policy1"])
+	assert.Error(t, got[1]["policy2"], "stopped again, though its delivery applied it")
+
+	solve("policy1", "v3")
+	timers.fire(t)
+	got = reports.all()
+	require.Len(t, got, 3)
+	assert.Equal(t, map[string]error{"policy2": nil}, got[2], "policy1's delivery applied it; policy2 was stopped since its own")
+}
+
+// A policy whose secrets resolve is recorded as applied only for a path
+// Fleet has not refused since the resolve started: a refusal meanwhile stops
+// the policy whatever value it was given, so the scheduled request must
+// apply it.
+func TestFleetSecretsManager_aRefusalDuringAResolveLeavesThePolicyToTheRetry(t *testing.T) {
+	fm, _ := newScriptedFleetManager(t, 5, nil)
+	paths := map[string]struct{}{"snmp/community": {}}
+	fm.retries["snmp/community"] = &fleetRetry{version: 2, stopped: true}
+
+	fm.usedVars["snmp/community"] = fleetCachedSecret{Value: "v2", Version: 2, policyIDs: map[string]bool{"policy1": true}, staleAt: 5}
+	fm.markApplied("policy1", paths, 4)
+	assert.Empty(t, fm.retries["snmp/community"].applied, "refused after the resolve started, and fetched again since")
+
+	fm.usedVars["snmp/community"] = fleetCachedSecret{Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true}, stale: true, staleAt: 5}
+	fm.markApplied("policy1", paths, 5)
+	assert.Empty(t, fm.retries["snmp/community"].applied, "still refused")
+
+	fm.usedVars["snmp/community"] = fleetCachedSecret{Value: "v2", Version: 2, policyIDs: map[string]bool{"policy1": true}, staleAt: 5}
+	fm.markApplied("policy1", paths, 5)
+	assert.Equal(t, map[string]bool{"policy1": true}, fm.retries["snmp/community"].applied)
+
+	fm.retries["snmp/key"] = &fleetRetry{version: 2}
+	fm.usedVars["snmp/key"] = fleetCachedSecret{Value: "k1", Version: 1, policyIDs: map[string]bool{"policy1": true}}
+	fm.markApplied("policy1", map[string]struct{}{"snmp/key": {}}, 5)
+	assert.Empty(t, fm.retries["snmp/key"].applied, "a request that stopped no policy applies none")
 }
 
 // The answer to a request for an older version, handled after the refresh of

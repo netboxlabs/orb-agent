@@ -321,7 +321,8 @@ depends on the failure:
 The first request Fleet answers with the value re-applies the policies with
 it, those it stopped included, with no new delivery from Fleet. A delivery
 that fetches the value first, even while that request is being made, ends it
-the same way: the policies it stopped are applied again. A newer version
+the same way: the policies it stopped are applied again, except those a
+delivery applied meanwhile, which are not applied twice. A newer version
 announced meanwhile is requested at once, while the version the agent is to
 request again, announced again, waits for that request. An answer with an
 older version than Fleet announced, as from a replica that lags, is applied
