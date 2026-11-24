@@ -290,8 +290,11 @@ func (f *FleetSecretsManager) refresh(path string, version int, changed map[stri
 			return
 		}
 		if current.Version >= version {
-			// A later notification fetched this version or a newer one
-			// while this request waited: the value held is current.
+			// A later notification or a delivery fetched this version or a
+			// newer one while this request waited: the value held is
+			// current, and the request a failed refresh scheduled for it,
+			// which this may be, is done.
+			f.completeRetryLocked(path, current, changed)
 			return
 		}
 		stops := refused(err) && !current.stale
@@ -354,21 +357,24 @@ func (f *FleetSecretsManager) refresh(path string, version int, changed map[stri
 		}
 		log("Fleet answered an older version of the secret than it announced; requesting it again",
 			"path", path, "announced_version", version, "version", secret.Version, "retry_in", wait)
-	} else if r, ok := f.retries[path]; ok && secret.Version >= r.version {
+	}
+	// An answer at the version held, or an older one, changes nothing but
+	// a scheduled request a delivery satisfied meanwhile, which it ends
+	// (completeRetryLocked). A refresh is for a version newer than the one
+	// held, which a stale path keeps until an answer replaces it, so for a
+	// stale path that answer is older than the version announced, as from a
+	// replica that lags: the value held is not current, and the policies
+	// stopped for it stay stopped until Fleet answers with a newer one.
+	if cached.Version >= secret.Version {
+		f.completeRetryLocked(path, cached, changed)
+		return
+	}
+	if r, ok := f.retries[path]; ok && secret.Version >= r.version {
 		// Fleet answered with the version the scheduled request is for, or
 		// a newer one: no further request is needed. An answer with an
 		// older version, to a request for one, leaves it scheduled.
 		f.dropRetryLocked(path)
 		f.logger.Info("Fleet answered the secret request again", "path", path, "version", secret.Version)
-	}
-	// An answer at the version held, or an older one, changes nothing. A
-	// refresh is for a version newer than the one held, which a stale path
-	// keeps until an answer replaces it, so for a stale path that answer is
-	// older than the version announced, as from a replica that lags: the
-	// value held is not current, and the policies stopped for it stay
-	// stopped until Fleet answers with a newer one.
-	if cached.Version >= secret.Version {
-		return
 	}
 
 	// Update cache
@@ -424,6 +430,29 @@ func (f *FleetSecretsManager) dropRetryLocked(path string) bool {
 	return true
 }
 
+// completeRetryLocked ends the request a failed refresh of path scheduled,
+// once the value held, cached, is current at the version the request is for
+// or a newer one, as a delivery that fetched the path before or while the
+// request was made leaves it. The policies a refusal stopped for the path are
+// recorded in changed to apply again, unless another path failed for them:
+// the delivery applied its own policy only. The caller holds f.mu.
+func (f *FleetSecretsManager) completeRetryLocked(path string, cached fleetCachedSecret, changed map[string]error) {
+	r, ok := f.retries[path]
+	if !ok || cached.stale || cached.Version < r.version {
+		return
+	}
+	f.dropRetryLocked(path)
+	f.logger.Info("Fleet answered the secret request again", "path", path, "version", cached.Version)
+	if !r.stopped {
+		return
+	}
+	for id := range cached.policyIDs {
+		if _, failed := changed[id]; !failed {
+			changed[id] = nil
+		}
+	}
+}
+
 // retry makes the request r scheduled for path, unless it was cancelled or
 // replaced meanwhile, the agent is stopping or no policy uses the path any
 // more, and reports what it changed. A path a delivery fetched again
@@ -448,13 +477,8 @@ func (f *FleetSecretsManager) retry(path string, r *fleetRetry) {
 		return
 	}
 	if !cached.stale && cached.Version >= r.version {
-		delete(f.retries, path)
 		changed := make(map[string]error)
-		if r.stopped {
-			for id := range cached.policyIDs {
-				changed[id] = nil
-			}
-		}
+		f.completeRetryLocked(path, cached, changed)
 		f.mu.Unlock()
 		f.report(changed)
 		return

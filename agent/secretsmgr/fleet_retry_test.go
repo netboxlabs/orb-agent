@@ -219,6 +219,70 @@ func TestFleetSecretsManager_aRetryAppliesThePoliciesStoppedForAPathADeliveryFet
 	assert.Equal(t, 2, pub.n, "the retry requests nothing")
 }
 
+// A delivery that fetches a refused path while the scheduled request for it
+// is being made completes that request, whatever its own answer: a failure
+// or the same version. The request ends, and the other policies stopped for
+// the path are applied again, as when the delivery comes before the request.
+func TestFleetSecretsManager_aDeliveryDuringTheScheduledRequestCompletesIt(t *testing.T) {
+	for name, answer := range map[string]func(messages.SecretRequestMsg) *messages.SecretResponseMsg{
+		"it fails": func(req messages.SecretRequestMsg) *messages.SecretResponseMsg {
+			return fleetRefuses(req, messages.ErrorCodeInternalError)
+		},
+		"it answers": func(req messages.SecretRequestMsg) *messages.SecretResponseMsg {
+			return fleetAnswer(req, "v2", 2)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			asked, release := make(chan struct{}), make(chan struct{})
+			fm, pub := newScriptedFleetManager(t, 5, func(n int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+				switch n {
+				case 1:
+					return fleetRefuses(req, messages.ErrorCodeNotFound), nil
+				case 2:
+					close(asked)
+					return answer(req), release
+				default:
+					return fleetAnswer(req, "v2", 2), nil
+				}
+			})
+			timers := &fakeRetryTimers{}
+			fm.afterFunc = timers.afterFunc
+			fm.usedVars = map[string]fleetCachedSecret{
+				"snmp/community": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true}},
+			}
+			reports := &recordedReports{}
+			fm.callback = reports.record
+
+			notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 2})
+			require.Len(t, reports.all(), 1, "policy1 is stopped")
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				timers.fire(t)
+			}()
+			<-asked
+			out, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy2", Data: map[string]any{"c": "${fleet://snmp/community}"}})
+			require.NoError(t, err)
+			assert.Equal(t, "v2", out.Data.(map[string]any)["c"])
+			close(release)
+			<-done
+
+			got := reports.all()
+			require.Len(t, got, 2, "the scheduled request reports the policies stopped for the path")
+			assert.Equal(t, map[string]error{"policy1": nil, "policy2": nil}, got[1])
+			assert.NoError(t, fm.Unresolved("policy1"))
+			assert.Empty(t, timers.pending())
+			fm.mu.Lock()
+			retries := len(fm.retries)
+			fm.mu.Unlock()
+			assert.Zero(t, retries, "the scheduled request ends")
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			assert.Equal(t, 3, pub.n)
+		})
+	}
+}
+
 // The answer to a request for an older version, handled after the refresh of
 // a newer one failed, applies its value, and leaves the request for the newer
 // version scheduled.
