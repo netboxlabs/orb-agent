@@ -722,36 +722,38 @@ func TestManufacturerResolver_CanonicalNDXOverrides(t *testing.T) {
 	require.NoError(t, err)
 
 	cases := map[string]string{
-		"9":     "Cisco",            // ciscoSystems
-		"29671": "Cisco",            // Meraki -> Cisco
-		"30065": "Arista",           // Arista Networks Inc
-		"2636":  "Juniper",          // Juniper Networks Inc
-		"4874":  "Juniper",          // Juniper Unisphere/ERX
-		"6027":  "Dell",             // Force10 Networks Inc
-		"19746": "Dell",             // Dell EMC OS10
-		"11":    "HPE",              // HewlettPackard
-		"14823": "HPE",              // Aruba
-		"47196": "HPE",              // Aruba CX
-		"232":   "HPE",              // Compaq
-		"37447": "HPE",              // Nimble Storage
-		"6527":  "Nokia",            // Nokia formerly AlcatelLucent
-		"2011":  "Huawei",           // HUAWEI Technology CoLtd
-		"25461": "Palo Alto",        // PALO ALTO NETWORKS
-		"50114": "Palo Alto",        // CloudGenix (Prisma SD-WAN)
-		"5528":  "APC",              // NetBotz
-		"476":   "Vertiv",           // Emerson Computer Power
-		"1916":  "Extreme Networks", // Extreme Networks
-		"248":   "Hirschmann",       // Richard Hirschmann GmbH Co
-		"10704": "Barracuda",        // Barracuda AG (ex-phion)
-		"26866": "Gigamon",          // Gigamon Systems LLC
-		"116":   "HITACHI",          // Hitachi Ltd
-		"89":    "Radware",          // RND (Radware origin)
-		"4329":  "Siemens",          // Siemens AG
-		"15004": "RuggedCOM",        // RuggedCom Inc (Siemens-owned, distinct NDX manufacturer)
-		"7244":  "QCT",              // Quanta Computer Inc
-		"2":     "IBM",              // IBM
-		"31746": "Thales",           // Thales DIS (second PEN)
-		"3697":  "Quantum",          // Quantum Corporation (second PEN)
+		"9":     "Cisco",              // ciscoSystems
+		"29671": "Cisco",              // Meraki -> Cisco
+		"30065": "Arista",             // Arista Networks Inc
+		"2636":  "Juniper",            // Juniper Networks Inc
+		"4874":  "Juniper",            // Juniper Unisphere/ERX
+		"6027":  "Dell",               // Force10 Networks Inc
+		"19746": "Dell",               // Dell EMC OS10
+		"11":    "HPE",                // HewlettPackard
+		"14823": "HPE",                // Aruba
+		"47196": "HPE",                // Aruba CX
+		"232":   "HPE",                // Compaq
+		"37447": "HPE",                // Nimble Storage
+		"6527":  "Nokia",              // Nokia formerly AlcatelLucent
+		"7483":  "Nokia",              // Nokia 1830 PSS (Alcatel-Lucent registry)
+		"2352":  "Ericsson",           // Ericsson formerly RedBack Networks
+		"2011":  "Huawei",             // HUAWEI Technology CoLtd
+		"25461": "Palo Alto Networks", // PALO ALTO NETWORKS
+		"50114": "Palo Alto Networks", // CloudGenix (Prisma SD-WAN)
+		"5528":  "APC",                // NetBotz
+		"476":   "Vertiv",             // Emerson Computer Power
+		"1916":  "Extreme Networks",   // Extreme Networks
+		"248":   "Hirschmann",         // Richard Hirschmann GmbH Co
+		"10704": "Barracuda",          // Barracuda AG (ex-phion)
+		"26866": "Gigamon",            // Gigamon Systems LLC
+		"116":   "HITACHI",            // Hitachi Ltd
+		"89":    "Radware",            // RND (Radware origin)
+		"4329":  "Siemens",            // Siemens AG
+		"15004": "RuggedCOM",          // RuggedCom Inc (Siemens-owned, distinct NDX manufacturer)
+		"7244":  "QCT",                // Quanta Computer Inc
+		"2":     "IBM",                // IBM
+		"31746": "Thales",             // Thales DIS (second PEN)
+		"3697":  "Quantum",            // Quantum Corporation (second PEN)
 	}
 	for pen, want := range cases {
 		got, err := resolver.GetManufacturer(pen)
