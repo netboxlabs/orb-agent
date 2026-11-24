@@ -77,6 +77,7 @@ The following vendor files ship with orb-agent and orb-discovery, providing devi
 | WatchGuard | `watchguard.yaml` |
 | Waystream | `waystream.yaml` |
 | World Wide Packets (Ciena) | `wwp.yaml` |
+| Yamaha | `yamaha.yaml` |
 
 The authoritative list and the contents of each file live at [orb-discovery/snmp-discovery/data/lookup_extensions](https://github.com/netboxlabs/orb-agent/tree/develop/orb-discovery/snmp-discovery/data/lookup_extensions).
 
