@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math/rand/v2"
 	"regexp"
 	"slices"
 	"sort"
@@ -34,6 +35,15 @@ var fleetRefRegex = regexp.MustCompile(`\${(?:fleet|` + genericScheme + `)://([^
 var errEmptyFleetBody = errors.New("empty body")
 
 const defaultSecretRequestTimeout = 30 * time.Second
+
+// A refresh that fails is requested again after fleetRetryFirst, then after
+// twice as long each time it fails again, up to fleetRetryMax, each wait
+// spread by up to a fifth either way so that agents a Fleet outage failed
+// together don't ask again together (see retryLaterLocked).
+const (
+	fleetRetryFirst = time.Minute
+	fleetRetryMax   = 10 * time.Minute
+)
 
 // Publisher interface for MQTT publishing
 type Publisher interface {
@@ -63,20 +73,55 @@ type FleetSecretsManager struct {
 	// invalidations counts the refreshes that failed, so an answer can tell
 	// whether its request started before a path's latest failure.
 	invalidations uint64
+	// refreshing holds, by path, the version a notification's request is
+	// being made for, until that request ends (see handleUpdateNotification).
+	refreshing map[string]int
+	// retries holds, by path, the request a failed refresh scheduled, until
+	// Fleet answers with the value or no policy uses the path any more.
+	retries map[string]*fleetRetry
+	// afterFunc sets a timer that calls f after d, as time.AfterFunc does.
+	afterFunc func(d time.Duration, f func()) retryTimer
 	// refused holds the policies refused for an empty reference, which no
 	// request can resolve.
 	refused refusals
+}
+
+// retryTimer is the timer of a scheduled request (see afterFunc).
+type retryTimer interface {
+	Stop() bool
+}
+
+// fleetRetry is the request a failed refresh of a path scheduled.
+type fleetRetry struct {
+	// version is the newest version Fleet announced that the agent hasn't
+	// fetched.
+	version int
+	// delay is the wait before the request, doubled each time it fails.
+	delay time.Duration
+	// timer fires the request; nil while it runs.
+	timer retryTimer
+	// stopped means Fleet refused the path, so the policies that use it were
+	// stopped: when a delivery fetches the path again first, the request
+	// finds it current and applies them again (see retry).
+	stopped bool
+	// applied holds the policies whose secrets resolved since Fleet last
+	// refused the path (see markApplied): the delivery that resolved them
+	// applies them with the value held, so the request, finding the path
+	// current, leaves them as they are and applies the others.
+	applied map[string]bool
 }
 
 type fleetCachedSecret struct {
 	Value     string          // The actual secret value
 	Version   int             // Version number from control plane
 	policyIDs map[string]bool // The IDs of policies that have used this secret
-	// stale means the request that followed a newer version failed, with
-	// err: Value is outdated, so the path is requested again, not served,
-	// when a policy resolves it. A policy resolving it refreshes it; the
-	// other policies stopped for it are applied again on their next delivery
-	// or the next newer version, since nothing polls Fleet for it.
+	// stale means Fleet refused the request that followed a newer version,
+	// with err (see refused), or the path's first request failed: Value is
+	// outdated or unset, so the path is requested again, not served, when a
+	// policy resolves it. A policy resolving it refreshes it; the other
+	// policies stopped for it are applied again once a request Fleet answers
+	// with the value: the next newer version, or the request a failed refresh
+	// scheduled (see retryLaterLocked), and on their next delivery.
 	stale bool
 	err   error
 	// staleAt is the invalidation that marked the path stale: an answer to a
@@ -98,6 +143,9 @@ func NewFleetSecretsManager(logger *slog.Logger, cfg config.FleetSecretsManager)
 		usedVars:    make(map[string]fleetCachedSecret),
 		pendingReqs: make(map[string]chan *messages.SecretResponseMsg),
 		timeout:     timeout,
+		refreshing:  make(map[string]int),
+		retries:     make(map[string]*fleetRetry),
+		afterFunc:   func(d time.Duration, f func()) retryTimer { return time.AfterFunc(d, f) },
 	}
 }
 
@@ -185,128 +233,386 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 	changedPolicyIDs := make(map[string]error)
 
 	for _, update := range notification.Updates {
-		// Copy data needed for the request while holding the lock
 		f.mu.Lock()
 		cached, exists := f.usedVars[update.Path]
-		if !exists {
+		if !exists || update.Version <= cached.Version {
 			f.mu.Unlock()
 			continue
 		}
-
-		// Check if version changed
-		if update.Version <= cached.Version {
+		if r, ok := f.retries[update.Path]; ok && update.Version <= r.version {
+			// The version the scheduled request is for, announced again, as
+			// a repeated delivery of the notification whose request failed
+			// is: it waits for that request, rather than skip its backoff.
 			f.mu.Unlock()
+			f.logger.Debug("secret version already to be requested again",
+				"path", update.Path, "version", update.Version)
 			continue
 		}
-
+		if v, ok := f.refreshing[update.Path]; ok && update.Version <= v {
+			// The version a request is being made for, announced again
+			// before Fleet answered: notifications are handled on goroutines
+			// of their own, so a repeated delivery can come meanwhile. It
+			// waits for that request, which is made again later if it fails,
+			// rather than make a second one beside it.
+			f.mu.Unlock()
+			f.logger.Debug("secret version already being requested",
+				"path", update.Path, "version", update.Version)
+			continue
+		}
+		f.refreshing[update.Path] = update.Version
 		f.logger.Info("secret version changed, requesting update",
 			"path", update.Path,
 			"old_version", cached.Version,
 			"new_version", update.Version)
-
-		// Deep-copy policy IDs so they can be safely used while the lock is released
-		policyIDsCopy := make(map[string]bool, len(cached.policyIDs))
-		for id := range cached.policyIDs {
-			policyIDsCopy[id] = true
-		}
-		path := update.Path
-		started := f.invalidations
-
-		// Release the lock before performing the potentially long-running network request
 		f.mu.Unlock()
 
-		ctx := f.ctx
-		if ctx == nil {
-			ctx = context.Background()
-		}
+		f.refresh(update.Path, update.Version, changedPolicyIDs)
 
-		// Request updated secret (do not merge into usedVars here: this handler must
-		// compare versions and update the cache so the policy callback runs).
-		byPath, err := f.requestSecrets(ctx, []string{path}, policyIDsCopy, false)
-
-		// Re-acquire the lock before accessing or mutating shared state
+		// A failed request is scheduled again before this, so a repeated
+		// delivery finds one or the other. A newer version announced
+		// meanwhile keeps its own record.
 		f.mu.Lock()
-		sv, ok := byPath[path]
-		if err == nil && !ok {
-			err = fmt.Errorf("secret missing in response for path %s", path)
+		if f.refreshing[update.Path] == update.Version {
+			delete(f.refreshing, update.Path)
 		}
-		if err != nil {
-			f.logger.Error("failed to request updated secret", "path", path, "error", err)
-			if current, exists := f.usedVars[path]; exists && current.Version >= update.Version {
-				// A later notification fetched this version or a newer one
-				// while this request waited: the value held is current.
-				f.mu.Unlock()
-				continue
-			}
+		f.mu.Unlock()
+	}
+
+	f.report(changedPolicyIDs)
+	return nil
+}
+
+// refresh requests the value of path after Fleet announced version, and
+// records in changed what the policies that use the path are to do: nil to
+// apply them with the new value, an error to stop them. A failed request is
+// made again later (see retryLaterLocked). What happens to the policies
+// meanwhile depends on why it failed: when Fleet refused the path (see
+// refused) they stop, since the secret may be gone or no longer theirs; when
+// Fleet didn't answer, the request couldn't be sent or Fleet reported a fault
+// of its own, they keep running with the value they have, since the failure
+// says nothing about the secret.
+func (f *FleetSecretsManager) refresh(path string, version int, changed map[string]error) {
+	f.mu.Lock()
+	cached, exists := f.usedVars[path]
+	if !exists {
+		f.mu.Unlock()
+		return
+	}
+	// Deep-copy policy IDs so they can be safely used while the lock is released
+	policyIDsCopy := make(map[string]bool, len(cached.policyIDs))
+	for id := range cached.policyIDs {
+		policyIDsCopy[id] = true
+	}
+	started := f.invalidations
+	// Release the lock before performing the potentially long-running network request
+	f.mu.Unlock()
+
+	ctx := f.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// Request updated secret (do not merge into usedVars here: this handler must
+	// compare versions and update the cache so the policy callback runs).
+	byPath, err := f.requestSecrets(ctx, []string{path}, policyIDsCopy, false)
+
+	// Re-acquire the lock before accessing or mutating shared state
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sv, ok := byPath[path]
+	if err == nil && !ok {
+		err = fleetRefusal{msg: fmt.Sprintf("secret missing in response for path %s", path)}
+	}
+	if err != nil {
+		current, exists := f.usedVars[path]
+		if !exists {
+			// No policy uses it any more.
+			return
+		}
+		if current.Version >= version {
+			// A later notification or a delivery fetched this version or a
+			// newer one while this request waited: the value held is
+			// current, and the request a failed refresh scheduled for it,
+			// which this may be, is done.
+			f.completeRetryLocked(path, current, changed)
+			return
+		}
+		stops := refused(err) && !current.stale
+		if refused(err) {
+			f.invalidations++
+			current.stale, current.err, current.staleAt = true, err, f.invalidations
+			f.usedVars[path] = current
+		}
+		if stops {
 			// Every policy using it now is told: one that resolved it while
 			// the request was in flight runs with the value it was to replace.
-			users := policyIDsCopy
-			if current, exists := f.usedVars[path]; exists {
-				f.invalidations++
-				current.stale, current.err, current.staleAt = true, err, f.invalidations
-				f.usedVars[path] = current
-				users = current.policyIDs
-			}
-			for id := range users {
-				if changedPolicyIDs[id] == nil {
-					changedPolicyIDs[id] = err
+			// Those of a path already stale were told when it went stale, or
+			// failed to resolve it since.
+			for id := range current.policyIDs {
+				if changed[id] == nil {
+					changed[id] = err
 				}
 			}
-			f.mu.Unlock()
-			continue
 		}
-		secret := &sv
+		first, wait := f.retryLaterLocked(path, version, refused(err))
+		switch {
+		case stops:
+			f.logger.Error("Fleet refused the updated secret; stopping the policies that use it",
+				"path", path, "error", err, "retry_in", wait)
+		case first && current.stale:
+			f.logger.Error("failed to request updated secret; the policies that use it stay stopped",
+				"path", path, "error", err, "retry_in", wait)
+		case first:
+			f.logger.Error("failed to request updated secret; the policies that use it keep the value they run with",
+				"path", path, "error", err, "retry_in", wait)
+		default:
+			f.logger.Debug("secret request failed again", "path", path, "error", err, "retry_in", wait)
+		}
+		return
+	}
+	secret := &sv
 
-		// Re-fetch the cached entry in case it changed while the lock was released
-		cached, exists = f.usedVars[path]
-		if !exists {
-			// The secret was removed while we were requesting it; skip updating.
-			f.mu.Unlock()
-			continue
+	// Re-fetch the cached entry in case it changed while the lock was released
+	cached, exists = f.usedVars[path]
+	if !exists {
+		// The secret was removed while we were requesting it; skip updating.
+		return
+	}
+	if cached.stale && cached.staleAt > started {
+		// A later refresh of the path failed while this request waited:
+		// this answer may be older than the version that one was for, and
+		// the request that one scheduled stands.
+		return
+	}
+	if secret.Version < version {
+		// Fleet answered with an older version than the one it announced,
+		// as a replica that lags would: the value is applied below when it is
+		// newer than the one held, and the announced version is requested
+		// again, as after a request that failed. At the version held, a path
+		// whose refresh Fleet refused stays stale, its policies stopped.
+		first, wait := f.retryLaterLocked(path, version, false)
+		log := f.logger.Debug
+		if first {
+			log = f.logger.Warn
 		}
-		if cached.stale && cached.staleAt > started {
-			// A later refresh of the path failed while this request waited:
-			// this answer may be older than the version that one was for.
-			f.mu.Unlock()
-			continue
-		}
-		// If the version is already up-to-date or newer, skip overwriting,
-		// unless its refresh failed: Fleet answering the version held means
-		// that value is current, and its policies were stopped for it.
-		if cached.Version > secret.Version || cached.Version == secret.Version && !cached.stale {
-			f.mu.Unlock()
-			continue
-		}
+		log("Fleet answered an older version of the secret than it announced; requesting it again",
+			"path", path, "announced_version", version, "version", secret.Version, "retry_in", wait)
+	}
+	// An answer at the version held, or an older one, changes nothing but
+	// a scheduled request a delivery satisfied meanwhile, which it ends
+	// (completeRetryLocked). A refresh is for a version newer than the one
+	// held, which a stale path keeps until an answer replaces it, so for a
+	// stale path that answer is older than the version announced, as from a
+	// replica that lags: the value held is not current, and the policies
+	// stopped for it stay stopped until Fleet answers with a newer one.
+	if cached.Version >= secret.Version {
+		f.completeRetryLocked(path, cached, changed)
+		return
+	}
+	if r, ok := f.retries[path]; ok && secret.Version >= r.version {
+		// Fleet answered with the version the scheduled request is for, or
+		// a newer one: no further request is needed. An answer with an
+		// older version, to a request for one, leaves it scheduled.
+		f.dropRetryLocked(path)
+		f.logger.Info("Fleet answered the secret request again", "path", path, "version", secret.Version)
+	}
 
-		// Update cache
-		cached.Value = secret.Value
-		cached.Version = secret.Version
-		cached.stale, cached.err = false, nil
-		f.usedVars[path] = cached
+	// Update cache
+	cached.Value = secret.Value
+	cached.Version = secret.Version
+	cached.stale, cached.err = false, nil
+	f.usedVars[path] = cached
 
-		// Mark policies as needing update, unless another path failed for them
-		for id := range cached.policyIDs {
-			if _, failed := changedPolicyIDs[id]; !failed {
-				changedPolicyIDs[id] = nil
-			}
+	// Mark policies as needing update, unless another path failed for them
+	for id := range cached.policyIDs {
+		if _, failed := changed[id]; !failed {
+			changed[id] = nil
 		}
+	}
+}
+
+// retryLaterLocked schedules path to be requested again, for version or a
+// newer one an earlier failure scheduled, refused saying whether Fleet
+// refused the path, and returns whether it is the path's first failure
+// since Fleet last answered with its value, and the wait before the
+// request. A request already scheduled keeps its time; one that just failed
+// waits twice as long as the last, up to fleetRetryMax. The caller holds
+// f.mu.
+func (f *FleetSecretsManager) retryLaterLocked(path string, version int, refused bool) (first bool, wait time.Duration) {
+	r, ok := f.retries[path]
+	if !ok {
+		r = &fleetRetry{delay: fleetRetryFirst}
+		f.retries[path] = r
+	} else if r.timer == nil {
+		r.delay = min(2*r.delay, fleetRetryMax)
+	}
+	r.version = max(r.version, version)
+	if refused {
+		// The policies that use the path are stopped, those a delivery
+		// applied since the last refusal too.
+		r.stopped, r.applied = true, nil
+	}
+	wait = r.delay
+	if r.timer == nil {
+		wait = time.Duration(float64(r.delay) * (0.8 + 0.4*rand.Float64()))
+		r.timer = f.afterFunc(wait, func() { f.retry(path, r) })
+	}
+	return !ok, wait
+}
+
+// dropRetryLocked cancels the request a failed refresh of path scheduled,
+// and reports whether there was one. The caller holds f.mu.
+func (f *FleetSecretsManager) dropRetryLocked(path string) bool {
+	r, ok := f.retries[path]
+	if !ok {
+		return false
+	}
+	if r.timer != nil {
+		r.timer.Stop()
+	}
+	delete(f.retries, path)
+	return true
+}
+
+// completeRetryLocked ends the request a failed refresh of path scheduled,
+// once the value held, cached, is current at the version the request is for
+// or a newer one, as a delivery that fetched the path before or while the
+// request was made leaves it. The policies a refusal stopped for the path are
+// recorded in changed to apply again, unless another path failed for them.
+// A policy whose secrets resolved since the refusal is not one of them: its
+// own delivery applies it with this value (fleetRetry.applied), and applying
+// it again would run it twice. The caller holds f.mu.
+func (f *FleetSecretsManager) completeRetryLocked(path string, cached fleetCachedSecret, changed map[string]error) {
+	r, ok := f.retries[path]
+	if !ok || cached.stale || cached.Version < r.version {
+		return
+	}
+	f.dropRetryLocked(path)
+	f.logger.Info("Fleet answered the secret request again", "path", path, "version", cached.Version)
+	if !r.stopped {
+		return
+	}
+	for id := range cached.policyIDs {
+		if r.applied[id] {
+			continue
+		}
+		if _, failed := changed[id]; !failed {
+			changed[id] = nil
+		}
+	}
+}
+
+// markApplied records that policyID's secrets resolved, in a resolve that
+// started at the invalidation started, for each of paths whose scheduled
+// request is to apply the policies a refusal stopped (fleetRetry.applied):
+// the caller applies the policy with the values held. A path Fleet refused
+// since the resolve started is left out, since that refusal stops the policy
+// whatever value it was given. A scheduled request that finds the path
+// current between the fetch and this record still applies the policy, once
+// more than needed: it is never left stopped.
+func (f *FleetSecretsManager) markApplied(policyID string, paths map[string]struct{}, started uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for path := range paths {
+		r, ok := f.retries[path]
+		if !ok || !r.stopped {
+			continue
+		}
+		if cached := f.usedVars[path]; cached.stale || cached.staleAt > started {
+			continue
+		}
+		if r.applied == nil {
+			r.applied = make(map[string]bool)
+		}
+		r.applied[policyID] = true
+	}
+}
+
+// retry makes the request r scheduled for path, unless it was cancelled or
+// replaced meanwhile, the agent is stopping or no policy uses the path any
+// more, and reports what it changed. A path a delivery fetched again
+// meanwhile, at the version wanted or a newer one, needs no request, but
+// the policies stopped for it are applied again: the delivery applied its
+// own policy only.
+func (f *FleetSecretsManager) retry(path string, r *fleetRetry) {
+	f.mu.Lock()
+	if f.retries[path] != r {
 		f.mu.Unlock()
+		return
 	}
-
-	// Call callback if secrets changed
-	if len(changedPolicyIDs) > 0 && f.callback != nil {
-		f.logger.Info("calling update callback for changed secrets", "policy_count", len(changedPolicyIDs))
-		f.callback(changedPolicyIDs)
+	r.timer = nil
+	ctx := f.ctx
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	cached, exists := f.usedVars[path]
+	if ctx.Err() != nil || !exists {
+		delete(f.retries, path)
+		f.mu.Unlock()
+		return
+	}
+	if !cached.stale && cached.Version >= r.version {
+		changed := make(map[string]error)
+		f.completeRetryLocked(path, cached, changed)
+		f.mu.Unlock()
+		f.report(changed)
+		return
+	}
+	version := r.version
+	f.mu.Unlock()
 
-	return nil
+	f.logger.Debug("requesting the secret again", "path", path, "version", version)
+	changed := make(map[string]error)
+	f.refresh(path, version, changed)
+	f.report(changed)
+}
+
+// report passes the policies whose secrets changed to the callback.
+func (f *FleetSecretsManager) report(changed map[string]error) {
+	if len(changed) > 0 && f.callback != nil {
+		f.logger.Info("calling update callback for changed secrets", "policy_count", len(changed))
+		f.callback(changed)
+	}
+}
+
+// fleetRefusal is an answer in which Fleet refused a secret path, because it
+// doesn't exist, the agent may not read it or it isn't valid, or held no
+// value for it: the secret may be gone or no longer the agent's.
+type fleetRefusal struct {
+	msg string
+}
+
+func (e fleetRefusal) Error() string { return e.msg }
+
+// refused reports whether err is Fleet's answer about the secret or the
+// agent's access to it, rather than no answer, a request that couldn't be
+// sent or a fault Fleet reported of its own.
+func refused(err error) bool {
+	return errors.As(err, new(fleetRefusal))
+}
+
+// answerError is the error Fleet answered for a path with code, worded as
+// msg: a refusal for the codes that are about the secret or the agent's
+// access to it (see refused).
+func answerError(msg, code string) error {
+	switch code {
+	case messages.ErrorCodeNotFound, messages.ErrorCodeForbidden, messages.ErrorCodeInvalidPath:
+		return fleetRefusal{msg: msg}
+	default:
+		return errors.New(msg)
+	}
 }
 
 // Start initializes the Fleet secrets manager
 func (f *FleetSecretsManager) Start(ctx context.Context) error {
 	f.logger.Info("starting secrets manager", "active", "fleet")
 	f.ctx = ctx
+	f.mu.Lock()
 	f.usedVars = make(map[string]fleetCachedSecret)
+	for path := range f.retries {
+		f.dropRetryLocked(path)
+	}
+	f.mu.Unlock()
 	f.logger.Info("secrets manager started", "active", "fleet")
 	return nil
 }
@@ -349,7 +655,7 @@ func (f *FleetSecretsManager) ForgetPolicy(policyID string) {
 }
 
 // retain keeps policyID among the users of the paths in paths only, and
-// drops the paths left with no user.
+// drops the paths left with no user, with any request scheduled for them.
 func (f *FleetSecretsManager) retain(policyID string, paths map[string]struct{}) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -360,6 +666,7 @@ func (f *FleetSecretsManager) retain(policyID string, paths map[string]struct{})
 		delete(cached.policyIDs, policyID)
 		if len(cached.policyIDs) == 0 {
 			delete(f.usedVars, path)
+			f.dropRetryLocked(path)
 		}
 	}
 }
@@ -375,6 +682,9 @@ func (f *FleetSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	f.mu.RLock()
+	started := f.invalidations
+	f.mu.RUnlock()
 	if err := f.ensureSecrets(ctx, setToSortedSlice(pathSet), payload.ID); err != nil {
 		return payload, err
 	}
@@ -388,6 +698,7 @@ func (f *FleetSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (
 	}
 
 	newPayload.Data = processedData
+	f.markApplied(payload.ID, pathSet, started)
 	return newPayload, nil
 }
 
@@ -436,6 +747,9 @@ func (f *FleetSecretsManager) SolveConfigSecrets(backends map[string]any, config
 	// Do not track updates on config vars for now
 	f.mu.Lock()
 	f.usedVars = make(map[string]fleetCachedSecret)
+	for path := range f.retries {
+		f.dropRetryLocked(path)
+	}
 	f.mu.Unlock()
 
 	return newBackends, newConfigManager, nil
@@ -717,13 +1031,13 @@ func (f *FleetSecretsManager) requestSecrets(ctx context.Context, paths []string
 		if response.Status == "error" {
 			if len(response.Errors) > 0 {
 				err0 := response.Errors[0]
-				return nil, fmt.Errorf("secret request failed: %s (code: %s)", err0.Error, err0.Code)
+				return nil, answerError(fmt.Sprintf("secret request failed: %s (code: %s)", err0.Error, err0.Code), err0.Code)
 			}
 			return nil, fmt.Errorf("secret request failed with status: %s", response.Status)
 		}
 
 		if len(response.Secrets) == 0 && len(paths) > 0 {
-			return nil, fmt.Errorf("no secrets in response")
+			return nil, fleetRefusal{msg: "no secrets in response"}
 		}
 
 		want := make(map[string]struct{}, len(paths))
@@ -750,14 +1064,14 @@ func (f *FleetSecretsManager) requestSecrets(ctx context.Context, paths []string
 				var combinedErr error
 				for _, fe := range failed {
 					if fe.Path == p {
-						combinedErr = fmt.Errorf("secret request failed for path %s: %s (code: %s)", fe.Path, fe.Error, fe.Code)
+						combinedErr = answerError(fmt.Sprintf("secret request failed for path %s: %s (code: %s)", fe.Path, fe.Error, fe.Code), fe.Code)
 						break
 					}
 				}
 				if combinedErr != nil {
 					return nil, combinedErr
 				}
-				return nil, fmt.Errorf("secret missing in response for path %s", p)
+				return nil, fleetRefusal{msg: fmt.Sprintf("secret missing in response for path %s", p)}
 			}
 		}
 
@@ -779,7 +1093,11 @@ func (f *FleetSecretsManager) requestSecrets(ctx context.Context, paths []string
 				// notification stored meanwhile, nor clears a failure that
 				// came after its request started.
 				outdated := cached.stale && cached.staleAt > started
-				if !outdated && (!exists || sv.Version >= cached.Version) {
+				// Nor does an answer at the version held clear a path whose
+				// refresh failed while a request for a newer version is
+				// scheduled: it comes from a replica that lags (see refresh).
+				lagging := cached.stale && sv.Version == cached.Version && f.retries[p] != nil
+				if !outdated && !lagging && (!exists || sv.Version >= cached.Version) {
 					cached.Value = sv.Value
 					cached.Version = sv.Version
 					cached.stale, cached.err = false, nil

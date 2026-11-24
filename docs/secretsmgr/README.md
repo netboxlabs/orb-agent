@@ -295,3 +295,45 @@ The agent keeps its own login to Vault going: it logs in again when its token
 ends, so its policies keep running without a restart, unless it was given a
 token with token auth or a wrapped `secret_id`, which it cannot log in again
 with. See [Token lifetime](vault.md#token-lifetime).
+
+## Secrets from Fleet
+
+An agent that Fleet manages can take its secrets from Fleet, with
+`active: fleet` and references of the form `${fleet://<path>}`, as the agent's
+default configuration in Fleet mode does. Fleet secrets take no `schedule`:
+Fleet tells the agent when a secret one of its policies uses has a new
+version, and the agent requests the new value then. Once Fleet answers with
+it, the policies that use the secret are re-applied with the new value.
+
+When that request fails, the agent requests the secret again a minute later,
+then after twice as long each time it fails again, up to 10 minutes, each
+wait varied by up to a fifth so that agents a Fleet outage failed together
+don't ask again together. It goes on until Fleet answers with the value, or
+no policy uses the secret any more. What happens to the policies meanwhile
+depends on the failure:
+
+- when Fleet answers that the secret doesn't exist, that the agent may not
+  read it or that the path isn't valid, or answers without the secret, the
+  agent stops the policies that use it, and reports each one failed with a
+  reason that starts with `failed to resolve policy secrets:`;
+- when Fleet doesn't answer within `timeout` (30 seconds by default), the
+  request can't be sent, or Fleet answers with an error of its own, such as
+  an internal error or a rate limit, the policies keep running with the
+  value they have.
+
+The first request Fleet answers with the value re-applies the policies with
+it, those it stopped included, with no new delivery from Fleet. A delivery
+that fetches the value first, even while that request is being made, ends it
+the same way: the policies it stopped are applied again, except those a
+delivery applied meanwhile, which are not applied twice. A newer version
+announced meanwhile is requested at once, while the version the agent is
+requesting, or is to request again, announced again, waits for that request
+and makes no second one. An answer with an older version than Fleet
+announced, as from a replica that lags, is applied when it is newer than the
+value the agent holds, and the announced version is requested again the same
+way until Fleet answers with it or a newer one. At the version the agent
+holds, that answer changes nothing: policies the agent stopped stay stopped.
+The first failure is logged at ERROR, saying whether the policies stop or
+keep running, as is a refusal that stops them later; the other requests that
+fail are logged at DEBUG, and the answer that ends the failures as `Fleet
+answered the secret request again` at INFO.

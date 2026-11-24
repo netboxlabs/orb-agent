@@ -156,6 +156,8 @@ func TestFleetSecretsManager_handleResponse(t *testing.T) {
 func TestFleetSecretsManager_handleUpdateNotification(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 	fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{})
+	timers := &fakeRetryTimers{}
+	fm.afterFunc = timers.afterFunc
 	fm.usedVars = make(map[string]fleetCachedSecret)
 	fm.usedVars["test/path"] = fleetCachedSecret{
 		Value:     "oldvalue",
@@ -185,13 +187,16 @@ func TestFleetSecretsManager_handleUpdateNotification(t *testing.T) {
 	payload, err := json.Marshal(notification)
 	require.NoError(t, err)
 
-	// handleUpdateNotification has no publisher: fetch fails, callback reports the error.
+	// handleUpdateNotification has no publisher: the request can't be sent,
+	// so the policy keeps the value it runs with, and the path is requested
+	// again later.
 	err = fm.handleUpdateNotification(payload)
 	assert.NoError(t, err)
 
-	assert.True(t, callbackCalled)
-	assert.Contains(t, callbackPolicyIDs, "policy1")
-	assert.ErrorContains(t, callbackPolicyIDs["policy1"], "MQTT publisher not bound")
+	assert.False(t, callbackCalled, "reported %v", callbackPolicyIDs)
+	assert.False(t, fm.usedVars["test/path"].stale)
+	assert.Equal(t, "oldvalue", fm.usedVars["test/path"].Value)
+	assert.Len(t, timers.pending(), 1)
 }
 
 func TestFleetSecretsManager_handleUpdateNotification_successUpdatesCacheAndCallbacks(t *testing.T) {
@@ -406,6 +411,7 @@ func TestFleetSecretsManager_aFailedRefreshIsRequestedAgainOnResolve(t *testing.
 
 	fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(5)})
 	fm.ctx = ctx
+	fm.afterFunc = (&fakeRetryTimers{}).afterFunc
 	fm.requestTopic = "test/request"
 	fm.responseTopic = "test/response"
 	fm.updatedTopic = "test/updated"
@@ -421,7 +427,14 @@ func TestFleetSecretsManager_aFailedRefreshIsRequestedAgainOnResolve(t *testing.
 		Updates:       []messages.SecretUpdate{{Path: "test/path", Version: 2, Contexts: []string{"policy1"}}},
 	})
 	require.NoError(t, err)
-	// No publisher bound yet: the refresh fails.
+	// Fleet refuses the refresh.
+	fm.publisher = &asyncMockPublisher{fm: fm, customResponse: func(req messages.SecretRequestMsg) *messages.SecretResponseMsg {
+		return &messages.SecretResponseMsg{
+			SchemaVersion: messages.CurrentSecretsSchemaVersion, RequestID: req.RequestID, Timestamp: time.Now(), Status: "error",
+			Errors: []messages.SecretError{{Path: "test/path", Error: "not found", Code: messages.ErrorCodeNotFound}},
+		}
+	}}
+	fm.subscriber = &mockSubscriber{}
 	require.NoError(t, fm.handleUpdateNotification(notification))
 	require.Error(t, reported["policy1"])
 
@@ -461,6 +474,7 @@ func newFleetManagerForStaleTests(t *testing.T, respond func(req messages.Secret
 	fm.requestTopic = "test/request"
 	fm.responseTopic = "test/response"
 	fm.updatedTopic = "test/updated"
+	fm.afterFunc = (&fakeRetryTimers{}).afterFunc
 	requests := 0
 	fm.publisher = &asyncMockPublisher{fm: fm, onPublish: func() { requests++ }, customResponse: respond}
 	fm.subscriber = &mockSubscriber{}
@@ -664,13 +678,15 @@ func intPtr(i int) *int {
 
 // scriptedPublisher answers each request with what answer returns for its
 // sequence number; a nil answer leaves the request unanswered, as a lost QoS 0
-// publish. published is closed when the first request is published.
+// publish. published is closed when the first request is published. A
+// request for which publishErr returns an error fails to publish.
 type scriptedPublisher struct {
-	fm        *FleetSecretsManager
-	mu        sync.Mutex
-	n         int
-	published chan struct{}
-	answer    func(n int, req messages.SecretRequestMsg) (resp *messages.SecretResponseMsg, after <-chan struct{})
+	fm         *FleetSecretsManager
+	mu         sync.Mutex
+	n          int
+	published  chan struct{}
+	answer     func(n int, req messages.SecretRequestMsg) (resp *messages.SecretResponseMsg, after <-chan struct{})
+	publishErr func(n int) error
 }
 
 func (p *scriptedPublisher) Publish(_ context.Context, _ string, payload []byte) error {
@@ -684,6 +700,11 @@ func (p *scriptedPublisher) Publish(_ context.Context, _ string, payload []byte)
 	p.mu.Unlock()
 	if n == 1 {
 		close(p.published)
+	}
+	if p.publishErr != nil {
+		if err := p.publishErr(n); err != nil {
+			return err
+		}
 	}
 	resp, after := p.answer(n, req)
 	if resp == nil {
@@ -706,11 +727,78 @@ func fleetAnswer(req messages.SecretRequestMsg, value string, version int) *mess
 	}
 }
 
+// fleetRefuses is Fleet's error answer with code for the request's path.
+func fleetRefuses(req messages.SecretRequestMsg, code string) *messages.SecretResponseMsg {
+	return &messages.SecretResponseMsg{
+		SchemaVersion: messages.CurrentSecretsSchemaVersion, RequestID: req.RequestID, Timestamp: time.Now(), Status: "error",
+		Errors: []messages.SecretError{{Path: req.Secrets[0].Path, Error: "refused", Code: code}},
+	}
+}
+
+// fakeRetryTimers records the requests a manager schedules, to fire by hand.
+type fakeRetryTimers struct {
+	mu     sync.Mutex
+	timers []*fakeRetryTimer
+}
+
+type fakeRetryTimer struct {
+	ft             *fakeRetryTimers
+	wait           time.Duration
+	f              func()
+	fired, stopped bool
+}
+
+func (ft *fakeRetryTimers) afterFunc(d time.Duration, f func()) retryTimer {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	timer := &fakeRetryTimer{ft: ft, wait: d, f: f}
+	ft.timers = append(ft.timers, timer)
+	return timer
+}
+
+func (t *fakeRetryTimer) Stop() bool {
+	t.ft.mu.Lock()
+	defer t.ft.mu.Unlock()
+	was := !t.fired && !t.stopped
+	t.stopped = true
+	return was
+}
+
+// pending returns the waits of the timers neither fired nor stopped.
+func (ft *fakeRetryTimers) pending() []time.Duration {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	var waits []time.Duration
+	for _, timer := range ft.timers {
+		if !timer.fired && !timer.stopped {
+			waits = append(waits, timer.wait)
+		}
+	}
+	return waits
+}
+
+// fire fires the one pending timer, and waits for what it calls to return.
+func (ft *fakeRetryTimers) fire(t *testing.T) {
+	t.Helper()
+	ft.mu.Lock()
+	var due []*fakeRetryTimer
+	for _, timer := range ft.timers {
+		if !timer.fired && !timer.stopped {
+			due = append(due, timer)
+		}
+	}
+	require.Len(t, due, 1, "one request is scheduled")
+	due[0].fired = true
+	ft.mu.Unlock()
+	due[0].f()
+}
+
 func newScriptedFleetManager(t *testing.T, timeout int, answer func(int, messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{})) (*FleetSecretsManager, *scriptedPublisher) {
 	t.Helper()
 	fm := NewFleetSecretsManager(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError})), config.FleetSecretsManager{Timeout: intPtr(timeout)})
 	fm.ctx = context.Background()
 	fm.requestTopic, fm.responseTopic, fm.updatedTopic = "test/request", "test/response", "test/updated"
+	fm.afterFunc = (&fakeRetryTimers{}).afterFunc
 	pub := &scriptedPublisher{fm: fm, published: make(chan struct{}), answer: answer}
 	fm.publisher = pub
 	fm.subscriber = &mockSubscriber{}
@@ -816,42 +904,13 @@ func TestFleetSecretsManager_unresolvedAndTheUsersOfAPath(t *testing.T) {
 	assert.Equal(t, map[string]bool{"policy2": true}, fm.usedVars["b"].policyIDs)
 }
 
-// Fleet answering, for a path whose refresh failed, the version the agent
-// already holds means that value is current: a notification and a delivery
-// alike clear the stale mark, and the notification re-applies the policies.
-func TestFleetSecretsManager_anAnswerAtTheHeldVersionClearsAStalePath(t *testing.T) {
-	for _, via := range []string{"notification", "delivery"} {
-		t.Run(via, func(t *testing.T) {
-			fm, _ := newScriptedFleetManager(t, 5, func(_ int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
-				return fleetAnswer(req, "v1", 1), nil
-			})
-			fm.usedVars = map[string]fleetCachedSecret{
-				"snmp/community": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true}, stale: true, err: fmt.Errorf("refresh failed")},
-			}
-			var reported map[string]error
-			fm.callback = func(m map[string]error) { reported = m }
-
-			if via == "notification" {
-				notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 2})
-				assert.Equal(t, map[string]error{"policy1": nil}, reported)
-			} else {
-				_, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy1", Data: map[string]any{"c": "${fleet://snmp/community}"}})
-				require.NoError(t, err)
-			}
-			assert.NoError(t, fm.Unresolved("policy1"))
-			fm.mu.Lock()
-			defer fm.mu.Unlock()
-			assert.False(t, fm.usedVars["snmp/community"].stale)
-		})
-	}
-}
-
-// A refresh that fails reports every policy using the path when it fails,
-// including one that resolved the path while the request was in flight, and
-// so runs with the value the failed refresh was to replace.
+// A refresh Fleet refuses reports every policy using the path when it is
+// refused, including one that resolved the path while the request was in
+// flight, and so runs with the value the refused refresh was to replace.
 func TestFleetSecretsManager_aFailedRefreshReportsThePoliciesThatResolvedThePathMeanwhile(t *testing.T) {
-	fm, pub := newScriptedFleetManager(t, 1, func(int, messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
-		return nil, nil // lost: it times out
+	release := make(chan struct{})
+	fm, pub := newScriptedFleetManager(t, 5, func(_ int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+		return fleetRefuses(req, messages.ErrorCodeForbidden), release
 	})
 	fm.usedVars = map[string]fleetCachedSecret{
 		"snmp/community": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true}},
@@ -869,6 +928,7 @@ func TestFleetSecretsManager_aFailedRefreshReportsThePoliciesThatResolvedThePath
 	<-pub.published
 	_, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy2", Data: map[string]any{"c": "${fleet://snmp/community}"}})
 	require.NoError(t, err)
+	close(release)
 	<-done
 
 	mu.Lock()
@@ -883,10 +943,7 @@ func TestFleetSecretsManager_aFailedRefreshReportsThePoliciesThatResolvedThePath
 // through a notification or a delivery, and reports no policy to re-apply.
 func TestFleetSecretsManager_anAnswerFromBeforeAFailedRefreshLeavesThePathStale(t *testing.T) {
 	refused := func(req messages.SecretRequestMsg) *messages.SecretResponseMsg {
-		return &messages.SecretResponseMsg{
-			SchemaVersion: messages.CurrentSecretsSchemaVersion, RequestID: req.RequestID, Timestamp: time.Now(), Status: "error",
-			Errors: []messages.SecretError{{Path: req.Secrets[0].Path, Error: "unavailable", Code: messages.ErrorCodeInternalError}},
-		}
+		return fleetRefuses(req, messages.ErrorCodeNotFound)
 	}
 	for _, via := range []string{"notification", "delivery"} {
 		t.Run(via, func(t *testing.T) {
