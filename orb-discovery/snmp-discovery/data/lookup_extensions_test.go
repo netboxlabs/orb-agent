@@ -772,7 +772,7 @@ func TestDeviceLookup_GetDeviceModel_Static(t *testing.T) {
 
 	got, err := deviceLookup.GetDeviceModel(".1.3.6.1.4.1.3375.2.1.3.4.113", nil)
 	require.NoError(t, err)
-	assert.Equal(t, "f5BIGIPi10800", got)
+	assert.Equal(t, "BIG-IP i10800", got)
 }
 
 func TestDeviceLookup_GetDeviceModel_DynamicRef(t *testing.T) {
@@ -870,7 +870,7 @@ func TestDeviceLookup_GetDevice_BackwardCompatibleLiteral(t *testing.T) {
 	require.NoError(t, err)
 	got, err := deviceLookup.GetDevice(".1.3.6.1.4.1.3375.2.1.3.4.113")
 	require.NoError(t, err)
-	assert.Equal(t, "f5BIGIPi10800", got)
+	assert.Equal(t, "BIG-IP i10800", got)
 }
 
 // Embedded YAML keys carry leading dots (e.g. ".1.3.6.1.4.1...") but
@@ -881,7 +881,7 @@ func TestDeviceLookup_GetDevice_NoLeadingDotMatches(t *testing.T) {
 	require.NoError(t, err)
 	got, err := deviceLookup.GetDevice("1.3.6.1.4.1.3375.2.1.3.4.113")
 	require.NoError(t, err, "GetDevice should accept the no-leading-dot spelling for a YAML key written with a leading dot")
-	assert.Equal(t, "f5BIGIPi10800", got)
+	assert.Equal(t, "BIG-IP i10800", got)
 }
 
 func TestDeviceLookup_GetDeviceModel_DeviceOIDNoLeadingDotMatches(t *testing.T) {
