@@ -2,6 +2,7 @@ package backend
 
 import (
 	"log/slog"
+	"maps"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -271,4 +272,61 @@ func TestMonitorClearsTheErrorWhenABackendRecovers(t *testing.T) {
 	require.NotNil(t, state)
 	require.Equal(t, Running, state.Status)
 	require.Empty(t, state.LastError, "a backend that is up carries no error")
+}
+
+// erroringBackend is a running telemetry backend that reports, for each
+// policy it runs, the error of the policy's last collection.
+type erroringBackend struct {
+	countingBackend
+	errMu sync.Mutex
+	errs  map[string]PolicyError
+}
+
+var _ PolicyErrorProvider = (*erroringBackend)(nil)
+
+func (e *erroringBackend) GetPolicyErrors() (map[string]PolicyError, error) {
+	e.errMu.Lock()
+	defer e.errMu.Unlock()
+	errs := make(map[string]PolicyError, len(e.errs))
+	maps.Copy(errs, e.errs)
+	return errs, nil
+}
+
+func (e *erroringBackend) report(errs map[string]PolicyError) {
+	e.errMu.Lock()
+	defer e.errMu.Unlock()
+	e.errs = errs
+}
+
+// The monitor stores, on each tick, the error a telemetry backend reports
+// for each policy's last collection as the policy's collection error, and
+// clears it once the backend reports the policy collecting again. A name no
+// policy has is skipped.
+func TestMonitorStoresTheCollectionErrorOfEachPolicy(t *testing.T) {
+	manager, channels := newTestManager(t, make(chan string, 1))
+	require.NoError(t, manager.policyRepo.Update(policies.PolicyData{ID: "policy-1", Name: "core", Backend: "snmp_telemetry", State: policies.Running}))
+	be := &erroringBackend{countingBackend: countingBackend{status: Running, started: time.Now()}}
+	be.report(map[string]PolicyError{
+		"core": {Message: "metrics collection failed: 10.0.0.1:161: request timeout", At: time.Now()},
+		"gone": {Message: "timeout"},
+	})
+	manager.StartBackendMonitor("snmp_telemetry", be)
+	require.Len(t, *channels, 1)
+	tick := (*channels)[0]
+	collectionErr := func() string {
+		t.Helper()
+		pd, err := manager.policyRepo.Get("policy-1")
+		require.NoError(t, err)
+		return pd.CollectionErr
+	}
+
+	// The second tick arrives once the first one's poll has been stored.
+	sendTick(t, tick)
+	sendTick(t, tick)
+	require.Equal(t, "metrics collection failed: 10.0.0.1:161: request timeout", collectionErr())
+
+	be.report(map[string]PolicyError{"core": {}})
+	sendTick(t, tick)
+	sendTick(t, tick)
+	require.Empty(t, collectionErr(), "cleared once the policy collects again")
 }

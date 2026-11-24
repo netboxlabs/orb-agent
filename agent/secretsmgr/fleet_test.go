@@ -49,6 +49,44 @@ func TestFleetSecretsManager_processString(t *testing.T) {
 		assert.Equal(t, "secretvalue", result)
 	})
 
+	t.Run("valid generic secret reference", func(t *testing.T) {
+		fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(5)})
+		fm.ctx = ctx
+		fm.requestTopic = "test/request"
+		fm.responseTopic = "test/response"
+		fm.updatedTopic = "test/updated"
+
+		mockPub := &asyncMockPublisher{fm: fm}
+		fm.publisher = mockPub
+		fm.subscriber = &mockSubscriber{}
+
+		result, err := fm.processString("${secret://orb/agents/database/password}", "policy1")
+		assert.NoError(t, err)
+		assert.Equal(t, "secretvalue", result)
+	})
+
+	t.Run("empty body rejected", func(t *testing.T) {
+		// An empty body must produce a clear error rather than leaking the
+		// literal placeholder to the backend, for both reference forms.
+		fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(1)})
+		fm.ctx = ctx
+
+		_, err := fm.processString("${fleet://}", "policy1")
+		assert.ErrorContains(t, err, "empty body")
+
+		_, err = fm.processString("${secret://}", "policy1")
+		assert.ErrorContains(t, err, "empty body")
+	})
+
+	t.Run("empty body error quotes the reference alone", func(t *testing.T) {
+		fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(1)})
+		fm.ctx = ctx
+
+		_, err := fm.processString("https://user:pass@host/${secret://}", "policy1")
+		require.ErrorContains(t, err, "${secret://}")
+		assert.NotContains(t, err.Error(), "pass")
+	})
+
 	t.Run("cached secret", func(t *testing.T) {
 		fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(1)})
 		fm.ctx = ctx
@@ -1040,4 +1078,29 @@ func TestFleetSecretsManager_aFailedFirstResolveLeavesAPathRefreshedMeanwhile(t 
 	assert.Equal(t, "v1", entry.Value)
 	assert.True(t, entry.policyIDs["policy1"])
 	assert.NoError(t, fm.Unresolved("policy1"))
+}
+
+// An empty body never resolves, so Unresolved answers it until the policy
+// resolves or is forgotten: a manage that failed on it is not retried as if a
+// concurrent read had resolved it.
+func TestFleetSecretsManager_UnresolvedAnswersEmptyBody(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(1)})
+	fm.ctx = context.Background()
+
+	bad := config.PolicyPayload{ID: "p1", Data: map[string]any{"password": "${secret://}"}}
+	_, err := fm.SolvePolicySecrets(bad)
+	require.ErrorContains(t, err, "empty body")
+	assert.ErrorContains(t, fm.Unresolved("p1"), "empty body")
+	assert.NoError(t, fm.Unresolved("p2"))
+
+	fixed := config.PolicyPayload{ID: "p1", Data: map[string]any{"password": "plain"}}
+	_, err = fm.SolvePolicySecrets(fixed)
+	require.NoError(t, err)
+	assert.NoError(t, fm.Unresolved("p1"))
+
+	_, err = fm.SolvePolicySecrets(bad)
+	require.Error(t, err)
+	fm.ForgetPolicy("p1")
+	assert.NoError(t, fm.Unresolved("p1"))
 }

@@ -1,0 +1,18 @@
+{
+  "1": {
+    "name": "VLAN 0001",
+    "interfaces": []
+  },
+  "120": {
+    "name": "VLAN 0120",
+    "interfaces": []
+  },
+  "300": {
+    "name": "MGMT-NET",
+    "interfaces": []
+  },
+  "310": {
+    "name": "Guest WiFi",
+    "interfaces": []
+  }
+}

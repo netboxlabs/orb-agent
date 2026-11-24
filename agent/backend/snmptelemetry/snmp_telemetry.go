@@ -22,11 +22,15 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
-var _ backend.Backend = (*snmpTelemetryBackend)(nil)
+var (
+	_ backend.Backend             = (*snmpTelemetryBackend)(nil)
+	_ backend.PolicyErrorProvider = (*snmpTelemetryBackend)(nil)
+)
 
 const (
 	versionTimeout      = 2
 	capabilitiesTimeout = 5
+	policyStatusTimeout = 5
 	// The binary's DELETE blocks on the policy's scheduler shutdown, which it
 	// bounds at 24 seconds, and a POST for a name still stopping waits on that
 	// same shutdown; both timeouts clear that bound.
@@ -52,11 +56,11 @@ var stopProcess = backend.StopProcess
 // OTLP. Every metric leaves over OTLP, so the backend refuses to configure
 // without common.otlp.grpc rather than start a process with nowhere to export.
 //
-// It does not implement backend.PolicyStatusProvider. The agent uses that
-// provider only to feed each policy's runs into the policy repo, and a
-// telemetry policy is a continuous collector with no runs to report: its
-// status carries a name, a state and a last error. Implementing the provider
-// would poll the status endpoint every cycle to update nothing.
+// It does not implement backend.PolicyStatusProvider, which feeds each
+// policy's runs into the policy repo: a telemetry policy is a continuous
+// collector with no runs to report. It implements backend.PolicyErrorProvider
+// instead, since the status of each of its policies carries the error of the
+// policy's last collection.
 type snmpTelemetryBackend struct {
 	logger     *slog.Logger
 	policyRepo policies.PolicyRepo
@@ -511,6 +515,23 @@ func (d *snmpTelemetryBackend) GetCapabilities() (map[string]any, error) {
 		return nil, err
 	}
 	return caps, nil
+}
+
+// GetPolicyErrors reads the binary's status: each policy it runs, with
+// last_error and last_error_at set while the policy runs with errors
+// (running_with_errors).
+func (d *snmpTelemetryBackend) GetPolicyErrors() (map[string]backend.PolicyError, error) {
+	var resp backend.StatusResponse
+	err := backend.CommonRequest("snmp-telemetry", d.proc, d.logger, d.apiURL("status"), &resp, http.MethodGet,
+		http.NoBody, "application/json", policyStatusTimeout, "detail")
+	if err != nil {
+		return nil, err
+	}
+	errs := make(map[string]backend.PolicyError, len(resp.Policies))
+	for _, policy := range resp.Policies {
+		errs[policy.Name] = backend.PolicyError{Message: policy.LastError, At: policy.LastErrorAt}
+	}
+	return errs, nil
 }
 
 func (d *snmpTelemetryBackend) GetRunningStatus() (backend.RunningStatus, string, error) {

@@ -206,6 +206,20 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 					}
 				}
 			}
+			// A telemetry backend's policies have no runs: each reports the
+			// error of its last collection instead, cleared once it works.
+			if provider, ok := be.(PolicyErrorProvider); ok && manager.policyRepo != nil {
+				errs, err := provider.GetPolicyErrors()
+				if err != nil {
+					manager.logger.Debug("failed to get policy errors", "backend", name, "error", err)
+				} else {
+					for policyName, pe := range errs {
+						if err := manager.policyRepo.UpdateCollectionError(policyName, pe.Message, pe.At); err != nil {
+							manager.logger.Debug("failed to update the collection error for policy", "policy", policyName, "error", err)
+						}
+					}
+				}
+			}
 		}
 	}()
 }

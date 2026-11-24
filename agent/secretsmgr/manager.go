@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
@@ -58,7 +59,9 @@ func New(logger *slog.Logger, c config.ManagerSecrets) (Manager, error) {
 
 var _ Manager = (*dummyManager)(nil)
 
-type dummyManager struct{}
+type dummyManager struct {
+	refused refusals
+}
 
 func (v *dummyManager) Start(_ context.Context) error {
 	return nil
@@ -67,20 +70,73 @@ func (v *dummyManager) Start(_ context.Context) error {
 func (v *dummyManager) RegisterUpdatePoliciesCallback(_ func(map[string]error)) {
 }
 
-func (v *dummyManager) Unresolved(_ string) error {
-	return nil
+func (v *dummyManager) Unresolved(policyID string) error {
+	return v.refused.get(policyID)
 }
 
 func (v *dummyManager) PolicyApplied(_ string, _ any) {
 }
 
-func (v *dummyManager) ForgetPolicy(_ string) {
+func (v *dummyManager) ForgetPolicy(policyID string) {
+	v.refused.set(policyID, nil)
 }
 
+// SolvePolicySecrets passes provider-specific placeholders through untouched
+// (pre-existing behavior), but fails fast on a generic ${secret://…} reference:
+// it explicitly asks for the active secrets manager, and there is none — better
+// a clear error than the literal placeholder reaching the backend.
 func (v *dummyManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
-	return payload, nil
+	_, err := processValue(payload.Data, genericScheme, payload.ID, rejectGenericRef)
+	v.refused.set(payload.ID, err)
+	return payload, err
 }
 
+// SolveConfigSecrets applies the same fail-fast rule to config-level values.
 func (v *dummyManager) SolveConfigSecrets(backends map[string]any, configManager config.ManagerConfig) (map[string]any, config.ManagerConfig, error) {
+	if _, err := processValue(backends, genericScheme, "_backends", rejectGenericRef); err != nil {
+		return backends, configManager, err
+	}
+	cmMap, err := structToMap(configManager)
+	if err != nil {
+		return backends, configManager, err
+	}
+	if _, err := processValue(cmMap, genericScheme, "_config_manager", rejectGenericRef); err != nil {
+		return backends, configManager, err
+	}
 	return backends, configManager, nil
+}
+
+// rejectGenericRef is the dummy manager's resolver: any ${secret://…} reference
+// is an error because no secrets manager is configured to resolve it. The
+// message is neutral because the reference may sit in a policy or in config.
+func rejectGenericRef(body, _ string) (string, error) {
+	return "", fmt.Errorf("a managed secret reference (${secret://%s}) was found but no secrets manager is configured", body)
+}
+
+// refusals holds, by policy ID, why its last solve was refused for a
+// reference that cannot resolve as written, for Unresolved to answer until
+// the policy resolves or is forgotten.
+type refusals struct {
+	mu  sync.Mutex
+	err map[string]error
+}
+
+// set records err for the policy, or clears the policy when err is nil.
+func (r *refusals) set(policyID string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err == nil {
+		delete(r.err, policyID)
+		return
+	}
+	if r.err == nil {
+		r.err = make(map[string]error)
+	}
+	r.err[policyID] = err
+}
+
+func (r *refusals) get(policyID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.err[policyID]
 }

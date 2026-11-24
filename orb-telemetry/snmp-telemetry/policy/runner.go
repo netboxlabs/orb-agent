@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
+	"github.com/gosnmp/gosnmp"
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/collector"
@@ -410,11 +411,37 @@ func (r *Runner) runMetrics(target config.Target) {
 	key := newTargetKey(target, auth)
 	dial := collector.DialOptions{Timeout: r.snmpTimeout, Retries: r.retries}
 	if err := r.metricsCollector.CollectTarget(ctx, target, auth, policyName, dial); err != nil {
+		err = credentialRefusal(err)
 		r.logger.Warn("SNMP metrics collection failed", "host", config.SanitizeLogValue(target.Host), "policy", config.SanitizeLogValue(policyName), "error", err)
 		r.setTargetError(key, err)
 	} else {
 		r.clearTargetError(key)
 	}
+}
+
+// credentialRefusal names an SNMPv3 credential the device refused as one.
+// A device answers a request whose user, authentication or privacy it does
+// not accept with a report PDU, which gosnmp returns as one of these errors,
+// so the poller can tell a refused credential from a device that does not
+// answer, which times out. (A wrong SNMPv1/v2c community gets no answer at
+// all, so it stays a timeout.) The text names the setting to check, and no
+// value: gosnmp's errors carry none, and neither does what is added here.
+// Any other error is returned as it is.
+func credentialRefusal(err error) error {
+	var check string
+	switch {
+	case errors.Is(err, gosnmp.ErrUnknownUsername):
+		check = "the device does not know the username"
+	case errors.Is(err, gosnmp.ErrWrongDigest):
+		check = "check the auth_protocol and auth_passphrase"
+	case errors.Is(err, gosnmp.ErrDecryption):
+		check = "check the priv_protocol and priv_passphrase"
+	case errors.Is(err, gosnmp.ErrUnknownSecurityLevel):
+		check = "the device does not accept the security_level for the username"
+	default:
+		return err
+	}
+	return fmt.Errorf("the device refused the SNMPv3 credential (%s): %w", check, err)
 }
 
 // targetKey names one entry of a policy's scope. Host and port alone do not: a

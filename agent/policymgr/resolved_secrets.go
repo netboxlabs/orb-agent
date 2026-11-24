@@ -122,6 +122,11 @@ type departedSecrets struct {
 	// policySecrets), and those it had when it was removed.
 	names  []string
 	values []resolvedValue
+	// earlier are the values of the resolution before those (see
+	// policySecrets). An error the backend reported for the policy, stored
+	// under one of its names after it departed, can quote them as its runs
+	// could, so they mask that (see maskOthers), not the backend's output.
+	earlier []resolvedValue
 	// at is when the policy departed, and seen when the backend last
 	// reported a run of it still running, or at.
 	at, seen time.Time
@@ -209,7 +214,7 @@ func (s *resolvedSecrets) departLocked(policyID string, ps policySecrets) {
 	now := s.now()
 	s.departed = append(s.departed, departedSecrets{
 		policyID: policyID, backend: ps.backend, names: slices.Clone(ps.names), values: ps.both(),
-		at: now, seen: now, prune: s.afterFunc(removedGrace, s.prune),
+		earlier: slices.Clone(ps.earlier), at: now, seen: now, prune: s.afterFunc(removedGrace, s.prune),
 	})
 }
 
@@ -339,6 +344,51 @@ func (s *resolvedSecrets) current(policyID string, runs []policies.RunData) []po
 	})
 }
 
+// currentAt reports whether something a backend recorded at at for the
+// policy policyID is the policy's own, as current does for runs: recorded at
+// or after the policy's since. A policy the agent never gave the backend has
+// none. A time of zero, which tells nothing, is kept.
+func (s *resolvedSecrets) currentAt(policyID string, at time.Time) bool {
+	if at.IsZero() {
+		return true
+	}
+	s.mu.Lock()
+	ps, ok := s.byPolicy[policyID]
+	s.mu.Unlock()
+	return ok && !at.Before(ps.since)
+}
+
+// maskOthers masks, in text a backend reported under the name policyName,
+// the values of the policies other than policyID it knew by that name: those
+// it runs, and those that departed lately (see removedGrace), each with the
+// values of its last three resolutions, as its runs are masked. A report read
+// before one of them departed can be stored on the policy that holds the
+// name by now. A policy is in one of the two sets, whatever the store holds
+// of it at the moment: removed moves it from one to the other at once.
+func (s *resolvedSecrets) maskOthers(policyName, policyID, text string) string {
+	if text == "" {
+		return text
+	}
+	s.mu.Lock()
+	s.pruneLocked()
+	var values []string
+	for id, ps := range s.byPolicy {
+		if id != policyID && slices.Contains(ps.names, policyName) {
+			values = appendNew(values, ps.forRuns())
+		}
+	}
+	for _, d := range s.departed {
+		if slices.Contains(d.names, policyName) {
+			values = appendNew(appendNew(values, d.values), d.earlier)
+		}
+	}
+	s.mu.Unlock()
+	if len(values) == 0 {
+		return text
+	}
+	return redact.NewMasker(append(values, newHostSet(values).forms()...)).Mask(text)
+}
+
 // maskOutput masks, in a line a backend's process printed, the values of
 // every policy the backend runs, or ran lately (see removedGrace): a line
 // names no policy.
@@ -441,6 +491,66 @@ func (r *maskingRepo) UpdateRunsWith(policyName string, runs []policies.RunData,
 		r.secrets.masksOf(policyID).maskRuns(runs)
 		return r.secrets.current(policyID, runs)
 	})
+}
+
+// UpdateCollectionError masks the values the policy's secret references
+// resolved to in the error a backend reports for the policy's last
+// collection, and keeps it to the bound a refusal is kept to, as a run's
+// reason is: the error rides every heartbeat to Fleet, and a telemetry
+// binary quotes in it the targets it was given and what they answered. It is
+// masked under the store's lock, for the policy the name maps to then.
+//
+// The backend read the error before the store looks the name up, so the
+// policy it was read for can have departed meanwhile, and another hold its
+// name: an error recorded (at) before the policy the name maps to began to
+// run on the backend is that other one's, and is not stored, as a run from
+// before is not (see currentAt). The error is masked with the values of the
+// other policies the backend knew by the name too, running or departed, read
+// under the store's lock, since one the backend gives no time for can be
+// theirs however the name changed hands before the store was locked, and
+// with those of the policy the name mapped to when it was looked up first.
+func (r *maskingRepo) UpdateCollectionError(policyName string, message string, at time.Time) error {
+	var maskedFor string
+	var maskedWith *refusalMasks
+	if pd, err := r.GetByName(policyName); err == nil {
+		maskedFor, maskedWith = pd.ID, r.secrets.masksOf(pd.ID)
+	}
+	return r.PolicyRepo.UpdateCollectionErrorWith(policyName, message, func(policyID string, message string) string {
+		if !r.secrets.currentAt(policyID, at) {
+			return ""
+		}
+		reported := r.secrets.maskOthers(policyName, policyID, message)
+		masks := r.secrets.masksOf(policyID)
+		if maskedWith != nil && (policyID != maskedFor || masks != maskedWith) {
+			// The error was reported for the policy looked up first, and can
+			// quote its values whatever the name maps to by now.
+			reported = maskedWith.all.Mask(reported)
+		}
+		return masks.collectionError(reported)
+	})
+}
+
+// UpdateCollectionErrorWith masks the error as UpdateCollectionError does
+// once prepare has rewritten it, under the store's lock.
+func (r *maskingRepo) UpdateCollectionErrorWith(policyName string, message string, prepare func(policyID string, message string) string) error {
+	return r.PolicyRepo.UpdateCollectionErrorWith(policyName, message, func(policyID string, message string) string {
+		if prepare != nil {
+			message = prepare(policyID, message)
+		}
+		return r.secrets.masksOf(policyID).collectionError(message)
+	})
+}
+
+// collectionError masks, in the error a backend reported for the last
+// collection of the policy m was built for, the values its secret references
+// resolved to, as a run's reason is masked, and keeps it to the bound of a
+// policy's reason. "" stays "": the policy collects without errors.
+func (m *refusalMasks) collectionError(message string) string {
+	if message == "" {
+		return ""
+	}
+	_, reason := m.refusal("", message)
+	return reason
 }
 
 // maskRuns masks, in runs a backend reported for the policy m was built for,

@@ -34,6 +34,18 @@ type PolicyRepo interface {
 	// store, which can leave some out. Nothing is prepared or stored for a
 	// name no policy has. prepare must not call the repo.
 	UpdateRunsWith(policyName string, runs []RunData, prepare func(policyID string, runs []RunData) []RunData) error
+	// UpdateCollectionError stores message, the error the backend reports
+	// for the last collection of the policy named policyName, "" for none,
+	// as the policy's CollectionErr. at is when the backend recorded it, zero
+	// when it gives no time: the store keeps the message alone, and the
+	// policy manager's masking repo leaves out an error recorded before the
+	// policy the name maps to began to run.
+	UpdateCollectionError(policyName string, message string, at time.Time) error
+	// UpdateCollectionErrorWith stores message as UpdateCollectionError
+	// does, once prepare has rewritten it for the ID of the policy
+	// policyName maps to, in the same locked operation, as UpdateRunsWith
+	// does for runs. prepare must not call the repo.
+	UpdateCollectionErrorWith(policyName string, message string, prepare func(policyID string, message string) string) error
 	FailNonTerminalRuns(reason string) error
 }
 
@@ -134,13 +146,15 @@ func (p *policyMemRepo) Update(data PolicyData) error {
 // UpdateKeepingRuns replaces the stored record with data but keeps the runs
 // already held for that ID, merging under the same lock used to store it so
 // a concurrent run update is never discarded between a read and this write.
-// Applied comes from data, which the caller read from the store and may have
-// added to.
+// The collection error is kept the same way: like the runs, the backend
+// reports it, and the state monitor writes it. Applied comes from data,
+// which the caller read from the store and may have added to.
 func (p *policyMemRepo) UpdateKeepingRuns(data PolicyData) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if existing, ok := p.db[data.ID]; ok {
 		data.Runs = existing.Runs
+		data.CollectionErr = existing.CollectionErr
 	}
 	p.storeLocked(data)
 	return nil
@@ -259,6 +273,29 @@ func (p *policyMemRepo) UpdateRunsWith(policyName string, runs []RunData, prepar
 	}
 
 	policy.Runs = runs
+	p.db[policyID] = policy
+	return nil
+}
+
+func (p *policyMemRepo) UpdateCollectionError(policyName string, message string, _ time.Time) error {
+	return p.UpdateCollectionErrorWith(policyName, message, nil)
+}
+
+func (p *policyMemRepo) UpdateCollectionErrorWith(policyName string, message string, prepare func(policyID string, message string) string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	policyID, ok := p.nameMap[policyName]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrPolicyNotFound, policyName)
+	}
+	policy, ok := p.db[policyID]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrPolicyNotFound, policyID)
+	}
+	if prepare != nil {
+		message = prepare(policyID, message)
+	}
+	policy.CollectionErr = message
 	p.db[policyID] = policy
 	return nil
 }

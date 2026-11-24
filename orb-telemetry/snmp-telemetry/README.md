@@ -168,6 +168,26 @@ On a segment you do not control, use SNMPv3 with `authPriv`, or name targets
 individually rather than by prefix, or both. A v2c policy over a wide prefix is
 the case that hands one shared secret to the largest number of hosts.
 
+### A policy's status
+
+`GET /api/v1/status` lists each policy the backend runs, as `running`, or as
+`running_with_errors` with `last_error` and `last_error_at` while any of its
+targets' last poll failed. `last_error` names each failing target and its
+error, for example
+`metrics collection failed: 10.0.0.1:161: getting sysObjectID from 10.0.0.1: request timeout`.
+A target that answers again leaves the list, and the policy is `running` once
+none fails.
+
+A device that does not answer times out, and so does one sent a wrong
+SNMPv1/v2c community, which a device drops without an answer. A device that
+refuses an SNMPv3 credential answers with a report PDU instead, so its error
+says so, and which setting to check, without any value:
+`the device refused the SNMPv3 credential (check the auth_protocol and auth_passphrase): ...`
+for a wrong authentication passphrase or protocol, `(check the priv_protocol and
+priv_passphrase)` for a wrong privacy one, `(the device does not know the
+username)`, and `(the device does not accept the security_level for the
+username)`.
+
 ### Receiving traps
 
 A policy receives SNMP traps and informs from the devices its targets expand

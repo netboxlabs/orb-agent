@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -953,6 +956,83 @@ func TestHeartbeater_GetPolicyState_Success(t *testing.T) {
 	assert.Contains(t, policy2.Datasets, "dataset-3")
 
 	mockPMgr.AssertExpectations(t)
+}
+
+// A telemetry policy whose device times out keeps running, and its state
+// carries the error its backend reports for its last collection; one that
+// collects without errors carries none, and a failed apply keeps its own
+// reason, not a collection error from before it failed.
+func TestHeartbeater_GetPolicyState_CarriesTheCollectionErrorOfARunningPolicy(t *testing.T) {
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{ID: "failing", Name: "core", Backend: "snmp_telemetry", State: policies.Running, CollectionErr: "metrics collection failed: 10.0.0.1:161: request timeout"},
+		{ID: "healthy", Name: "edge", Backend: "gnmi_telemetry", State: policies.Running},
+		{ID: "refused", Name: "lab", Backend: "snmp_telemetry", State: policies.FailedToApply, BackendErr: "backend not available", CollectionErr: "metrics collection failed: 10.0.0.2:161: request timeout"},
+	}, nil)
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+
+	policyState := hb.getPolicyState()
+	assert.Equal(t, [2]string{"running", "metrics collection failed: 10.0.0.1:161: request timeout"},
+		[2]string{policyState["failing"].State, policyState["failing"].Error})
+	assert.Equal(t, [2]string{"running", ""}, [2]string{policyState["healthy"].State, policyState["healthy"].Error})
+	assert.Equal(t, [2]string{"failed_to_apply", "backend not available"}, [2]string{policyState["refused"].State, policyState["refused"].Error})
+	mockPMgr.AssertExpectations(t)
+}
+
+// The collection errors of many failing policies are kept to
+// maxCollectionErrorsLen together, so the heartbeat stays well under the
+// 25 KiB Fleet takes: a short one is kept whole, the others are cut to an
+// equal share of what it leaves, where a character starts, and a failed
+// apply's reason is not cut.
+func TestHeartbeater_GetPolicyState_BoundsTheCollectionErrorsOfManyPolicies(t *testing.T) {
+	long := "metrics collection failed: " + strings.Repeat("10.0.0.1:161: request timeout; é ", 40)
+	require.Greater(t, len(long), 1000)
+	states := []policies.PolicyData{
+		{ID: "short", Name: "short", Backend: "snmp_telemetry", State: policies.Running, CollectionErr: "metrics collection failed: 10.0.9.9:161: request timeout"},
+		{ID: "refused", Name: "refused", Backend: "snmp_telemetry", State: policies.FailedToApply, BackendErr: long},
+	}
+	for i := range 40 {
+		states = append(states, policies.PolicyData{
+			ID: fmt.Sprintf("policy-%02d", i), Name: fmt.Sprintf("telemetry-policy-%02d", i),
+			Backend: "snmp_telemetry", State: policies.Running, CollectionErr: long,
+		})
+	}
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return(states, nil)
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+
+	policyState := hb.getPolicyState()
+	assert.Equal(t, states[0].CollectionErr, policyState["short"].Error, "kept whole")
+	assert.Equal(t, long, policyState["refused"].Error, "a failed apply's reason is not cut")
+	total := len(policyState["short"].Error)
+	for i := range 40 {
+		e := policyState[fmt.Sprintf("policy-%02d", i)].Error
+		assert.True(t, strings.HasSuffix(e, collectionErrorCut), e)
+		assert.True(t, utf8.ValidString(e), e)
+		assert.LessOrEqual(t, len(e), (maxCollectionErrorsLen-len(states[0].CollectionErr)+39)/40, "an equal share, rounded up")
+		total += len(e)
+	}
+	assert.LessOrEqual(t, total, maxCollectionErrorsLen)
+
+	payload, err := json.Marshal(messages.Heartbeat{PolicyState: policyState})
+	require.NoError(t, err)
+	assert.Less(t, len(payload), 25*1024-len(long), "the heartbeat stays under 25 KiB, with room for the rest")
+}
+
+// Collection errors that fit maxCollectionErrorsLen together are kept whole.
+func TestHeartbeater_GetPolicyState_KeepsCollectionErrorsThatFit(t *testing.T) {
+	long := strings.Repeat("x", 1000)
+	states := make([]policies.PolicyData, 8)
+	for i := range states {
+		states[i] = policies.PolicyData{ID: fmt.Sprint(i), Backend: "snmp_telemetry", State: policies.Running, CollectionErr: long}
+	}
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return(states, nil)
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+
+	for id, info := range hb.getPolicyState() {
+		assert.Equal(t, long, info.Error, id)
+	}
 }
 
 func TestHeartbeater_GetPolicyState_Error(t *testing.T) {

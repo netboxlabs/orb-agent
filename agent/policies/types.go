@@ -57,6 +57,13 @@ type PolicyData struct {
 	// the record and drops its runs: the backend still holds the old runs,
 	// and they come back as new runs that must still get the old version.
 	Applied []AppliedVersion
+	// CollectionErr is the error a continuously collecting policy's backend
+	// reports for its last collection while the policy runs: a telemetry
+	// binary's last_error, such as a device that timed out. It is not an
+	// apply failure, which BackendErr holds, and the policy stays running;
+	// "" once its collection works again. Only backends that report one
+	// (backend.PolicyErrorProvider) set it.
+	CollectionErr string
 }
 
 // AppliedVersion is one policy version and the time the agent began

@@ -1,0 +1,29 @@
+ VLAN ID: 1
+ VLAN type: Static
+ Route interface: Not configured
+ Description: VLAN 0001
+ Name: VLAN 0001
+ Tagged ports:   None
+ Untagged ports:
+    GigabitEthernet1/0/1
+
+ VLAN ID: 10
+ VLAN type: Static
+ Route interface: Configured
+ IPv4 address: 192.0.2.1
+ IPv4 subnet mask: 255.255.255.0
+ Description: Management
+ Name: Mgmt
+ Tagged ports:
+    GigabitEthernet1/0/48
+ Untagged ports: None
+
+ VLAN ID: 20
+ VLAN type: Static
+ Route interface: Not configured
+ Description: VLAN 0020
+ Name: Users
+ Tagged ports:
+    GigabitEthernet1/0/48
+ Untagged ports:
+    GigabitEthernet1/0/2

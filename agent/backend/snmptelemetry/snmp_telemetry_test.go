@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -415,4 +416,62 @@ func TestSnmpTelemetryMasksTheCollectorLoginInItsLog(t *testing.T) {
 			mocks.AssertCollectorLoginMasked(t, logs.String(), "snmp-telemetry using OTLP endpoint", "snmp-telemetry startup")
 		})
 	}
+}
+
+// The backend reads the error of each policy's last collection from the
+// binary's status: a policy whose target times out reports it
+// (running_with_errors), and one collecting without errors reports "",
+// which clears it.
+func TestSnmpTelemetryBackendReportsEachPolicysCollectionError(t *testing.T) {
+	const lastError = "metrics collection failed: 10.0.0.1:161: request timeout"
+	var mu sync.Mutex
+	reported := []map[string]any{
+		{"name": "core", "status": "running_with_errors", "last_error": lastError, "last_error_at": "2026-11-23T15:00:00Z"},
+		{"name": "edge", "status": "running"},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/status" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		body := map[string]any{"version": "1.0.0", "start_time": "2026-11-23T12:00:00Z", "up_time_seconds": 42, "policies": reported}
+		if err := json.NewEncoder(w).Encode(body); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 0)
+	overrideNewCmdOptions(t, mockCmd, nil)
+	assert.True(t, snmptelemetry.Register())
+	be := backend.GetBackend("snmp_telemetry")
+	var commons config.BackendCommons
+	commons.Otlp.Grpc = "collector:4317"
+	require.NoError(t, be.Configure(slog.Default(), nil, map[string]any{
+		"host": serverURL.Hostname(), "port": serverURL.Port(),
+	}, commons, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, be.Start(ctx, cancel))
+
+	provider, ok := be.(backend.PolicyErrorProvider)
+	require.True(t, ok, "the backend reports its policies' collection errors")
+	errs, err := provider.GetPolicyErrors()
+	require.NoError(t, err)
+	at, err := time.Parse(time.RFC3339, "2026-11-23T15:00:00Z")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]backend.PolicyError{"core": {Message: lastError, At: at}, "edge": {}}, errs)
+
+	mu.Lock()
+	reported = []map[string]any{{"name": "core", "status": "running"}}
+	mu.Unlock()
+	errs, err = provider.GetPolicyErrors()
+	require.NoError(t, err)
+	assert.Equal(t, map[string]backend.PolicyError{"core": {}}, errs, "the target answers again")
 }
