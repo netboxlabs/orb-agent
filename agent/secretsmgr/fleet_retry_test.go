@@ -614,6 +614,126 @@ func TestFleetSecretsManager_aRepeatedAnnouncementWaitsForTheScheduledRequest(t 
 	assert.Zero(t, len(fm.retries))
 }
 
+// A version Fleet announces again while the agent is requesting it, as a
+// repeated delivery of the notification is (each is handled on a goroutine of
+// its own), waits for that request rather than make a second one beside it:
+// when Fleet answers, the policy is applied once, and when Fleet refuses, the
+// scheduled request follows and the repeat still waits. A newer version
+// announced meanwhile is requested at once.
+func TestFleetSecretsManager_aVersionBeingRequestedAnnouncedAgainMakesNoSecondRequest(t *testing.T) {
+	for name, answers := range map[string]bool{"Fleet answers": true, "Fleet refuses": false} {
+		t.Run(name, func(t *testing.T) {
+			release := make(chan struct{})
+			fm, pub := newScriptedFleetManager(t, 5, func(n int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+				switch {
+				case n == 1 && answers:
+					return fleetAnswer(req, "v2", 2), release
+				case n == 1:
+					return fleetRefuses(req, messages.ErrorCodeForbidden), release
+				default:
+					return fleetAnswer(req, "v3", 3), nil
+				}
+			})
+			timers := &fakeRetryTimers{}
+			fm.afterFunc = timers.afterFunc
+			fm.usedVars = map[string]fleetCachedSecret{
+				"snmp/community": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true}},
+			}
+			reports := &recordedReports{}
+			fm.callback = reports.record
+			requests := func() int {
+				pub.mu.Lock()
+				defer pub.mu.Unlock()
+				return pub.n
+			}
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 2})
+			}()
+			<-pub.published
+			notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 2})
+			notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 1})
+			assert.Equal(t, 1, requests(), "the version being requested, and an older one, request nothing")
+			assert.Empty(t, reports.all())
+
+			close(release)
+			<-done
+			got := reports.all()
+			require.Len(t, got, 1)
+			fm.mu.Lock()
+			assert.Empty(t, fm.refreshing, "the request ended")
+			fm.mu.Unlock()
+			if answers {
+				assert.Equal(t, map[string]error{"policy1": nil}, got[0])
+				assert.Empty(t, timers.pending())
+				return
+			}
+			assert.Error(t, got[0]["policy1"])
+			require.Len(t, timers.pending(), 1, "the refused request is scheduled again")
+			notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 2})
+			assert.Equal(t, 1, requests(), "announced again, it waits for the scheduled request")
+
+			notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 3})
+			assert.Equal(t, 2, requests(), "a newer version is requested at once")
+			assert.Equal(t, map[string]error{"policy1": nil}, reports.all()[1])
+		})
+	}
+}
+
+// A newer version announced while an older one is being requested is
+// requested at once, beside it, and the older request's end leaves the newer
+// one's record: a repeat of either version still requests nothing.
+func TestFleetSecretsManager_aNewerVersionIsRequestedBesideTheOneBeingRequested(t *testing.T) {
+	releaseOlder, releaseNewer := make(chan struct{}), make(chan struct{})
+	second := make(chan struct{})
+	fm, pub := newScriptedFleetManager(t, 5, func(n int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+		if n == 1 {
+			return fleetAnswer(req, "v2", 2), releaseOlder
+		}
+		close(second)
+		return fleetAnswer(req, "v3", 3), releaseNewer
+	})
+	fm.usedVars = map[string]fleetCachedSecret{
+		"snmp/community": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true}},
+	}
+	reports := &recordedReports{}
+	fm.callback = reports.record
+	requests := func() int {
+		pub.mu.Lock()
+		defer pub.mu.Unlock()
+		return pub.n
+	}
+
+	older, newer := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(older)
+		notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 2})
+	}()
+	<-pub.published
+	go func() {
+		defer close(newer)
+		notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 3})
+	}()
+	<-second
+	require.Equal(t, 2, requests(), "the newer version is requested beside the older")
+
+	close(releaseOlder)
+	<-older
+	notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 3})
+	assert.Equal(t, 2, requests(), "the newer version is still being requested")
+
+	close(releaseNewer)
+	<-newer
+	fm.mu.Lock()
+	entry := fm.usedVars["snmp/community"]
+	refreshing := len(fm.refreshing)
+	fm.mu.Unlock()
+	assert.Equal(t, "v3", entry.Value)
+	assert.Zero(t, refreshing)
+}
+
 // A request scheduled for a path is cancelled, its timer stopped, once no
 // policy uses the path, and makes none once the agent is stopping.
 func TestFleetSecretsManager_aRetryIsDroppedWhenNotNeeded(t *testing.T) {

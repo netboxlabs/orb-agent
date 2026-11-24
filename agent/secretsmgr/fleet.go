@@ -73,6 +73,9 @@ type FleetSecretsManager struct {
 	// invalidations counts the refreshes that failed, so an answer can tell
 	// whether its request started before a path's latest failure.
 	invalidations uint64
+	// refreshing holds, by path, the version a notification's request is
+	// being made for, until that request ends (see handleUpdateNotification).
+	refreshing map[string]int
 	// retries holds, by path, the request a failed refresh scheduled, until
 	// Fleet answers with the value or no policy uses the path any more.
 	retries map[string]*fleetRetry
@@ -140,6 +143,7 @@ func NewFleetSecretsManager(logger *slog.Logger, cfg config.FleetSecretsManager)
 		usedVars:    make(map[string]fleetCachedSecret),
 		pendingReqs: make(map[string]chan *messages.SecretResponseMsg),
 		timeout:     timeout,
+		refreshing:  make(map[string]int),
 		retries:     make(map[string]*fleetRetry),
 		afterFunc:   func(d time.Duration, f func()) retryTimer { return time.AfterFunc(d, f) },
 	}
@@ -244,6 +248,18 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 				"path", update.Path, "version", update.Version)
 			continue
 		}
+		if v, ok := f.refreshing[update.Path]; ok && update.Version <= v {
+			// The version a request is being made for, announced again
+			// before Fleet answered: notifications are handled on goroutines
+			// of their own, so a repeated delivery can come meanwhile. It
+			// waits for that request, which is made again later if it fails,
+			// rather than make a second one beside it.
+			f.mu.Unlock()
+			f.logger.Debug("secret version already being requested",
+				"path", update.Path, "version", update.Version)
+			continue
+		}
+		f.refreshing[update.Path] = update.Version
 		f.logger.Info("secret version changed, requesting update",
 			"path", update.Path,
 			"old_version", cached.Version,
@@ -251,6 +267,15 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 		f.mu.Unlock()
 
 		f.refresh(update.Path, update.Version, changedPolicyIDs)
+
+		// A failed request is scheduled again before this, so a repeated
+		// delivery finds one or the other. A newer version announced
+		// meanwhile keeps its own record.
+		f.mu.Lock()
+		if f.refreshing[update.Path] == update.Version {
+			delete(f.refreshing, update.Path)
+		}
+		f.mu.Unlock()
 	}
 
 	f.report(changedPolicyIDs)
