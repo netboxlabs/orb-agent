@@ -220,6 +220,15 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 			f.mu.Unlock()
 			continue
 		}
+		if r, ok := f.retries[update.Path]; ok && update.Version <= r.version {
+			// The version the scheduled request is for, announced again, as
+			// a repeated delivery of the notification whose request failed
+			// is: it waits for that request, rather than skip its backoff.
+			f.mu.Unlock()
+			f.logger.Debug("secret version already to be requested again",
+				"path", update.Path, "version", update.Version)
+			continue
+		}
 		f.logger.Info("secret version changed, requesting update",
 			"path", update.Path,
 			"old_version", cached.Version,

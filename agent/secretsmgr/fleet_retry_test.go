@@ -387,6 +387,48 @@ func TestFleetSecretsManager_anAnswerAtTheHeldVersionKeepsARefusedPathStopped(t 
 	}
 }
 
+// The version a scheduled request is for, announced again, as a repeated
+// delivery of the notification whose request failed is (the update topic is
+// subscribed at QoS 1), waits for that request rather than skip its backoff.
+// A newer version is still requested at once.
+func TestFleetSecretsManager_aRepeatedAnnouncementWaitsForTheScheduledRequest(t *testing.T) {
+	fm, pub := newScriptedFleetManager(t, 5, func(n int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+		if n == 1 {
+			return fleetRefuses(req, messages.ErrorCodeInternalError), nil
+		}
+		return fleetAnswer(req, "v3", 3), nil
+	})
+	timers := &fakeRetryTimers{}
+	fm.afterFunc = timers.afterFunc
+	fm.usedVars = map[string]fleetCachedSecret{
+		"snmp/community": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true}},
+	}
+	reports := &recordedReports{}
+	fm.callback = reports.record
+	requests := func() int {
+		pub.mu.Lock()
+		defer pub.mu.Unlock()
+		return pub.n
+	}
+
+	notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 2})
+	waits := timers.pending()
+	require.Len(t, waits, 1)
+	notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 2})
+	assert.Equal(t, 1, requests(), "the repeated announcement requests nothing")
+	assert.Equal(t, waits, timers.pending(), "and leaves the scheduled request as it was")
+	assert.Empty(t, reports.all())
+
+	notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 3})
+	assert.Equal(t, 2, requests(), "a newer version is requested at once")
+	assert.Equal(t, []map[string]error{{"policy1": nil}}, reports.all())
+	assert.Empty(t, timers.pending(), "its answer ends the scheduled request")
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	assert.Equal(t, "v3", fm.usedVars["snmp/community"].Value)
+	assert.Zero(t, len(fm.retries))
+}
+
 // A request scheduled for a path is cancelled, its timer stopped, once no
 // policy uses the path, and makes none once the agent is stopping.
 func TestFleetSecretsManager_aRetryIsDroppedWhenNotNeeded(t *testing.T) {
