@@ -12,6 +12,11 @@ import (
 // ReasonRetryAfterFailedStart is the restart reason the retry timer uses.
 const ReasonRetryAfterFailedStart = "retry after failed start"
 
+// ReasonHealthMonitor is the restart reason of a request from the state
+// manager's health monitor, which asks for one when it finds a backend not
+// running.
+const ReasonHealthMonitor = "restart requested by the health monitor"
+
 // runRetry restarts one entry after its retry timer fired, under the entry's
 // restart mutex, so a restart that is running when the timer fires finishes
 // first and this one then sees the disarm it performed: the retry it
@@ -225,6 +230,9 @@ func (s *Supervisor) restartHealthLocked(ctx context.Context, e *entry, reason s
 
 	s.logger.Info("restarting backend", "backend", e.name, "reason", reason)
 	s.state.RegisterRestart(e.name, reason)
+	// Until this returns, the monitor asks for no other restart of the
+	// backend: its ticks meanwhile see the process being replaced.
+	defer s.state.RestartFinished(e.name)
 	s.logger.Info("marking policies for re-apply", "backend", e.name)
 	if err := s.applier.RemoveBackendPolicies(e.name, e.be, false); err != nil {
 		s.logger.Error("failed to remove policies", "backend", e.name, "error", err)
@@ -395,6 +403,8 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 		if err := s.stoppedDuringStart(e); err != nil {
 			return err
 		}
+		// An on-demand backend whose first start failed comes up here.
+		s.registerMonitorOnce(e)
 		// The upgraded binary runs in a new process, which holds none of
 		// the backend's policies.
 		s.applier.BackendProcessReplaced(e.name)
@@ -471,6 +481,7 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 	if err := s.stoppedDuringStart(e); err != nil {
 		return err
 	}
+	s.registerMonitorOnce(e)
 	s.applier.BackendProcessReplaced(e.name)
 	if completed, retryable := s.reapply(ctx, e.name, e.be); !completed && retryable {
 		s.scheduleReplay(e)
@@ -627,7 +638,7 @@ func (s *Supervisor) serveRestartRequests() {
 				return
 			}
 			s.logger.Info("restart requested", "backend", name)
-			if err := s.Restart(s.runContext(name), name, "restart requested by fleet"); err != nil {
+			if err := s.Restart(s.runContext(name), name, ReasonHealthMonitor); err != nil {
 				s.logger.Error("failed to restart backend", "backend", name, "error", err)
 			}
 		}

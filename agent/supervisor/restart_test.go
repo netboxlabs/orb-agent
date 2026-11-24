@@ -139,6 +139,75 @@ func TestRestartReappliesPoliciesWhenConfigureFails(t *testing.T) {
 	}, rec.snapshot(), "the backend never stopped, so the removed policies are reapplied immediately")
 }
 
+// A restart the health monitor asks for carries a reason that names the
+// monitor: the state manager is the only sender on the request channel, and
+// Fleet's own restarts go through RestartAll with Fleet's reason.
+func TestHealthRestartRequestNamesTheHealthMonitor(t *testing.T) {
+	rec := &recorder{}
+	requests := make(chan string, 1)
+	s := New(slog.New(slog.DiscardHandler), &stubState{rec: rec}, nil, &stubApplier{rec: rec}, requests, Options{
+		NotRunning:          errNotRunning,
+		ReapplyRetryDelay:   time.Millisecond,
+		ReplayRetryInterval: time.Hour,
+		DispatchInterval:    time.Hour,
+	})
+	backend.Register("sup_health_reason", newStub(rec, "probe"))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_health_reason": nil}, config.BackendCommons{}, background))
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	rec.reset()
+
+	requests <- "sup_health_reason"
+
+	require.Eventually(t, func() bool { return rec.count("apply:") == 1 }, 5*time.Second, time.Millisecond)
+	assert.Contains(t, rec.snapshot(), "restart-registered:sup_health_reason:restart requested by the health monitor")
+}
+
+// A restart tells the state manager when it is over, whether its reset
+// worked or failed, so the monitor may ask for the next one: until then it
+// holds back, since its ticks during the restart see the process the
+// restart is replacing.
+func TestRestartTellsTheStateManagerWhenItIsOver(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	be := newStub(rec, "probe")
+	backend.Register("sup_restart_finished", be)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_restart_finished": nil}, config.BackendCommons{}, background))
+	state := s.state.(*stubState)
+
+	require.NoError(t, s.Restart(context.Background(), "sup_restart_finished", "test"))
+	assert.Equal(t, int32(1), state.finished.Load(), "after a reset that worked")
+
+	be.resetErr = errors.New("no binary")
+	require.NoError(t, s.Restart(context.Background(), "sup_restart_finished", "test"))
+	assert.Equal(t, int32(2), state.finished.Load(), "after a reset that failed")
+}
+
+// An upgrade that brings up an on-demand backend whose first start failed
+// registers its health monitor, as any first start that works does: without
+// one, nothing would watch the backend or clear the error its failed start
+// left, and nothing would restart it if its process ended.
+func TestRestartUpgradedRegistersTheMonitorOfABackendItBringsUpFirst(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, &stubFiles{rec: rec})
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	lazy := newStub(rec, "lazy_upgrade")
+	lazy.binary = "orb-lazy"
+	lazy.startErrs = []error{errors.New("no binary")}
+	backend.Register("sup_lazy_upgrade", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_upgrade": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	_, err := s.EnsureStarted("sup_lazy_upgrade")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_upgrade"); return p == Failed }, 5*time.Second, 5*time.Millisecond)
+	require.Equal(t, 0, rec.count("monitor:sup_lazy_upgrade"))
+
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_lazy_upgrade"))
+
+	p, _ := s.Phase("sup_lazy_upgrade")
+	require.Equal(t, Running, p)
+	assert.Equal(t, 1, rec.count("monitor:sup_lazy_upgrade"))
+}
+
 // Every bundled backend is registered; only the ones this supervisor
 // declared are in its entries map. A restart asked for a name never
 // declared is refused rather than reached for.

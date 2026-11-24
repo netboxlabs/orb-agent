@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"errors"
 	"log/slog"
 	"maps"
 	"os"
@@ -21,6 +22,8 @@ type countingBackend struct {
 	Backend
 	mu      sync.Mutex
 	status  RunningStatus
+	detail  string
+	err     error
 	started time.Time
 	polls   atomic.Int32
 }
@@ -37,13 +40,18 @@ func (c *countingBackend) GetRunningStatus() (RunningStatus, string, error) {
 	c.polls.Add(1)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.status, "", nil
+	return c.status, c.detail, c.err
 }
 
 func (c *countingBackend) setStatus(status RunningStatus) {
+	c.set(status, "", nil)
+}
+
+// set changes the whole answer GetRunningStatus gives.
+func (c *countingBackend) set(status RunningStatus, detail string, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.status = status
+	c.status, c.detail, c.err = status, detail, err
 }
 
 func (c *countingBackend) setStarted(started time.Time) {
@@ -139,8 +147,10 @@ func TestMonitorDoesNotHoldTheLockOnAFullRestartChannel(t *testing.T) {
 // while a request is still pending, or still in flight after RegisterRestart
 // took it, must not enqueue it again, since a name with no dedup would let a
 // handful of unhealthy backends fill every slot and starve one whose request
-// never fits. Once the backend is seen running again, or fails again after a
-// fresh restart, the slot is free for another request.
+// never fits. A restart in flight keeps its slot until it finishes, even
+// while the backend is seen running (a restart stops the process it
+// replaces, and a tick meanwhile would ask for a second one); once it has
+// finished, the slot is free for another request.
 func TestMonitorQueuesOneRestartPerBackendUntilItIsTaken(t *testing.T) {
 	restartChan := make(chan string, 5)
 	manager, channels := newTestManager(t, restartChan)
@@ -160,17 +170,19 @@ func TestMonitorQueuesOneRestartPerBackendUntilItIsTaken(t *testing.T) {
 	sendTick(t, tick)
 	require.Len(t, restartChan, 1, "a request already taken and in flight must not be queued again")
 
-	be.setStatus(Running)
-	sendTick(t, tick)
-	// Wait for the Running tick's iteration to actually clear the slot
-	// before flipping the backend again, so that iteration's own read of
-	// status and start time cannot race the mutation below.
-	require.Eventually(t, func() bool {
+	slotHeld := func() bool {
 		manager.mu.Lock()
 		defer manager.mu.Unlock()
 		_, ok := manager.queued["unhealthy"]
-		return !ok
-	}, time.Second, time.Millisecond, "seeing the backend running again must release the slot")
+		return ok
+	}
+	be.setStatus(Running)
+	sendTick(t, tick)
+	sendTick(t, tick)
+	require.True(t, slotHeld(), "a restart in flight keeps its slot while the backend is seen running")
+
+	manager.RestartFinished("unhealthy")
+	require.False(t, slotHeld(), "a finished restart releases its slot")
 
 	be.setStatus(BackendError)
 	be.setStarted(time.Now().Add(-2 * MinRestartTime))
@@ -329,4 +341,161 @@ func TestMonitorStoresTheCollectionErrorOfEachPolicy(t *testing.T) {
 	sendTick(t, tick)
 	sendTick(t, tick)
 	require.Empty(t, collectionErr(), "cleared once the policy collects again")
+}
+
+// steppedBackend tells a test when a tick of its monitor is over: the monitor
+// asks for the policies' errors last.
+type steppedBackend struct {
+	countingBackend
+	ticks atomic.Int32
+}
+
+func (s *steppedBackend) GetPolicyErrors() (map[string]PolicyError, error) {
+	s.ticks.Add(1)
+	return nil, nil
+}
+
+// step delivers one tick and waits until the monitor is done with it.
+func step(t *testing.T, ch chan time.Time, be *steppedBackend) {
+	t.Helper()
+	done := be.ticks.Load() + 1
+	sendTick(t, ch)
+	require.Eventually(t, func() bool { return be.ticks.Load() == done }, time.Second, time.Millisecond)
+}
+
+// pktvisord killed two minutes after it started: the monitor asks for a
+// restart at the first tick that finds the process gone, rather than wait
+// until MinRestartTime has passed since that start, and the error it records
+// is the process's, not a failure to read the status.
+func TestMonitorRestartsABackendWhoseProcessEndedAtOnce(t *testing.T) {
+	restartChan := make(chan string, 5)
+	manager, channels := newTestManager(t, restartChan)
+	be := &steppedBackend{countingBackend: countingBackend{status: Running, started: time.Now().Add(-2 * time.Minute)}}
+	manager.StartBackendMonitor("pktvisor", be)
+	require.Len(t, *channels, 1)
+	tick := (*channels)[0]
+
+	be.set(BackendError, "process error: signal: killed", processEndedError{errors.New("signal: killed")})
+	step(t, tick, be)
+
+	require.Len(t, restartChan, 1, "the first tick that finds the process gone asks for its restart")
+	require.Equal(t, "pktvisor", <-restartChan)
+	state := manager.Get()["pktvisor"]
+	require.Equal(t, "process error: signal: killed", state.LastError)
+	require.True(t, state.Ended)
+
+	manager.RegisterRestart("pktvisor", "test")
+	manager.RestartFinished("pktvisor")
+	require.False(t, manager.Get()["pktvisor"].Ended, "a restart replaced the process that ended")
+}
+
+// A process that runs but does not answer its API may still be starting up
+// or busy, so the monitor keeps waiting until MinRestartTime has passed since
+// its start before it restarts it, as before.
+func TestMonitorWaitsBeforeRestartingAProcessThatDoesNotAnswer(t *testing.T) {
+	restartChan := make(chan string, 5)
+	manager, channels := newTestManager(t, restartChan)
+	be := &steppedBackend{countingBackend: countingBackend{status: Running, started: time.Now().Add(-2 * time.Minute)}}
+	manager.StartBackendMonitor("pktvisor", be)
+	require.Len(t, *channels, 1)
+	tick := (*channels)[0]
+
+	be.set(BackendError, "process running, REST API unavailable", errors.New("connection refused"))
+	for range 5 {
+		step(t, tick, be)
+	}
+	require.Empty(t, restartChan)
+	require.False(t, manager.Get()["pktvisor"].Ended)
+}
+
+// A process that ends after it has run MinRestartTime since its start is
+// restarted at once, however many restarts came before it: the wait never
+// exceeds what the rule before the backoff gave.
+func TestMonitorRestartsAProcessThatRanMinRestartTimeAtOnce(t *testing.T) {
+	restartChan := make(chan string, 5)
+	manager, channels := newTestManager(t, restartChan)
+	be := &steppedBackend{countingBackend: countingBackend{status: Running, started: time.Now().Add(-MinRestartTime - time.Second)}}
+	manager.StartBackendMonitor("pktvisor", be)
+	require.Len(t, *channels, 1)
+	tick := (*channels)[0]
+	manager.mu.Lock()
+	manager.restarts["pktvisor"] = 7
+	manager.mu.Unlock()
+
+	be.set(Offline, "backend process ended", nil)
+	step(t, tick, be)
+
+	require.Len(t, restartChan, 1)
+}
+
+// A process that ends again right after its restart, before any tick found
+// it running (it crashed on a replayed policy, or was killed again), waits
+// only what its restarts earned, counted from the end of the restart, not
+// until the restart is MinRestartTime old.
+func TestMonitorRestartsAProcessThatEndsBeforeATickFindsItRunning(t *testing.T) {
+	restartChan := make(chan string, 5)
+	manager, channels := newTestManager(t, restartChan)
+	be := &steppedBackend{countingBackend: countingBackend{status: Running, started: time.Now().Add(-2 * time.Minute)}}
+	manager.StartBackendMonitor("pktvisor", be)
+	require.Len(t, *channels, 1)
+	tick := (*channels)[0]
+
+	be.set(BackendError, "process error: signal: killed", processEndedError{errors.New("signal: killed")})
+	step(t, tick, be)
+	require.Len(t, restartChan, 1)
+	<-restartChan
+	manager.RegisterRestart("pktvisor", "test")
+	be.setStarted(time.Now())
+	manager.RestartFinished("pktvisor")
+
+	step(t, tick, be)
+	require.Empty(t, restartChan, "the second restart in a row waits one tick")
+	step(t, tick, be)
+	require.Len(t, restartChan, 1)
+}
+
+// A process that keeps ending soon after each restart is restarted later
+// each time: at once, then after one tick, two, four and so on, up to
+// MinRestartTime. Once a restarted process has run for MinRestartTime, the
+// next end is restarted at once again.
+func TestMonitorBacksOffABackendWhoseProcessKeepsEnding(t *testing.T) {
+	restartChan := make(chan string, 5)
+	manager, channels := newTestManager(t, restartChan)
+	be := &steppedBackend{countingBackend: countingBackend{status: Running, started: time.Now()}}
+	manager.StartBackendMonitor("pktvisor", be)
+	require.Len(t, *channels, 1)
+	tick := (*channels)[0]
+	maxTicks := int(MinRestartTime / BackendMonitorInterval)
+
+	// ticksUntilRestart ends the process and counts the ticks until the
+	// monitor asks for a restart, the tick that asks included; then it plays
+	// the restart through: taken, a new process started at started, finished,
+	// and one tick that finds it running.
+	ticksUntilRestart := func(started time.Time) int {
+		t.Helper()
+		be.set(Offline, "backend process ended", nil)
+		for n := 1; n <= maxTicks+2; n++ {
+			step(t, tick, be)
+			if len(restartChan) == 1 {
+				<-restartChan
+				manager.RegisterRestart("pktvisor", "test")
+				be.setStarted(started)
+				be.setStatus(Running)
+				manager.RestartFinished("pktvisor")
+				step(t, tick, be)
+				return n
+			}
+		}
+		t.Fatal("the monitor never asked for a restart")
+		return 0
+	}
+
+	var got []int
+	for range 8 {
+		got = append(got, ticksUntilRestart(time.Now()))
+	}
+	require.Equal(t, []int{1, 2, 3, 5, 9, 17, maxTicks + 1, maxTicks + 1}, got)
+
+	ticksUntilRestart(time.Now().Add(-MinRestartTime))
+	require.Equal(t, 1, ticksUntilRestart(time.Now()), "a run of MinRestartTime starts the count again")
 }

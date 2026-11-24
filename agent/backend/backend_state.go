@@ -10,7 +10,10 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
-// MinRestartTime is the minimum time to wait between restarts
+// MinRestartTime is how long a backend whose process runs but does not
+// answer is given after its start before the monitor restarts it, the most
+// the monitor waits before restarting a process that keeps ending, and the
+// longest a restart in flight holds its slot.
 const MinRestartTime = 5 * time.Minute
 
 // BackendMonitorInterval is the interval at which to monitor backends
@@ -52,6 +55,9 @@ type StateManager interface {
 	StartBackendMonitor(name string, be Backend)
 	RegisterError(name string, errMessage string)
 	RegisterRestart(name string, reason string)
+	// RestartFinished tells the monitor that a restart RegisterRestart
+	// announced is over, whatever its outcome.
+	RestartFinished(name string)
 }
 
 // StateManager manages the state and monitoring of backends
@@ -65,13 +71,31 @@ type stateManager struct {
 	now                func() time.Time
 	// queued tracks, per backend, whether a restart request for it holds a
 	// slot: a zero time means the request is waiting in restartBackendChan,
-	// a non-zero time means RegisterRestart took it and it is in flight. It
-	// caps each backend at one slot: without it, repeated ticks from a
-	// handful of unhealthy backends could fill every slot with the same
-	// names and starve a backend whose request never fits, and a monitor
-	// tick during the restart's stop would see the same old start time and
-	// queue the same backend again right behind the restart it already took.
+	// a non-zero time means RegisterRestart took it and it is in flight
+	// until RestartFinished. It caps each backend at one slot: without it,
+	// repeated ticks from a handful of unhealthy backends could fill every
+	// slot with the same names and starve a backend whose request never
+	// fits, and a monitor tick during the restart, which sees the process
+	// being replaced, would queue the same backend again right behind the
+	// restart it already took.
 	queued map[string]time.Time
+	// restarts counts, per backend, the restarts the monitor asked for since
+	// the backend last ran for MinRestartTime, and downTicks the ticks in a
+	// row that found it not running: together they space the restarts of a
+	// process that keeps ending (ticksBeforeRestart).
+	restarts  map[string]int
+	downTicks map[string]int
+}
+
+// ticksBeforeRestart is how many ticks that find a backend's process gone
+// the monitor lets pass before it asks for a restart, given the restarts it
+// asked for since the backend last ran for MinRestartTime: none the first
+// time, then one, two, four and so on, up to MinRestartTime.
+func ticksBeforeRestart(restarts int) int {
+	if restarts == 0 {
+		return 0
+	}
+	return min(1<<min(restarts-1, 16), int(MinRestartTime/BackendMonitorInterval))
 }
 
 // NewStateManager creates a new StateManager with the given logger and restart channel.
@@ -85,6 +109,8 @@ func NewStateManager(activeConfigMgr string, logger *slog.Logger, restartBackend
 			restartBackendChan: restartBackendChan,
 			policyRepo:         policyRepo,
 			queued:             make(map[string]time.Time),
+			restarts:           make(map[string]int),
+			downTicks:          make(map[string]int),
 			now:                time.Now,
 			tick: func(d time.Duration) (<-chan time.Time, func()) {
 				t := time.NewTicker(d)
@@ -117,6 +143,8 @@ func (n nullStateManager) RegisterError(_ string, _ string) {}
 
 func (n nullStateManager) RegisterRestart(_ string, _ string) {}
 
+func (n nullStateManager) RestartFinished(_ string) {}
+
 // StartBackendMonitor starts monitoring a backend and manages its state
 func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 	manager.mu.Lock()
@@ -128,6 +156,7 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 	// Registration means the backend just came up: the failure recorded
 	// before it is over, and the monitor never clears LastError itself.
 	state.Status = be.GetInitialState()
+	state.Ended = false
 	state.LastError = ""
 	manager.mu.Unlock()
 
@@ -139,48 +168,91 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 			// outside the lock; a RegisterError landing between this read and the
 			// write below is overwritten until the next tick, which is accepted.
 			backendStatus, errMsg, err := be.GetRunningStatus()
+			ended := ProcessEnded(backendStatus, err)
 			restart := false
 			shouldSend := false
+			// waitLog is the line that says why no restart is asked for yet,
+			// logged once the lock is released.
+			var waitLog func()
 			manager.mu.Lock()
 			manager.backendState[name].Status = backendStatus
+			manager.backendState[name].Ended = ended
 			if backendStatus == Running {
-				// The restart worked, or nothing was wrong: release any slot
-				// this backend was holding, and drop the failure it recovered
-				// from, which nothing else clears while the monitor runs.
-				delete(manager.queued, name)
+				// Nothing is wrong: release a request still waiting for this
+				// backend, and drop the failure it recovered from, which
+				// nothing else clears while the monitor runs. A restart in
+				// flight keeps its slot until it finishes: it may not have
+				// stopped this process yet.
+				if ts, ok := manager.queued[name]; ok && ts.IsZero() {
+					delete(manager.queued, name)
+				}
 				manager.backendState[name].LastError = ""
+				delete(manager.downTicks, name)
+				if time.Since(be.GetStartTime()) >= MinRestartTime {
+					// It ran long enough: its next end is not one of a series.
+					delete(manager.restarts, name)
+				}
 			} else {
-				if err != nil {
+				switch {
+				case ended && errMsg != "":
+					// The status was read: it is what ended the process.
+					manager.backendState[name].LastError = errMsg
+				case err != nil:
 					manager.backendState[name].LastError = fmt.Sprintf("failed to retrieve backend status: %v", err)
-				} else if errMsg != "" {
+				case errMsg != "":
 					manager.backendState[name].LastError = errMsg
 				}
-				// status is not running so we have a current error
-				if time.Since(be.GetStartTime()) >= MinRestartTime {
+				manager.downTicks[name]++
+				// A process that is gone is restarted at once, or after the
+				// wait its earlier restarts earned, never later than
+				// MinRestartTime from its start; one that runs without
+				// answering may still be starting, so it gets MinRestartTime
+				// from its start.
+				due := time.Since(be.GetStartTime()) >= MinRestartTime
+				if ended && manager.downTicks[name] > ticksBeforeRestart(manager.restarts[name]) {
+					due = true
+				}
+				if due {
 					restart = true
 					if ts, ok := manager.queued[name]; ok && !ts.IsZero() && manager.now().Sub(ts) >= MinRestartTime {
-						// A restart that never brought the backend back
+						// A restart still unfinished after MinRestartTime
 						// releases its slot so the next tick may queue
-						// another one, keeping today's retry cadence for a
-						// permanently failing backend.
+						// another one.
 						delete(manager.queued, name)
 					}
 					if _, stillQueued := manager.queued[name]; !stillQueued {
 						manager.queued[name] = time.Time{}
 						shouldSend = true
 					}
+				} else if ended {
+					wait := time.Duration(ticksBeforeRestart(manager.restarts[name])-manager.downTicks[name]+1) * BackendMonitorInterval
+					restarts := manager.restarts[name]
+					waitLog = func() {
+						manager.logger.Info("backend process ended, waiting before restarting it", "backend", name, "remaining", wait, "restarts", restarts)
+					}
 				} else {
 					remainingSecondsUntilRestart := MinRestartTime - time.Since(be.GetStartTime())
-					manager.logger.Info("waiting to attempt backend restart due to failed status", "remaining_secs", remainingSecondsUntilRestart, "backend", name)
+					waitLog = func() {
+						manager.logger.Info("waiting to attempt backend restart due to failed status", "remaining_secs", remainingSecondsUntilRestart, "backend", name)
+					}
 				}
 			}
 			manager.mu.Unlock()
+			if waitLog != nil {
+				waitLog()
+			}
 
 			if shouldSend {
 				// Outside the lock, and never blocking: a consumer that has
 				// fallen behind must not freeze every reader of the state.
 				select {
 				case manager.restartBackendChan <- name:
+					manager.mu.Lock()
+					manager.restarts[name]++
+					manager.mu.Unlock()
+					if ended {
+						manager.logger.Warn("backend process ended, restarting it", "backend", name, "error", errMsg)
+					}
 				default:
 					manager.mu.Lock()
 					delete(manager.queued, name)
@@ -188,7 +260,7 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 					manager.logger.Warn("restart queue full, request kept for the next tick", "backend", name)
 				}
 			}
-			if restart && err != nil {
+			if restart && err != nil && !ended {
 				manager.logger.Error("failed to read backend status", "error", err, "backend", name)
 			}
 
@@ -246,8 +318,8 @@ func (manager *stateManager) RegisterError(name string, errMessage string) {
 // thing RestartBackend calls, so stamping the queue slot with the current
 // time here marks the request as taken and in flight: a monitor tick during
 // the restart's stop still sees the slot held and will not queue the same
-// backend again, until the backend is seen running again or this restart
-// itself is older than MinRestartTime.
+// backend again, until RestartFinished or until this restart itself is
+// older than MinRestartTime.
 func (manager *stateManager) RegisterRestart(name string, reason string) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
@@ -259,6 +331,25 @@ func (manager *stateManager) RegisterRestart(name string, reason string) {
 	manager.backendState[name].RestartCount++
 	manager.backendState[name].LastRestartTS = time.Now()
 	manager.backendState[name].LastRestartReason = reason
+}
+
+// RestartFinished marks the end of a restart RegisterRestart announced,
+// whatever its outcome. It releases the restart's slot, so the monitor may
+// ask for another restart if the process is gone afterwards, or ends again
+// before a tick finds it running; the wait its restarts earned counts from
+// here. What the monitor last found about the replaced process no longer
+// holds, so Ended is cleared until the next tick. A request still waiting in
+// the queue keeps its slot.
+func (manager *stateManager) RestartFinished(name string) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if ts, ok := manager.queued[name]; ok && !ts.IsZero() {
+		delete(manager.queued, name)
+	}
+	delete(manager.downTicks, name)
+	if state := manager.backendState[name]; state != nil {
+		state.Ended = false
+	}
 }
 
 // Get returns the current state of all backends

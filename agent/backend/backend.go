@@ -105,6 +105,10 @@ type State struct {
 	LastError         string
 	LastRestartTS     time.Time
 	LastRestartReason string
+	// Ended is true while the health monitor's last check found the
+	// backend's process gone (ProcessEnded), as opposed to one that runs
+	// without answering; a restart clears it.
+	Ended bool
 }
 
 func (s RunningStatus) String() string {

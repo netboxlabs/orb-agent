@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"slices"
 	"sync"
@@ -132,13 +133,16 @@ func (hb *heartbeater) runHeartbeatLoop(ctx context.Context, ticker *time.Ticker
 }
 
 func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic string, publishFunc func(ctx context.Context, topic string, payload []byte) error, _ string, _ time.Time, state messages.HeartbeatState, onFailure func()) {
+	// The offline heartbeat comes after the agent stopped its backends, so
+	// the processes the monitor finds ended then are no failure.
+	endedUnknown := state != messages.Offline
 	hbData := messages.Heartbeat{
 		SchemaVersion: messages.CurrentHeartbeatSchemaVersion,
 		TimeStamp:     time.Now().UTC(),
 		State:         messages.State(state),
 		LastRestartTS: hb.lastRestartTS,
 		BackendState:  hb.getBackendState(),
-		PolicyState:   hb.getPolicyState(),
+		PolicyState:   hb.policyState(endedUnknown),
 		GroupState:    hb.getGroupState(),
 		BundleState:   hb.getBundleState(),
 	}
@@ -176,11 +180,19 @@ func (hb *heartbeater) getBackendState() map[string]messages.BackendStateInfo {
 }
 
 func (hb *heartbeater) getPolicyState() map[string]messages.PolicyStateInfo {
+	return hb.policyState(true)
+}
+
+// policyState is each policy's state as the heartbeat reports it. With
+// endedUnknown, a running policy whose backend's process the monitor last
+// found gone is reported unknown instead.
+func (hb *heartbeater) policyState(endedUnknown bool) map[string]messages.PolicyStateInfo {
 	policyStates, err := hb.policyManager.GetPolicyState()
 	if err != nil {
 		hb.logger.Error("error getting policy state", "error", err)
 		return make(map[string]messages.PolicyStateInfo)
 	}
+	backendStates := hb.backendState.Get()
 	ps := make(map[string]messages.PolicyStateInfo)
 	var collecting []string
 	for _, policyState := range policyStates {
@@ -193,13 +205,28 @@ func (hb *heartbeater) getPolicyState() map[string]messages.PolicyStateInfo {
 			Backend:  policyState.Backend,
 			Runs:     convertRunsToStateInfo(policyState.Runs),
 		}
-		if policyState.BackendErr == "" && policyState.State == policies.Running && info.Error != "" {
+		if endedUnknown && policyState.State == policies.Running && processEnded(backendStates, policyState.Backend) {
+			// The policy was running in a process the monitor now finds
+			// gone: until the restart brings it back, nothing runs it, and
+			// the restart marks it unknown anyway.
+			info.State = policies.Unknown.String()
+			info.Error = fmt.Sprintf("backend %s is not running: its process ended", policyState.Backend)
+		} else if policyState.BackendErr == "" && policyState.State == policies.Running && info.Error != "" {
 			collecting = append(collecting, policyState.ID)
 		}
 		ps[policyState.ID] = info
 	}
 	boundCollectionErrors(ps, collecting)
 	return ps
+}
+
+// processEnded reports whether the health monitor's last check found the
+// named backend's process gone. One that runs but did not answer that check
+// may still run its policies, and one the monitor has not checked since its
+// start or last restart is not known to be gone.
+func processEnded(states map[string]*backend.State, name string) bool {
+	st, ok := states[name]
+	return ok && st != nil && st.Ended
 }
 
 // boundCollectionErrors keeps the collection errors of the policies
