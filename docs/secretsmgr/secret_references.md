@@ -1,8 +1,8 @@
 # Provider-agnostic secret references
 
-Every secrets manager (Vault, Delinea, Doppler, CyberArk, and Fleet) accepts its own
-placeholder scheme — `${vault://…}`, `${delinea://…}`, `${doppler://…}`,
-`${cyberark://…}`, `${fleet://…}` — in policy and configuration fields. Alongside those,
+Every secrets manager (Vault, Delinea Secret Server, Delinea DSV, Doppler, CyberArk, and
+Fleet) accepts its own placeholder scheme — `${vault://…}`, `${delinea://…}`, `${dsv://…}`,
+`${doppler://…}`, `${cyberark://…}`, `${fleet://…}` — in policy and configuration fields. Alongside those,
 the Orb Agent also accepts a provider-agnostic scheme:
 
 ```
@@ -10,8 +10,8 @@ ${secret://<body>}
 ```
 
 `${secret://<body>}` is resolved by whichever secrets manager is **active** on the
-agent (the `secrets_manager.active` setting): Vault, Delinea, Doppler, CyberArk, or
-Fleet. This lets a policy or config value reference a managed secret without naming
+agent (the `secrets_manager.active` setting): Vault, Delinea Secret Server, Delinea DSV,
+Doppler, CyberArk, or Fleet. This lets a policy or config value reference a managed secret without naming
 a specific provider, so the same placeholder can be reused across agents configured
 with different secrets managers.
 
@@ -37,6 +37,7 @@ See each provider's own documentation for its body grammar:
 - [Doppler](./doppler.md)
 - [CyberArk (CCP)](./cyberark.md)
 - [Delinea Secret Server](./delinea.md)
+- [Delinea DevOps Secrets Vault (DSV)](./dsv.md)
 - Fleet — path-style references (`${fleet://path}`) delivered by the fleet control plane
 
 Provider-specific schemes keep working unchanged — `${secret://…}` is purely an
@@ -44,7 +45,7 @@ additional, optional alternative form; it does not deprecate or replace them.
 
 ## No secrets manager configured
 
-If no secrets manager is active (`secrets_manager.active` is unset or invalid), a
+If no secrets manager is active (`secrets_manager.active` is unset or empty), a
 policy or config value that uses a `${secret://…}` reference fails fast with a
 clear error rather than being forwarded to the backend as a literal string:
 

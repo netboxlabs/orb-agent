@@ -33,7 +33,9 @@ orb:
 | [Delinea DevOps Secrets Vault (DSV)](dsv.md) | `dsv` | `${dsv://<secret-path>/<field-key>}` |
 
 Each provider's page documents its own reference forms in full, since most
-accept more than one.
+accept more than one. Whichever provider is active also resolves
+`${secret://…}`, with the body written as for its own scheme. See
+[Provider-agnostic secret references](secret_references.md).
 
 Leaving `active` unset or empty skips the secrets manager and the agent starts
 normally. A value that is set but not recognised fails startup with an error

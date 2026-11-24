@@ -47,7 +47,7 @@ The DSV provider uses **client-credential** authentication: for every read, the 
 
 ## Usage
 
-Reference a DSV secret with:
+Reference a DSV secret with the form below. `${secret://…}` may be used instead of `${dsv://…}`; see [Provider-agnostic secret references](./secret_references.md).
 
 ```
 ${dsv://<secret-path>/<field-key>}
