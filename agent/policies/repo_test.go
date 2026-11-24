@@ -1235,3 +1235,67 @@ func TestFailNonTerminalRuns_MultiplePolicies(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "failed", p2.Runs[0].Status)
 }
+
+// TestUpdateCollectionErrorSetsAndClearsIt stores the error a backend reports
+// for a policy's last collection under the policy its name maps to, leaves
+// the state alone, and clears it with "".
+func TestUpdateCollectionErrorSetsAndClearsIt(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "test-id", Name: "test-policy", State: policies.Running}))
+
+	require.ErrorIs(t, repo.UpdateCollectionError("other-policy", "timeout", time.Time{}), policies.ErrPolicyNotFound)
+
+	require.NoError(t, repo.UpdateCollectionError("test-policy", "metrics collection failed: 10.0.0.1:161: timeout", time.Time{}))
+	got, err := repo.Get("test-id")
+	require.NoError(t, err)
+	assert.Equal(t, "metrics collection failed: 10.0.0.1:161: timeout", got.CollectionErr)
+	assert.Equal(t, policies.Running, got.State, "a collection error does not stop the policy")
+	assert.Empty(t, got.BackendErr)
+
+	require.NoError(t, repo.UpdateCollectionError("test-policy", "", time.Time{}))
+	got, err = repo.Get("test-id")
+	require.NoError(t, err)
+	assert.Empty(t, got.CollectionErr, "cleared once collection works again")
+}
+
+func TestUpdateCollectionErrorWithPreparesItForThePolicyTheNameMapsTo(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "test-id", Name: "test-policy"}))
+
+	var preparedFor []string
+	prepare := func(policyID string, message string) string {
+		preparedFor = append(preparedFor, policyID)
+		return message + " (prepared for " + policyID + ")"
+	}
+	require.ErrorIs(t, repo.UpdateCollectionErrorWith("other-policy", "timeout", prepare), policies.ErrPolicyNotFound)
+	assert.Empty(t, preparedFor, "nothing is prepared for a name no policy has")
+
+	require.NoError(t, repo.UpdateCollectionErrorWith("test-policy", "timeout", prepare))
+	assert.Equal(t, []string{"test-id"}, preparedFor)
+	got, err := repo.Get("test-id")
+	require.NoError(t, err)
+	assert.Equal(t, "timeout (prepared for test-id)", got.CollectionErr)
+}
+
+// TestUpdateKeepingRunsKeepsTheCollectionError writes back an apply outcome
+// from a snapshot taken before the state monitor stored a collection error:
+// the error is kept, as the runs are.
+func TestUpdateKeepingRunsKeepsTheCollectionError(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	pd := policies.PolicyData{ID: "test-id", Name: "test-policy", State: policies.Running}
+	require.NoError(t, repo.Update(pd))
+	require.NoError(t, repo.UpdateCollectionError("test-policy", "timeout", time.Time{}))
+
+	require.NoError(t, repo.UpdateKeepingRuns(pd))
+	got, err := repo.Get("test-id")
+	require.NoError(t, err)
+	assert.Equal(t, "timeout", got.CollectionErr)
+
+	require.NoError(t, repo.Update(pd))
+	got, err = repo.Get("test-id")
+	require.NoError(t, err)
+	assert.Empty(t, got.CollectionErr, "a record written whole, as a new version is, starts without one")
+}

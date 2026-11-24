@@ -1007,6 +1007,201 @@ func TestRunsACallerPreparesAreMaskedToo(t *testing.T) {
 	assert.Contains(t, stored.Runs[0].Reason, "auth of 192.0.2.10 failed with ********")
 }
 
+// TestCollectionErrorIsMaskedAndBounded stores the error a telemetry binary
+// reports for a policy's last collection: a value of the policy's secret
+// references it quotes is masked, as in a run's reason, the error is kept to
+// the bound of a policy's reason however many targets fail, and "" clears it.
+func TestCollectionErrorIsMaskedAndBounded(t *testing.T) {
+	now := time.Now()
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1", "policy-2")
+	resolved.remember("policy-1", "snmp_telemetry", []resolvedValue{{path: "scope.targets[0].host", value: "Pl41n-credential"}})
+
+	require.NoError(t, repo.UpdateCollectionError("policy-1", "metrics collection failed: Pl41n-credential:161: request timeout", time.Time{}))
+	stored, err := repo.Get("policy-1")
+	require.NoError(t, err)
+	assert.Contains(t, stored.CollectionErr, "metrics collection failed: ********:161: request timeout")
+	assert.NotContains(t, stored.CollectionErr, "Pl41n-credential")
+
+	var failing []string
+	for i := range 200 {
+		failing = append(failing, fmt.Sprintf("10.0.%d.%d:161: request timeout", i/250, i%250))
+	}
+	require.NoError(t, repo.UpdateCollectionError("policy-2", "metrics collection failed: "+strings.Join(failing, "; "), time.Time{}))
+	stored, err = repo.Get("policy-2")
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(stored.CollectionErr), maxBackendErrLen, "bounded however many targets fail")
+	assert.True(t, strings.HasSuffix(stored.CollectionErr, truncationMarker), stored.CollectionErr)
+
+	require.NoError(t, repo.UpdateCollectionError("policy-1", "", time.Time{}))
+	stored, err = repo.Get("policy-1")
+	require.NoError(t, err)
+	assert.Empty(t, stored.CollectionErr)
+}
+
+// TestCollectionErrorIsMaskedForThePolicyItIsStoredOn has another policy
+// stored under the name, or the policy's values change, between the masking
+// repo's look-up and the store: the error is masked again for the policy it
+// is stored on, and still with the values of the one it was reported for.
+func TestCollectionErrorIsMaskedForThePolicyItIsStoredOn(t *testing.T) {
+	const secret = "Pl41n-credential"
+	for name, meanwhile := range map[string]func(t *testing.T, resolved *resolvedSecrets, repo policies.PolicyRepo){
+		"another policy is stored under the name": func(t *testing.T, resolved *resolvedSecrets, repo policies.PolicyRepo) {
+			resolved.remember("policy-2", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: "0ther-credential"}})
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-2", Name: "shared", Backend: "snmp_telemetry"}))
+		},
+		"the policy's values change": func(_ *testing.T, resolved *resolvedSecrets, _ policies.PolicyRepo) {
+			resolved.remember("policy-1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: "0ther-credential"}})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			now := time.Now()
+			resolved, repo := newTestMaskingRepo(t, &now)
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-1", Name: "shared", Backend: "snmp_telemetry"}))
+			resolved.remember("policy-1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: secret}})
+			store := repo.PolicyRepo
+			repo.PolicyRepo = &changedBeforeStore{PolicyRepo: store, change: func() { meanwhile(t, resolved, store) }}
+
+			require.NoError(t, repo.UpdateCollectionError("shared", "auth of 192.0.2.10 failed with "+secret+", then 0ther-credential", time.Time{}))
+			all, err := repo.GetAll()
+			require.NoError(t, err)
+			var errs []string
+			for _, pd := range all {
+				if pd.CollectionErr != "" {
+					errs = append(errs, pd.CollectionErr)
+				}
+			}
+			require.Len(t, errs, 1, "stored on one policy")
+			assert.NotContains(t, errs[0], secret, "masked with the values of the policy it was reported for")
+			assert.NotContains(t, errs[0], "0ther-credential", "masked with the values of the policy it is stored on")
+			assert.Contains(t, errs[0], "auth of 192.0.2.10 failed with ********")
+		})
+	}
+}
+
+// TestCollectionErrorACallerPreparesIsMaskedToo stores an error through the
+// masking repo's UpdateCollectionErrorWith: what the caller writes is masked
+// like what the backend reported.
+func TestCollectionErrorACallerPreparesIsMaskedToo(t *testing.T) {
+	now := time.Now()
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	resolved.remember("policy-1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: "Pl41n-credential"}})
+
+	quote := func(string, string) string { return "auth of 192.0.2.10 failed with Pl41n-credential" }
+	require.NoError(t, repo.UpdateCollectionErrorWith("policy-1", "", quote))
+	stored, err := repo.Get("policy-1")
+	require.NoError(t, err)
+	assert.Contains(t, stored.CollectionErr, "auth of 192.0.2.10 failed with ********")
+}
+
+// TestCollectionErrorOfAPolicyReplacedUnderTheNameIsNotStoredOnTheNewOne
+// removes a policy and applies another under its name, the way a telemetry
+// backend's error for the first can still be waiting to be stored: an error
+// the backend recorded before the new policy began to run is the old one's,
+// and is not stored; one without a time is masked with the old policy's
+// values as well as the new one's; one recorded since is stored.
+func TestCollectionErrorOfAPolicyReplacedUnderTheNameIsNotStoredOnTheNewOne(t *testing.T) {
+	const oldSecret, newSecret = "0ld-p4ssw0rd", "n3w-k3y-v4lue"
+	now := time.Date(2026, 11, 23, 15, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now)
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "p1", Name: "core", Backend: "snmp_telemetry"}))
+	resolved.remember("p1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: oldSecret}}, "core")
+	recordedForP1 := now.Add(time.Minute)
+	now = now.Add(2 * time.Minute)
+	require.NoError(t, repo.Remove("p1"))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "q1", Name: "core", Backend: "snmp_telemetry"}))
+	resolved.remember("q1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: newSecret}}, "core")
+	stored := func() string {
+		t.Helper()
+		pd, err := repo.Get("q1")
+		require.NoError(t, err)
+		return pd.CollectionErr
+	}
+
+	require.NoError(t, repo.UpdateCollectionError("core", "auth of 192.0.2.10 failed with "+oldSecret, recordedForP1))
+	assert.Empty(t, stored(), "recorded before the policy under the name began to run")
+
+	require.NoError(t, repo.UpdateCollectionError("core", "auth failed with "+oldSecret+", then "+newSecret, time.Time{}))
+	assert.True(t, strings.HasPrefix(stored(), "auth failed with ********, then ******** "), "no time: masked with both policies' values: %s", stored())
+
+	require.NoError(t, repo.UpdateCollectionError("core", "auth of 192.0.2.10 failed with "+newSecret, now.Add(time.Second)))
+	assert.True(t, strings.HasPrefix(stored(), "auth of 192.0.2.10 failed with ******** "), "recorded since the policy began to run: %s", stored())
+}
+
+// TestCollectionErrorOfAReplacedPolicyIsMaskedWithItsLastThreeResolutions
+// resolves a policy's secret reference to three values in turn, then removes
+// the policy and applies another under its name: an error without a time the
+// backend reported for the first can quote any of the three, as its runs
+// can, and each is masked.
+func TestCollectionErrorOfAReplacedPolicyIsMaskedWithItsLastThreeResolutions(t *testing.T) {
+	resolutions := []string{"f1rst-p4ss", "s3cond-k3y", "th1rd-t0ken"}
+	now := time.Date(2026, 11, 23, 15, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now)
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "p1", Name: "core", Backend: "snmp_telemetry"}))
+	for _, value := range resolutions {
+		now = now.Add(time.Minute)
+		resolved.remember("p1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: value}}, "core")
+	}
+	require.NoError(t, repo.Remove("p1"))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "q1", Name: "core", Backend: "snmp_telemetry"}))
+	resolved.remember("q1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: "n3w-v4lue"}}, "core")
+
+	for _, value := range resolutions {
+		require.NoError(t, repo.UpdateCollectionError("core", "auth of 192.0.2.10 failed with "+value, time.Time{}))
+		pd, err := repo.Get("q1")
+		require.NoError(t, err)
+		assert.Equal(t, "auth of 192.0.2.10 failed with ********", pd.CollectionErr, "the error quotes %s", value)
+	}
+}
+
+// TestCollectionErrorIsMaskedWithAPolicyReplacedBeforeTheLookup removes a
+// policy and applies another under its name between the backend's read of an
+// error without a time and the masking repo's look-up of the name, as far as
+// the store holding the new one with the old one's values not yet departed:
+// the error, the old policy's, is masked with its values all the same.
+func TestCollectionErrorIsMaskedWithAPolicyReplacedBeforeTheLookup(t *testing.T) {
+	const oldSecret = "0ld-p4ssw0rd"
+	for name, remove := range map[string]func(t *testing.T, repo *maskingRepo){
+		"removed":                func(t *testing.T, repo *maskingRepo) { require.NoError(t, repo.Remove("p1")) },
+		"removed from the store": func(t *testing.T, repo *maskingRepo) { require.NoError(t, repo.PolicyRepo.Remove("p1")) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			now := time.Date(2026, 11, 23, 15, 0, 0, 0, time.UTC)
+			resolved, repo := newTestMaskingRepo(t, &now)
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "p1", Name: "core", Backend: "snmp_telemetry"}))
+			resolved.remember("p1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: oldSecret}}, "core")
+			store := repo.PolicyRepo
+			repo.PolicyRepo = &changedBeforeLookup{PolicyRepo: store, change: func() {
+				remove(t, repo)
+				require.NoError(t, store.Update(policies.PolicyData{ID: "q1", Name: "core", Backend: "snmp_telemetry"}))
+				resolved.remember("q1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: "n3w-k3y-v4lue"}}, "core")
+			}}
+
+			require.NoError(t, repo.UpdateCollectionError("core", "auth of 192.0.2.10 failed with "+oldSecret, time.Time{}))
+			pd, err := store.Get("q1")
+			require.NoError(t, err)
+			assert.Equal(t, "auth of 192.0.2.10 failed with ********", pd.CollectionErr)
+		})
+	}
+}
+
+// TestCollectionErrorOfThePreviousResolutionIsStored has a policy's secret
+// references resolve to other values while the backend still reports an
+// error it recorded with the earlier ones: the error is the policy's own,
+// and is stored, masked with both.
+func TestCollectionErrorOfThePreviousResolutionIsStored(t *testing.T) {
+	now := time.Date(2026, 11, 23, 15, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	resolved.remember("policy-1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: "f1rst-credential"}})
+	recorded := now.Add(time.Minute)
+	now = now.Add(2 * time.Minute)
+	resolved.remember("policy-1", "snmp_telemetry", []resolvedValue{{path: "scope.community", value: "s3cond-credential"}})
+
+	require.NoError(t, repo.UpdateCollectionError("policy-1", "auth failed with f1rst-credential", recorded))
+	pd, err := repo.Get("policy-1")
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(pd.CollectionErr, "auth failed with ******** "), pd.CollectionErr)
+}
+
 // changedBeforeStore is a store that change changes right before runs are
 // handed to it: after whatever the masking repo looked up or masked before.
 type changedBeforeStore struct {
@@ -1017,6 +1212,28 @@ type changedBeforeStore struct {
 func (s *changedBeforeStore) UpdateRunsWith(name string, runs []policies.RunData, prepare func(string, []policies.RunData) []policies.RunData) error {
 	s.change()
 	return s.PolicyRepo.UpdateRunsWith(name, runs, prepare)
+}
+
+func (s *changedBeforeStore) UpdateCollectionErrorWith(name string, message string, prepare func(string, string) string) error {
+	s.change()
+	return s.PolicyRepo.UpdateCollectionErrorWith(name, message, prepare)
+}
+
+// changedBeforeLookup is a store that change changes once, right before the
+// first look-up of a policy by name: after whatever the masking repo masked
+// before it.
+type changedBeforeLookup struct {
+	policies.PolicyRepo
+	change func()
+	done   bool
+}
+
+func (s *changedBeforeLookup) GetByName(name string) (policies.PolicyData, error) {
+	if !s.done {
+		s.done = true
+		s.change()
+	}
+	return s.PolicyRepo.GetByName(name)
 }
 
 // handedRuns is a store that records the reasons of the runs handed to it.

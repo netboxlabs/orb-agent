@@ -1,11 +1,14 @@
 package fleet
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
@@ -16,6 +19,14 @@ import (
 
 const (
 	heartbeatFreq = 5 * time.Second
+	// maxCollectionErrorsLen is the most the collection errors of the running
+	// policies take of a heartbeat together. Each is kept to 1 KB as it is
+	// stored, but Fleet drops a heartbeat larger than 25 KiB whole, and with it
+	// the state of every policy, so the errors of many failing policies are
+	// kept to this between them (see boundCollectionErrors).
+	maxCollectionErrorsLen = 8 * 1024
+	// collectionErrorCut ends a collection error a heartbeat cuts.
+	collectionErrorCut = "... (truncated)"
 )
 
 // heartbeatTickInterval is the delay between periodic heartbeats. Tests shorten it.
@@ -171,18 +182,76 @@ func (hb *heartbeater) getPolicyState() map[string]messages.PolicyStateInfo {
 		return make(map[string]messages.PolicyStateInfo)
 	}
 	ps := make(map[string]messages.PolicyStateInfo)
+	var collecting []string
 	for _, policyState := range policyStates {
-		ps[policyState.ID] = messages.PolicyStateInfo{
+		info := messages.PolicyStateInfo{
 			Name:     policyState.Name,
 			Datasets: policyState.GetDatasetIDs(),
 			State:    policyState.State.String(),
-			Error:    policyState.BackendErr,
+			Error:    policyError(policyState),
 			Version:  policyState.Version,
 			Backend:  policyState.Backend,
 			Runs:     convertRunsToStateInfo(policyState.Runs),
 		}
+		if policyState.BackendErr == "" && policyState.State == policies.Running && info.Error != "" {
+			collecting = append(collecting, policyState.ID)
+		}
+		ps[policyState.ID] = info
 	}
+	boundCollectionErrors(ps, collecting)
 	return ps
+}
+
+// boundCollectionErrors keeps the collection errors of the policies
+// collecting names in ps to maxCollectionErrorsLen together. When they add
+// up to more, the space is shared evenly: an error shorter than its share is
+// kept whole, and what it leaves goes to the others, which are cut to their
+// share, ending with collectionErrorCut. Why a policy failed to apply is not
+// cut: it stays as the policy manager bounded it.
+func boundCollectionErrors(ps map[string]messages.PolicyStateInfo, collecting []string) {
+	total := 0
+	for _, id := range collecting {
+		total += len(ps[id].Error)
+	}
+	if total <= maxCollectionErrorsLen {
+		return
+	}
+	slices.SortFunc(collecting, func(a, b string) int {
+		return cmp.Or(cmp.Compare(len(ps[a].Error), len(ps[b].Error)), cmp.Compare(a, b))
+	})
+	left := maxCollectionErrorsLen
+	for i, id := range collecting {
+		info := ps[id]
+		info.Error = cutCollectionError(info.Error, left/(len(collecting)-i))
+		left = max(left-len(info.Error), 0)
+		ps[id] = info
+	}
+}
+
+// cutCollectionError returns message, or, when it is longer than limit, its
+// start, cut where a character starts and followed by collectionErrorCut, in
+// limit bytes, or in those of collectionErrorCut alone when limit is less.
+func cutCollectionError(message string, limit int) string {
+	if len(message) <= limit {
+		return message
+	}
+	n := max(limit-len(collectionErrorCut), 0)
+	for n > 0 && !utf8.RuneStart(message[n]) {
+		n--
+	}
+	return message[:n] + collectionErrorCut
+}
+
+// policyError is the error a policy's state carries: why it failed to apply,
+// or, for a running policy, the error its backend reports for its last
+// collection (a telemetry policy whose device times out keeps running, with
+// the device's error), which is masked and bounded as it is stored. It is ""
+// for a running policy collecting without errors.
+func policyError(policy policies.PolicyData) string {
+	if policy.BackendErr == "" && policy.State == policies.Running {
+		return policy.CollectionErr
+	}
+	return policy.BackendErr
 }
 
 // convertRunsToStateInfo converts policies.RunData to messages.RunStateInfo.
