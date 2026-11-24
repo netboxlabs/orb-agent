@@ -564,6 +564,30 @@ func TestEmbeddedLookupExtensions_ExtremeBaseMIB(t *testing.T) {
 	}
 }
 
+func TestEmbeddedLookupExtensions_NDXModels(t *testing.T) {
+	// sysObjectIDs the tables gained or had corrected, named as their NDX
+	// device type: one per source of evidence.
+	deviceLookup, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+
+	for oid, want := range map[string]string{
+		".1.3.6.1.4.1.11.2.3.7.11.140":         "Aruba 2530-24G",    // HP-ICF-OID hpSwitchJ9776A, added
+		".1.3.6.1.4.1.11.2.3.7.11.129":         "Aruba 2620-24",     // was arubaSwitch129, hpSwitchJ9623A
+		".1.3.6.1.4.1.6486.801.1.1.2.1.11.1.1": "OS6860-24",         // AOS 7 deviceOmniSwitch6860-24, added
+		".1.3.6.1.4.1.2636.1.1.1.2.34":         "SRX3600",           // was juniSRX5400, jnxProductNameSRX3600
+		".1.3.6.1.4.1.2636.1.1.1.2.105":        "SRX5400",           // jnxProductNameSRX5400, added
+		".1.3.6.1.4.1.12356.101.1.644":         "FortiGate 60F",     // was fw60EI, fgt60F
+		".1.3.6.1.4.1.12356.103.1.4007":        "FortiManager 400G", // fmg400G, added
+		".1.3.6.1.4.1.3097.1.5.57":             "Firebox M4600",     // WATCHGUARD-PRODUCTS-MIB M4600, added
+		".1.3.6.1.4.1.6321.1.2.4.1.6":          "E9-2",              // CALIX-PRODUCT-MIB axosDevices e9-2, added
+		".1.3.6.1.4.1.1182.1.79":               "WLX322",            // Yamaha, from NDX, added
+	} {
+		model, err := deviceLookup.GetDeviceModel(oid, map[string]string{})
+		assert.NoError(t, err, "OID %s should resolve", oid)
+		assert.Equal(t, want, model, "OID %s", oid)
+	}
+}
+
 func TestEmbeddedLookupExtensions_NoDuplicateOIDs(t *testing.T) {
 	oidSources := make(map[string]string) // oid -> first file it was seen in
 
