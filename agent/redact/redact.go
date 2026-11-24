@@ -666,9 +666,10 @@ func userInfoAt(t string) int {
 
 // referencePattern matches a secret reference, as ${vault://mount/path/key},
 // as the agent's secrets managers match one: for the schemes they resolve,
-// with a body of anything but a }, as a Vault path or field can hold.
-// Anything else in ${...}, as ${https://user:password@host}, is no reference.
-var referencePattern = regexp.MustCompile(`\$\{(?:vault|fleet|doppler|delinea|cyberark|dsv)://([^}]*)\}`)
+// and secret, which the active one resolves, with a body of anything but a },
+// as a Vault path or field can hold. Anything else in ${...}, as
+// ${https://user:password@host}, is no reference.
+var referencePattern = regexp.MustCompile(`\$\{(?:vault|fleet|doppler|delinea|cyberark|dsv|secret)://([^}]*)\}`)
 
 // references returns where the secret references of s are, in order: those
 // referencePattern matches with no @ in their body nor in the word their }

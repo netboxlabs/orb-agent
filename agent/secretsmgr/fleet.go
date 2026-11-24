@@ -3,6 +3,7 @@ package secretsmgr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -23,7 +24,14 @@ import (
 var _ Manager = (*FleetSecretsManager)(nil)
 
 // fleetRefRegex matches fleet secret references in the format ${fleet://path}
-var fleetRefRegex = regexp.MustCompile(`\${fleet://([^}]+)}`)
+// or the provider-agnostic ${secret://path} form. The body uses * (zero or
+// more) so an empty body like "${secret://}" still matches and is rejected
+// with a clear error instead of leaking the literal placeholder to the
+// backend — mirroring the shared resolver.
+var fleetRefRegex = regexp.MustCompile(`\${(?:fleet|` + genericScheme + `)://([^}]*)}`)
+
+// errEmptyFleetBody is why a reference with nothing after its :// is refused.
+var errEmptyFleetBody = errors.New("empty body")
 
 const defaultSecretRequestTimeout = 30 * time.Second
 
@@ -55,6 +63,9 @@ type FleetSecretsManager struct {
 	// invalidations counts the refreshes that failed, so an answer can tell
 	// whether its request started before a path's latest failure.
 	invalidations uint64
+	// refused holds the policies refused for an empty reference, which no
+	// request can resolve.
+	refused refusals
 }
 
 type fleetCachedSecret struct {
@@ -305,9 +316,13 @@ func (f *FleetSecretsManager) RegisterUpdatePoliciesCallback(callback func(map[s
 	f.callback = callback
 }
 
-// Unresolved returns the error of the failed refresh of a path the policy
-// uses, in order, while the path is still stale, or nil.
+// Unresolved returns why the policy's last solve was refused for an empty
+// reference, else the error of the failed refresh of a path the policy uses,
+// in order, while the path is still stale, or nil.
 func (f *FleetSecretsManager) Unresolved(policyID string) error {
+	if err := f.refused.get(policyID); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, path := range slices.Sorted(maps.Keys(f.usedVars)) {
@@ -329,6 +344,7 @@ func (f *FleetSecretsManager) PolicyApplied(policyID string, data any) {
 // ForgetPolicy drops a removed policy from the paths it used, and the paths
 // no policy uses any more.
 func (f *FleetSecretsManager) ForgetPolicy(policyID string) {
+	f.refused.set(policyID, nil)
 	f.retain(policyID, nil)
 }
 
@@ -351,6 +367,7 @@ func (f *FleetSecretsManager) retain(policyID string, paths map[string]struct{})
 // SolvePolicySecrets resolves fleet secret references in a policy payload
 func (f *FleetSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
 	newPayload := payload
+	f.refused.set(payload.ID, nil)
 
 	pathSet := make(map[string]struct{})
 	collectFleetPaths(payload.Data, pathSet)
@@ -364,6 +381,9 @@ func (f *FleetSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (
 
 	processedData, err := f.processValue(payload.Data, payload.ID)
 	if err != nil {
+		if errors.Is(err, errEmptyFleetBody) {
+			f.refused.set(payload.ID, err)
+		}
 		return payload, err
 	}
 
@@ -427,7 +447,9 @@ func collectFleetPaths(v any, set map[string]struct{}) {
 		// Align with processString: only the first ${fleet://...} is resolved; the rest
 		// of the string is discarded when substituting (legacy single-token behavior).
 		idx := fleetRefRegex.FindStringSubmatchIndex(val)
-		if len(idx) >= 4 {
+		if len(idx) >= 4 && idx[2] != idx[3] {
+			// empty bodies are skipped here; processString rejects them with
+			// a clear error rather than requesting an empty path
 			set[val[idx[2]:idx[3]]] = struct{}{}
 		}
 	case map[string]any:
@@ -559,6 +581,10 @@ func (f *FleetSecretsManager) processString(s string, id string) (string, error)
 	}
 
 	fleetPath := s[match[2]:match[3]]
+	if fleetPath == "" {
+		// Quotes the reference alone: the text around it can hold a login.
+		return "", fmt.Errorf("invalid fleet secret reference %s: %w", s[match[0]:match[1]], errEmptyFleetBody)
+	}
 
 	// Check if secret exists in cache and update policy tracking
 	f.mu.Lock()
@@ -644,7 +670,7 @@ func (f *FleetSecretsManager) requestSecrets(ctx context.Context, paths []string
 
 	f.logger.Info("requesting secrets", "paths", paths, "policy_ids", policyIDs)
 	if f.publisher == nil {
-		return nil, fmt.Errorf("MQTT publisher not bound")
+		return nil, fmt.Errorf("MQTT publisher not bound: the fleet secrets manager reads secrets over the MQTT session of the fleet config manager, so it resolves references only in policies, and only when config_manager.active is fleet")
 	}
 	f.mu.RLock()
 	started := f.invalidations
