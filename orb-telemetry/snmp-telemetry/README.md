@@ -183,10 +183,27 @@ SNMPv1/v2c community, which a device drops without an answer. A device that
 refuses an SNMPv3 credential answers with a report PDU instead, so its error
 says so, and which setting to check, without any value:
 `the device refused the SNMPv3 credential (check the auth_protocol and auth_passphrase): ...`
-for a wrong authentication passphrase or protocol, `(check the priv_protocol and
-priv_passphrase)` for a wrong privacy one, `(the device does not know the
-username)`, and `(the device does not accept the security_level for the
-username)`.
+for a wrong authentication passphrase or protocol, `(the device does not know
+the username)`, and `(the device does not accept the security_level for the
+username)` for a level the user does not have on the device, such as
+`authPriv` for a user without privacy.
+
+A wrong privacy passphrase is not reported. The device decrypts the request
+into something it cannot read and drops it, so the request times out. The
+device has answered the SNMPv3 engine discovery that starts the session by
+then, which a device that is not there does not, so an `authPriv` target's
+error says so:
+`the device answered SNMPv3 discovery but not the request (check the priv_protocol and priv_passphrase): ... request timeout`.
+A slow device or a lost reply reads the same, so take it as what to check
+first. A device reports a refusal with `(check the priv_protocol and
+priv_passphrase)` only for a request it cannot decrypt at all, as net-snmp
+does for a user with DES that is asked with AES.
+
+These texts say what to check, and prove nothing. A device sends such a
+report without authentication, so whoever can send packets from the device's
+address can forge one. A forged report changes only the text of a collection
+that has already failed. It cannot make a collection succeed, and nothing
+else in it is read.
 
 ### Receiving traps
 

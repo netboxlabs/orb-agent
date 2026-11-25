@@ -17,6 +17,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/collector"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/snmp"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/targets"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/traps"
 )
@@ -420,14 +421,28 @@ func (r *Runner) runMetrics(target config.Target) {
 }
 
 // credentialRefusal names an SNMPv3 credential the device refused as one.
-// A device answers a request whose user, authentication or privacy it does
-// not accept with a report PDU, which gosnmp returns as one of these errors,
-// so the poller can tell a refused credential from a device that does not
-// answer, which times out. (A wrong SNMPv1/v2c community gets no answer at
-// all, so it stays a timeout.) The text names the setting to check, and no
-// value: gosnmp's errors carry none, and neither does what is added here.
-// Any other error is returned as it is.
+// A device answers a request whose user, authentication or security level it
+// does not accept with a report PDU, which the client returns as one of these
+// errors (snmp.Client.Walk reads the report gosnmp discards), so the poller
+// can tell a refused credential from a device that does not answer, which
+// times out. (A wrong SNMPv1/v2c community gets no answer at all, so it stays
+// a timeout.)
+//
+// A wrong privacy passphrase gets no report either: the device cannot read
+// what it decrypts, and drops it. The client tells that timeout from a device
+// that is not there by the device's answer to engine discovery
+// (snmp.NoAnswerAfterDiscoveryError), and the text then says what to check
+// without calling it a refusal, which it may not be. A decryption error is
+// reported only for a request the device cannot decrypt at all.
+//
+// The text names the setting to check, and no value: gosnmp's errors carry
+// none, and neither does what is added here. Any other error is returned as
+// it is.
 func credentialRefusal(err error) error {
+	var silent *snmp.NoAnswerAfterDiscoveryError
+	if errors.As(err, &silent) {
+		return fmt.Errorf("the device answered SNMPv3 discovery but not the request (check the priv_protocol and priv_passphrase): %w", err)
+	}
 	var check string
 	switch {
 	case errors.Is(err, gosnmp.ErrUnknownUsername):

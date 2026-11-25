@@ -117,6 +117,10 @@ type Client struct {
 	// stopCancelWatch ends the watch Connect starts on the collection's
 	// context; nil before Connect.
 	stopCancelWatch func() bool
+	// replies keeps the last reply of a walk, from which a failed walk reads
+	// why the device refused an SNMPv3 credential (see replyRecorder). Nil
+	// for v1 and v2c, over TCP, and before Connect.
+	replies *replyRecorder
 }
 
 // Connect implements the Walker interface by dialing the device.
@@ -129,6 +133,13 @@ type Client struct {
 func (c *Client) Connect() error {
 	if err := c.GoSNMP.Connect(); err != nil {
 		return err
+	}
+	// Only a datagram socket: a read of a TCP stream is not one reply. The
+	// recorder stands in for the connection from here on, for the watch
+	// below and for Close too.
+	if udp, ok := c.Conn.(*net.UDPConn); ok && c.Version == gosnmp.Version3 {
+		c.replies = &replyRecorder{Conn: udp, priv: c.MsgFlags&gosnmp.AuthPriv == gosnmp.AuthPriv}
+		c.Conn = c.replies
 	}
 	if ctx, conn := c.Context, c.Conn; ctx != nil && conn != nil {
 		c.stopCancelWatch = context.AfterFunc(ctx, func() {
@@ -212,9 +223,11 @@ func (c *Client) Walk(objectID string) (map[string]PDU, error) {
 	if c.bulkWalk {
 		walkAll = c.BulkWalkAll
 	}
+	c.replies.forget()
 	pdu, err := walkAll(objectID)
 	if err != nil {
-		return nil, c.redactError(err)
+		cancelled := c.Context != nil && errors.Is(c.Context.Err(), context.Canceled)
+		return nil, c.redactError(c.replies.refusal(err, cancelled))
 	}
 	output := make(map[string]PDU)
 	for _, pdu := range pdu {
