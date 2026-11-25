@@ -216,7 +216,8 @@ func TestMaskLogins_MasksTheLoginAURLParserReadsShort(t *testing.T) {
 }
 
 // A password that starts with a /, ? or # leaves only the user and its : in
-// the authority a URL parser reads short. urllib3 reads the user as the host,
+// the authority a URL parser reads short, and one with only a port number
+// before it the user and that port. urllib3 reads the user as the host,
 // with an empty port, and writes it as a host: the lines below are the ones
 // the worker printed for each of the three, with --debug for the last, as the
 // SDK raised them. With a /, the URL it quotes holds the password before its
@@ -241,6 +242,15 @@ func TestMaskLogins_MasksTheUserAURLParserReadsAsAHost(t *testing.T) {
 			refused("canary-user", "/canary@127.0.0.1:8080/diode/auth/token"),
 			refused("********", "/********@127.0.0.1:8080/diode/auth/token"),
 		},
+		// A password whose start before the separator is a port number: the
+		// parser reads the user as the host and that number as its port,
+		// which is not masked.
+		{
+			"grpc://Canary-User:80/canary@127.0.0.1:8080/diode",
+			refused("canary-user", "/canary@127.0.0.1:8080/diode/auth/token"),
+			refused("********", "/********@127.0.0.1:8080/diode/auth/token"),
+		},
+		{"grpc://canary-user:0080?canary@127.0.0.1:8080/diode", refused("canary-user", "/auth/token"), refused("********", "/auth/token")},
 		{
 			"grpc://canary-user:/canary@127.0.0.1:8080/diode",
 			"DEBUG: urllib3.connectionpool: Starting new HTTP connection (1): canary-user:80",

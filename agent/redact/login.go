@@ -101,13 +101,14 @@ func MaskLogins(text string, logins []string) string {
 // for a user alone, where it also starts a word. A login that holds a
 // password is also masked where it starts a word and ends one, with no @
 // after it, so not at the start of a longer word, as bob:secret is in
-// bob:secretary. A login that ends in : with no password after it, as the
+// bob:secretary. A login whose password is empty or only digits, as the
 // authority a URL parser reads short when the password starts with a /, ?
-// or # (see withURLParts), also has its user masked where a host is written:
-// the parser reads the user as the host with an empty port, and urllib3
-// writes it as one, lowercased, as in host='user' and Failed to resolve
-// 'user', so the user is masked as written and lowercased. A login written
-// with an empty password, as user:@host, is masked the same way.
+// or #, or holds only a port number before one (see withURLParts), also has
+// its user masked where a host is written: the parser reads the user as the
+// host, with that port or none, and urllib3 writes it as one, lowercased, as
+// in host='user', port=80 and Failed to resolve 'user', so the user is
+// masked as written and lowercased. A login written with such a password,
+// as user:@host or user:1234@host, is masked the same way.
 func maskLogin(text, login string) string {
 	if login == "" {
 		return text
@@ -119,7 +120,7 @@ func maskLogin(text, login string) string {
 		word := startsWord(text, start)
 		return beforeAt && (hasColon || word) || hasPassword && word && endsWord(text, end)
 	})
-	if hasColon && !hasPassword && user != "" {
+	if hasColon && user != "" && isPort(password) {
 		for _, hostUser := range []string{user, strings.ToLower(user)} {
 			text = maskWhere(text, hostUser, func(text string, start, end int) bool {
 				return startsWord(text, start) && (end == len(text) || !isHostByte(text[end]))
@@ -165,6 +166,12 @@ func startsWord(text string, i int) bool {
 		return true
 	}
 	return i >= 2 && text[i-2] == '\\' && strings.IndexByte("nrt", text[i-1]) >= 0
+}
+
+// isPort reports whether s, the part of a login after its :, is what a URL
+// parser reads as a port: no character, or only digits.
+func isPort(s string) bool {
+	return strings.Trim(s, "0123456789") == ""
 }
 
 // endsWord reports whether a login found ending at end in text ends a word
