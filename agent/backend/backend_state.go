@@ -85,6 +85,21 @@ type stateManager struct {
 	// process that keeps ending (ticksBeforeRestart).
 	restarts  map[string]int
 	downTicks map[string]int
+	// finished is when RestartFinished last ran for each backend.
+	finished map[string]time.Time
+}
+
+// sinceStart is how long ago the backend's process started, or the last
+// restart finished if that is later: a restart that started no process (its
+// configure failed, say) counts as a start for the waits measured from one,
+// so the monitor does not ask for a restart on every tick after it. Callers
+// hold the mutex.
+func (manager *stateManager) sinceStart(name string, be Backend) time.Duration {
+	from := be.GetStartTime()
+	if f := manager.finished[name]; f.After(from) {
+		from = f
+	}
+	return manager.now().Sub(from)
 }
 
 // ticksBeforeRestart is how many ticks that find a backend's process gone
@@ -111,6 +126,7 @@ func NewStateManager(activeConfigMgr string, logger *slog.Logger, restartBackend
 			queued:             make(map[string]time.Time),
 			restarts:           make(map[string]int),
 			downTicks:          make(map[string]int),
+			finished:           make(map[string]time.Time),
 			now:                time.Now,
 			tick: func(d time.Duration) (<-chan time.Time, func()) {
 				t := time.NewTicker(d)
@@ -188,7 +204,7 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 				}
 				manager.backendState[name].LastError = ""
 				delete(manager.downTicks, name)
-				if time.Since(be.GetStartTime()) >= MinRestartTime {
+				if manager.now().Sub(be.GetStartTime()) >= MinRestartTime {
 					// It ran long enough: its next end is not one of a series.
 					delete(manager.restarts, name)
 				}
@@ -203,12 +219,18 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 					manager.backendState[name].LastError = errMsg
 				}
 				manager.downTicks[name]++
+				if ended && manager.downTicks[name] == 1 && manager.sinceStart(name, be) >= MinRestartTime {
+					// The tick before found it running, so it ran about
+					// MinRestartTime before it ended: like a run a Running
+					// tick saw last that long, its end is not one of a series.
+					delete(manager.restarts, name)
+				}
 				// A process that is gone is restarted at once, or after the
 				// wait its earlier restarts earned, never later than
-				// MinRestartTime from its start; one that runs without
-				// answering may still be starting, so it gets MinRestartTime
-				// from its start.
-				due := time.Since(be.GetStartTime()) >= MinRestartTime
+				// MinRestartTime from its start (sinceStart); one that runs
+				// without answering may still be starting, so it gets
+				// MinRestartTime from its start.
+				due := manager.sinceStart(name, be) >= MinRestartTime
 				if ended && manager.downTicks[name] > ticksBeforeRestart(manager.restarts[name]) {
 					due = true
 				}
@@ -231,7 +253,7 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 						manager.logger.Info("backend process ended, waiting before restarting it", "backend", name, "remaining", wait, "restarts", restarts)
 					}
 				} else {
-					remainingSecondsUntilRestart := MinRestartTime - time.Since(be.GetStartTime())
+					remainingSecondsUntilRestart := MinRestartTime - manager.sinceStart(name, be)
 					waitLog = func() {
 						manager.logger.Info("waiting to attempt backend restart due to failed status", "remaining_secs", remainingSecondsUntilRestart, "backend", name)
 					}
@@ -347,6 +369,7 @@ func (manager *stateManager) RestartFinished(name string) {
 		delete(manager.queued, name)
 	}
 	delete(manager.downTicks, name)
+	manager.finished[name] = manager.now()
 	if state := manager.backendState[name]; state != nil {
 		state.Ended = false
 	}

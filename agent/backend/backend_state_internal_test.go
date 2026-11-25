@@ -152,8 +152,9 @@ func TestMonitorDoesNotHoldTheLockOnAFullRestartChannel(t *testing.T) {
 // replaces, and a tick meanwhile would ask for a second one); once it has
 // finished, the slot is free for another request.
 func TestMonitorQueuesOneRestartPerBackendUntilItIsTaken(t *testing.T) {
+	clock := newMutableClock(time.Now())
 	restartChan := make(chan string, 5)
-	manager, channels := newTestManager(t, restartChan)
+	manager, channels := newTestManager(t, restartChan, WithClock(clock.Now))
 	be := &countingBackend{status: BackendError, started: time.Now().Add(-2 * MinRestartTime)}
 	manager.StartBackendMonitor("unhealthy", be)
 	require.Len(t, *channels, 1)
@@ -184,8 +185,10 @@ func TestMonitorQueuesOneRestartPerBackendUntilItIsTaken(t *testing.T) {
 	manager.RestartFinished("unhealthy")
 	require.False(t, slotHeld(), "a finished restart releases its slot")
 
+	// A process that runs without answering gets MinRestartTime from the
+	// restart's end, which started no process here.
+	clock.Advance(MinRestartTime)
 	be.setStatus(BackendError)
-	be.setStarted(time.Now().Add(-2 * MinRestartTime))
 	sendTick(t, tick)
 	require.Eventually(t, func() bool { return len(restartChan) == 2 }, time.Second, time.Millisecond,
 		"a later failure after the slot was released must be able to queue again")
@@ -426,6 +429,64 @@ func TestMonitorRestartsAProcessThatRanMinRestartTimeAtOnce(t *testing.T) {
 	step(t, tick, be)
 
 	require.Len(t, restartChan, 1)
+}
+
+// A restart that started no process (its configure failed, say) leaves the
+// process's start time where it was. The waits measured from a start count
+// from the end of that restart instead, so the monitor does not ask for a
+// restart on every tick: the next one waits what the restarts earned.
+func TestMonitorWaitsAfterARestartThatStartedNoProcess(t *testing.T) {
+	restartChan := make(chan string, 5)
+	manager, channels := newTestManager(t, restartChan)
+	be := &steppedBackend{countingBackend: countingBackend{status: Running, started: time.Now().Add(-10 * time.Minute)}}
+	manager.StartBackendMonitor("pktvisor", be)
+	require.Len(t, *channels, 1)
+	tick := (*channels)[0]
+
+	be.set(Offline, "backend process ended", nil)
+	step(t, tick, be)
+	require.Len(t, restartChan, 1)
+	<-restartChan
+	manager.RegisterRestart("pktvisor", "test")
+	manager.RestartFinished("pktvisor")
+
+	step(t, tick, be)
+	require.Empty(t, restartChan, "the second restart in a row waits one tick")
+	step(t, tick, be)
+	require.Len(t, restartChan, 1)
+}
+
+// A process the ticks last found running before MinRestartTime, and that the
+// first tick after it finds gone, ran about MinRestartTime: its end is not
+// one of a series, so it starts the count again, as a run seen to last
+// MinRestartTime does. The next quick end waits one tick, not the longest
+// wait the earlier restarts earned.
+func TestMonitorStartsTheCountAgainForAProcessThatEndsAfterMinRestartTime(t *testing.T) {
+	restartChan := make(chan string, 5)
+	manager, channels := newTestManager(t, restartChan)
+	be := &steppedBackend{countingBackend: countingBackend{status: Running, started: time.Now().Add(-MinRestartTime + time.Minute)}}
+	manager.StartBackendMonitor("pktvisor", be)
+	require.Len(t, *channels, 1)
+	tick := (*channels)[0]
+	manager.mu.Lock()
+	manager.restarts["pktvisor"] = 6
+	manager.mu.Unlock()
+	step(t, tick, be)
+
+	// Ten seconds later it has run past MinRestartTime, and is gone.
+	be.setStarted(time.Now().Add(-MinRestartTime - time.Second))
+	be.set(Offline, "backend process ended", nil)
+	step(t, tick, be)
+	require.Len(t, restartChan, 1)
+	<-restartChan
+	manager.RegisterRestart("pktvisor", "test")
+	be.setStarted(time.Now())
+	manager.RestartFinished("pktvisor")
+
+	step(t, tick, be)
+	require.Empty(t, restartChan, "the second restart in a row waits one tick")
+	step(t, tick, be)
+	require.Len(t, restartChan, 1, "and no more: the run of MinRestartTime started the count again")
 }
 
 // A process that ends again right after its restart, before any tick found
