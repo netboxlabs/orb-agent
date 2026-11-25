@@ -270,6 +270,18 @@ func TestMaskLogins_MasksTheUserAURLParserReadsAsAHost(t *testing.T) {
 	}
 }
 
+func TestMaskLogins_MasksCompleteLoginsBeforeHostUsers(t *testing.T) {
+	args := []string{
+		"--diode-target", "grpc://bob:123456/pass@diode",
+		"--otel-endpoint", "grpc://bob:" + "pw@collector:4317",
+	}
+	line := "dial bob:pw@collector:4317"
+	want := "dial ********@collector:4317"
+	if got := MaskLogins(line, Logins(args)); got != want {
+		t.Errorf("MaskLogins() = %q, want %q", got, want)
+	}
+}
+
 // A user and a password are masked with no @ after them too, where they
 // start a word and end one, as before a port or at the end of a sentence,
 // but not inside a longer word, at its start or past it; a user alone still

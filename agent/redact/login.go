@@ -87,12 +87,15 @@ func LoginForms(s string) []string {
 // masked inside a longer user, as ops is in noc-ops@host. A user and a
 // password are also masked where they start a word and end one with no @
 // after them, as a URL parser writes the authority it read short (see
-// LoginForms), and a user whose password starts with a /, ? or # where it
-// is written as a host (see maskLogin). The longest are masked first, so no
-// part of one that holds a shorter one is left.
+// LoginForms). The longest are masked first, so no part of one that holds a
+// shorter one is left.
 func MaskLogins(text string, logins []string) string {
-	for _, l := range longestFirst(logins) {
+	logins = longestFirst(logins)
+	for _, l := range logins {
 		text = maskLogin(text, l)
+	}
+	for _, l := range logins {
+		text = maskLoginHost(text, l)
 	}
 	return text
 }
@@ -101,31 +104,33 @@ func MaskLogins(text string, logins []string) string {
 // for a user alone, where it also starts a word. A login that holds a
 // password is also masked where it starts a word and ends one, with no @
 // after it, so not at the start of a longer word, as bob:secret is in
-// bob:secretary. A login whose password is empty or only digits, as the
-// authority a URL parser reads short when the password starts with a /, ?
-// or #, or holds only a port number before one (see withURLParts), also has
-// its user masked where a host is written: the parser reads the user as the
-// host, with that port or none, and urllib3 writes it as one, lowercased, as
-// in host='user', port=80 and Failed to resolve 'user', so the user is
-// masked as written and lowercased. A login written with such a password,
-// as user:@host or user:1234@host, is masked the same way.
+// bob:secretary.
 func maskLogin(text, login string) string {
 	if login == "" {
 		return text
 	}
-	user, password, hasColon := strings.Cut(login, ":")
+	_, password, hasColon := strings.Cut(login, ":")
 	hasPassword := password != ""
 	text = maskWhere(text, login, func(text string, start, end int) bool {
 		beforeAt := end < len(text) && text[end] == '@'
 		word := startsWord(text, start)
 		return beforeAt && (hasColon || word) || hasPassword && word && endsWord(text, end)
 	})
-	if hasColon && user != "" && isPort(password) {
-		for _, hostUser := range []string{user, strings.ToLower(user)} {
-			text = maskWhere(text, hostUser, func(text string, start, end int) bool {
-				return startsWord(text, start) && (end == len(text) || !isHostByte(text[end]))
-			})
-		}
+	return text
+}
+
+// maskLoginHost masks the user of a login whose password starts with a /, ?
+// or #, or holds only a port number before one, where a URL parser reads it
+// as a host.
+func maskLoginHost(text, login string) string {
+	user, password, hasColon := strings.Cut(login, ":")
+	if !hasColon || user == "" || !isPort(password) {
+		return text
+	}
+	for _, hostUser := range []string{user, strings.ToLower(user)} {
+		text = maskWhere(text, hostUser, func(text string, start, end int) bool {
+			return startsWord(text, start) && (end == len(text) || !isHostByte(text[end]))
+		})
 	}
 	return text
 }
