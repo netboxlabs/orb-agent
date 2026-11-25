@@ -35,6 +35,12 @@ func Logins(args []string) []string {
 // first, or nil when it carries none (see login). The forms are:
 //   - the login as written, and without a gRPC resolver's scheme written
 //     before it without //, as dns:user:password@host, which gRPC strips;
+//   - for a login that holds an unescaped /, ? or #, as a password can, the
+//     two parts a URL parser reads it as: the part before the first of them,
+//     which it takes for the whole authority and writes with no @ after it,
+//     as Python's urllib3 quotes it in "Failed to parse: 'user:pass' is not
+//     a valid host or port", and the part after, which starts the path,
+//     query or fragment it reads;
 //   - each of those percent-decoded, whole and its user and password each:
 //     as a path and as a query, and leniently, keeping an invalid %XX, as a
 //     gRPC client decodes the address before it writes it in an error;
@@ -46,7 +52,7 @@ func Logins(args []string) []string {
 //     escaped, as Python's json.dumps writes it.
 func LoginForms(s string) []string {
 	var plain []string
-	for _, written := range writtenLogins(s) {
+	for _, written := range withURLParts(writtenLogins(s)) {
 		plain = append(plain, written)
 		user, password, hasPassword := strings.Cut(written, ":")
 		for _, unescape := range []func(string) (string, error){url.PathUnescape, url.QueryUnescape, lenientUnescape} {
@@ -78,8 +84,11 @@ func LoginForms(s string) []string {
 // :, a digit or an ANSI colour code too. A user alone, as a token, is masked
 // only where it starts a word: after the start of the text, a space, a
 // quote, a bracket, a ,, a =, a / or an escaped line break, so it is not
-// masked inside a longer user, as ops is in noc-ops@host. The longest are
-// masked first, so no part of one that holds a shorter one is left.
+// masked inside a longer user, as ops is in noc-ops@host. A user and a
+// password are also masked where they start a word with no @ after them, as
+// a URL parser writes the authority it read short (see LoginForms). The
+// longest are masked first, so no part of one that holds a shorter one is
+// left.
 func MaskLogins(text string, logins []string) string {
 	for _, l := range longestFirst(logins) {
 		text = maskLogin(text, l)
@@ -88,29 +97,34 @@ func MaskLogins(text string, logins []string) string {
 }
 
 // maskLogin returns text with login masked where it comes before an @, and,
-// for a user alone, where it also starts a word.
+// for a user alone, where it also starts a word. A login that holds a
+// password is also masked where it starts a word, with or without an @
+// after it.
 func maskLogin(text, login string) string {
 	if login == "" {
 		return text
 	}
-	needle := login + "@"
-	anywhere := strings.Contains(login, ":")
+	_, password, hasColon := strings.Cut(login, ":")
+	hasPassword := password != ""
 	var b strings.Builder
 	last := 0
 	for i := 0; i < len(text); {
-		j := strings.Index(text[i:], needle)
+		j := strings.Index(text[i:], login)
 		if j < 0 {
 			break
 		}
 		j += i
-		if !anywhere && !startsWord(text, j) {
+		end := j + len(login)
+		beforeAt := end < len(text) && text[end] == '@'
+		word := startsWord(text, j)
+		if mask := beforeAt && (hasColon || word) || hasPassword && word; !mask {
 			i = j + 1
 			continue
 		}
 		b.WriteString(text[last:j])
 		b.WriteString(MaskedSecret)
-		last = j + len(login)
-		i = j + len(needle)
+		last = end
+		i = end
 	}
 	if last == 0 {
 		return text
@@ -159,6 +173,22 @@ func writtenLogins(s string) []string {
 		}
 	}
 	return logins
+}
+
+// withURLParts returns logins, followed, for each that holds an unescaped /,
+// ? or #, by the part before the first of them and the part after it. A URL
+// parser ends the authority there, so it reads only the part before as the
+// login and host, and the part after as the start of the path, query or
+// fragment: Python's urlparse does, so the Diode SDK makes its token URL
+// from that short authority, and urllib3 then refuses the URL quoting it.
+func withURLParts(logins []string) []string {
+	out := slices.Clone(logins)
+	for _, l := range logins {
+		if i := strings.IndexAny(l, "/?#"); i >= 0 {
+			out = append(out, l[:i], l[i+1:])
+		}
+	}
+	return out
 }
 
 // login returns the user info s, a value its caller knows is a URL or a host

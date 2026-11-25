@@ -131,3 +131,49 @@ func TestStartProcess_MasksALoginWhoseDecodedBytesAreNotUTF8InWhatItRelays(t *te
 		assert.Contains(t, line, "********@127.0.0.1:")
 	}
 }
+
+// A Diode target whose password holds an unescaped / stops the worker: the
+// Diode SDK makes its token URL from the authority Python's urlparse reads,
+// which ends at the /, and urllib3 refuses it quoting the user and the start
+// of the password. The line below is the one the worker printed for such a
+// target, as the SDK raised it; the agent masks the login in what it relays.
+func TestStartProcess_MasksADiodeLoginWhosePasswordHoldsASlashInWhatItRelays(t *testing.T) {
+	stubProcessTimers(t)
+	fake := newFakeCommander(4246)
+	stubNewCmdOptions(t, fake)
+
+	fake.stderrCh <- "ERROR: Unable to connect to Diode Server: Failed to obtain access token: Failed to parse:" +
+		" 'canary-user:canary' is not a valid host or port"
+
+	var (
+		logMu sync.Mutex
+		lines []string
+	)
+	err := StartProcess(StartSpec{
+		Logger:         testProcessLogger(),
+		NameDisplay:    "test-backend",
+		NameUnderscore: "test_backend",
+		Exec:           "test-exec",
+		Args:           []string{"--diode-target", "grpc://canary-user:canary/pass@127.0.0.1:8080/diode"},
+		ListenAddr:     testListenAddr(t),
+		LogLine: func(line string, _ bool) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			lines = append(lines, line)
+		},
+		SetProc:        func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) { return "1.2.3", nil },
+	})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		logMu.Lock()
+		defer logMu.Unlock()
+		return len(lines) == 1
+	}, time.Second, 5*time.Millisecond)
+
+	logMu.Lock()
+	defer logMu.Unlock()
+	assert.Equal(t, "ERROR: Unable to connect to Diode Server: Failed to obtain access token: Failed to parse:"+
+		" '********' is not a valid host or port", lines[0])
+}
