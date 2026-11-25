@@ -1,0 +1,16 @@
+{
+  "hostname": "exos-core-02",
+  "vendor": "Extreme Networks",
+  "model": "7520-48Y-8C-SwitchEngine",
+  "os_version": "33.1.1.31",
+  "serial_number": "SM0000000-00001",
+  "uptime": 53831280.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+  ]
+}
