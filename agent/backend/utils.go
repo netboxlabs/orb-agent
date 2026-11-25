@@ -2,6 +2,7 @@ package backend
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,6 +11,23 @@ import (
 
 	"go.yaml.in/yaml/v3"
 )
+
+// ErrProcessEnded is in the error GetRunningStatus returns for a process that
+// is gone: one a signal ended, or one that never started. errors.Is finds
+// it; the error's text stays the process's own.
+var ErrProcessEnded = errors.New("backend process ended")
+
+type processEndedError struct{ err error }
+
+func (e processEndedError) Error() string   { return e.err.Error() }
+func (e processEndedError) Unwrap() []error { return []error{ErrProcessEnded, e.err} }
+
+// ProcessEnded reports whether a backend's GetRunningStatus answer means its
+// process is gone, rather than running without answering its API, which a
+// backend reports as BackendError with an error of its own.
+func ProcessEnded(status RunningStatus, err error) bool {
+	return status == Offline || errors.Is(err, ErrProcessEnded)
+}
 
 // GetRunningStatus checks the status of the backend process
 func GetRunningStatus(proc Commander) (RunningStatus, string, error) {
@@ -20,7 +38,7 @@ func GetRunningStatus(proc Commander) (RunningStatus, string, error) {
 
 	if status.Error != nil {
 		errMsg := fmt.Sprintf("process error: %v", status.Error)
-		return BackendError, errMsg, status.Error
+		return BackendError, errMsg, processEndedError{status.Error}
 	}
 
 	if status.Complete {

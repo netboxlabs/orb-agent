@@ -191,7 +191,8 @@ func (s *stubBackend) ManagedBinaryName() string { return s.binary }
 // stubState records the state manager calls the supervisor makes.
 type stubState struct {
 	backend.StateManager
-	rec *recorder
+	rec      *recorder
+	finished atomic.Int32
 }
 
 func (s *stubState) StartBackendMonitor(name string, _ backend.Backend) {
@@ -204,6 +205,12 @@ func (s *stubState) RegisterError(name string, msg string) {
 
 func (s *stubState) RegisterRestart(name string, reason string) {
 	s.rec.add("restart-registered:" + name + ":" + reason)
+}
+
+// RestartFinished is counted apart from the recorder, so the event lists
+// the restart tests compare are those of the restart itself.
+func (s *stubState) RestartFinished(string) {
+	s.finished.Add(1)
 }
 
 // stubFiles records rollbacks and answers them from rollbackErr.

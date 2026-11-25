@@ -58,6 +58,27 @@ func TestGetRunningStatus_ProcessError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// A process a signal ended, or one that never started, is gone: the error
+// says so through ErrProcessEnded and keeps the process's own text.
+func TestGetRunningStatus_ProcessErrorMarksTheProcessEnded(t *testing.T) {
+	proc := &mockCommander{status: backend.CmdStatus{Error: errors.New("signal: killed"), StopTs: time.Now().UnixNano()}}
+	status, detail, err := backend.GetRunningStatus(proc)
+	assert.Equal(t, backend.BackendError, status)
+	assert.Equal(t, "process error: signal: killed", detail)
+	require.ErrorIs(t, err, backend.ErrProcessEnded)
+	assert.EqualError(t, err, "signal: killed")
+	assert.True(t, backend.ProcessEnded(status, err))
+}
+
+// ProcessEnded tells a process that is gone from one that runs but does not
+// answer its API, which reports BackendError with an error of its own.
+func TestProcessEnded(t *testing.T) {
+	assert.True(t, backend.ProcessEnded(backend.Offline, nil), "a process that exited")
+	assert.False(t, backend.ProcessEnded(backend.BackendError, errors.New("connection refused")), "a process whose API does not answer")
+	assert.False(t, backend.ProcessEnded(backend.Running, nil))
+	assert.False(t, backend.ProcessEnded(backend.Unknown, nil), "a backend never started")
+}
+
 func TestGetRunningStatus_Complete(t *testing.T) {
 	proc := &mockCommander{status: backend.CmdStatus{Complete: true}}
 	status, detail, _ := backend.GetRunningStatus(proc)

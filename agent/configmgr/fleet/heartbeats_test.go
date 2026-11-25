@@ -1019,6 +1019,74 @@ func TestHeartbeater_GetPolicyState_BoundsTheCollectionErrorsOfManyPolicies(t *t
 	assert.Less(t, len(payload), 25*1024-len(long), "the heartbeat stays under 25 KiB, with room for the rest")
 }
 
+// While the monitor finds a backend's process gone, a policy it ran is not
+// running: the heartbeat reports it unknown, naming the backend, until the
+// monitor finds the backend running again. A process that runs but did not
+// answer the last check may still run its policies, so they stay running. A
+// policy that failed to apply keeps its own reason, and a backend the monitor
+// has not checked yet changes nothing.
+func TestHeartbeater_GetPolicyState_ReportsThePoliciesOfABackendThatIsDownUnknown(t *testing.T) {
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{ID: "probe", Name: "probe", Backend: "pktvisor", State: policies.Running, CollectionErr: "stale"},
+		{ID: "refused", Name: "lab", Backend: "pktvisor", State: policies.FailedToApply, BackendErr: "invalid tap"},
+		{ID: "scan", Name: "scan", Backend: "network_discovery", State: policies.Running},
+		{ID: "slow", Name: "slow", Backend: "device_discovery", State: policies.Running},
+		{ID: "poll", Name: "core", Backend: "snmp_telemetry", State: policies.Running},
+		{ID: "fresh", Name: "fresh", Backend: "gnmi_telemetry", State: policies.Running},
+	}, nil)
+	states := &mockBackendState{backendState: map[string]*backend.State{
+		"pktvisor":          {Status: backend.BackendError, LastError: "process error: signal: killed", Ended: true},
+		"network_discovery": {Status: backend.Offline, LastError: "backend process ended", Ended: true},
+		"device_discovery":  {Status: backend.BackendError, LastError: "process running, REST API unavailable"},
+		"snmp_telemetry":    {Status: backend.Running},
+		"gnmi_telemetry":    {Status: backend.Unknown},
+	}}
+	hb := createTestHeartbeaterWithPolicyManager(states, mockPMgr)
+
+	stateAndError := func(ps map[string]messages.PolicyStateInfo, id string) [2]string {
+		return [2]string{ps[id].State, ps[id].Error}
+	}
+	ps := hb.getPolicyState()
+	assert.Equal(t, [2]string{"unknown", "backend pktvisor is not running: its process ended"}, stateAndError(ps, "probe"))
+	assert.Equal(t, [2]string{"failed_to_apply", "invalid tap"}, stateAndError(ps, "refused"))
+	assert.Equal(t, [2]string{"unknown", "backend network_discovery is not running: its process ended"}, stateAndError(ps, "scan"))
+	assert.Equal(t, [2]string{"running", ""}, stateAndError(ps, "slow"))
+	assert.Equal(t, [2]string{"running", ""}, stateAndError(ps, "poll"))
+	assert.Equal(t, [2]string{"running", ""}, stateAndError(ps, "fresh"))
+
+	states.backendState["pktvisor"] = &backend.State{Status: backend.Running}
+	assert.Equal(t, [2]string{"running", "stale"}, stateAndError(hb.getPolicyState(), "probe"))
+}
+
+// The offline heartbeat a stopping agent sends last comes after the agent
+// stopped its backends, whose processes the monitor then finds ended. It
+// carries the policies as stored, so Fleet does not keep a cleanly stopped
+// agent's policies as unknown with an ended process.
+func TestHeartbeater_OfflineHeartbeat_KeepsThePoliciesOfAStoppedBackend(t *testing.T) {
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{ID: "probe", Name: "probe", Backend: "pktvisor", State: policies.Running},
+	}, nil)
+	states := &mockBackendState{backendState: map[string]*backend.State{
+		"pktvisor": {Status: backend.BackendError, LastError: "process error: signal: terminated", Ended: true},
+	}}
+	hb := createTestHeartbeaterWithPolicyManager(states, mockPMgr)
+	mockPublish := &mockPublishFunc{}
+	ctx := context.Background()
+	mockPublish.On("Publish", ctx, "test/hb", mock.AnythingOfType("[]uint8")).Return(nil)
+
+	hb.sendSingleHeartbeat(ctx, "test/hb", mockPublish.Publish, "agent-1", time.Now(), messages.Offline, nil)
+
+	require.Len(t, mockPublish.Calls, 1)
+	payload, ok := mockPublish.Calls[0].Arguments.Get(2).([]byte)
+	require.True(t, ok)
+	var hbMsg messages.Heartbeat
+	require.NoError(t, json.Unmarshal(payload, &hbMsg))
+	assert.Equal(t, "running", hbMsg.PolicyState["probe"].State)
+	assert.Empty(t, hbMsg.PolicyState["probe"].Error)
+}
+
 // Collection errors that fit maxCollectionErrorsLen together are kept whole.
 func TestHeartbeater_GetPolicyState_KeepsCollectionErrorsThatFit(t *testing.T) {
 	long := strings.Repeat("x", 1000)
