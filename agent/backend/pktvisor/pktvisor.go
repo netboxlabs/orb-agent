@@ -26,7 +26,10 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
-var _ backend.Backend = (*pktvisorBackend)(nil)
+var (
+	_ backend.Backend        = (*pktvisorBackend)(nil)
+	_ backend.RemovalRetrier = (*pktvisorBackend)(nil)
+)
 
 // applyPolicyTimeout is the policy POST timeout in seconds, and tapsTimeout
 // the timeout of a tap request. They are variables so tests can shorten
@@ -541,6 +544,16 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 	}
 
 	return nil
+}
+
+// RetryAfterRemoval reports whether pktvisord refused a policy because a
+// listener already running holds its address: it refuses a flow or dnstap
+// input whose address and port overlap one with "unable to bind flow UDP
+// server on <bind>:<port>: address already in use", and does not start the
+// policy. The policy can start once the policy that holds the listener is
+// removed.
+func (p *pktvisorBackend) RetryAfterRemoval(reason string) bool {
+	return strings.Contains(strings.ToLower(reason), "address already in use")
 }
 
 func (p *pktvisorBackend) RemovePolicy(data policies.PolicyData) error {

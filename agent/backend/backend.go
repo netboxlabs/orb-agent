@@ -69,6 +69,21 @@ type PolicyErrorProvider interface {
 	GetPolicyErrors() (map[string]PolicyError, error)
 }
 
+// RemovalRetrier is an optional interface for a backend that can refuse a
+// policy because another of its policies holds something the policy needs,
+// such as the address a listener binds. Nothing applies such a policy again
+// when the other is removed, so the policy manager does: once a policy that
+// ran on the backend is removed from it, it applies again each failed policy
+// of the backend whose reason the backend reports here.
+type RemovalRetrier interface {
+	// RetryAfterRemoval reports whether reason, the reason the policy
+	// manager stored for a policy the backend refused, says that another of
+	// the backend's policies held what the policy needs. Report only a
+	// refusal of a policy the backend did not start, so that applying it
+	// again cannot run it twice.
+	RetryAfterRemoval(reason string) bool
+}
+
 // PolicyError is the error a backend reports for a policy's last collection,
 // and when it recorded it: zero when it gives no time.
 type PolicyError struct {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,13 +23,22 @@ func addressInUse(name string) error {
 		"] failed to start: unable to bind flow UDP server on 0.0.0.0:6343: address already in use"}
 }
 
-// addressFixture registers a running mock backend under name and returns it
-// with a policy manager that applies to it at once.
+// retryingBackend is a mock backend that reports a refusal for an address in
+// use as one another of its policies causes, as pktvisor does.
+type retryingBackend struct{ *mockBackend }
+
+func (b retryingBackend) RetryAfterRemoval(reason string) bool {
+	return strings.Contains(reason, "address already in use")
+}
+
+// addressFixture registers a running mock backend under name, as a
+// backend.RemovalRetrier, and returns the mock with a policy manager that
+// applies to it at once.
 func addressFixture(t *testing.T, name string) (*mockBackend, policymgr.PolicyManager) {
 	t.Helper()
 	be := &mockBackend{name: name}
 	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
-	backend.Register(name, be)
+	backend.Register(name, retryingBackend{be})
 	mgr, err := policymgr.New(slog.New(slog.NewTextHandler(os.Stdout, nil)), &mockSecretsManager{passthrough: true}, config.Config{})
 	require.NoError(t, err)
 	return be, mgr
@@ -57,9 +67,10 @@ func stored(t *testing.T, mgr policymgr.PolicyManager, id string) policies.Polic
 }
 
 // A flow policy the backend refused because another policy's listener held
-// its port is applied again once that policy is removed, whichever way it is
-// removed: nothing else would apply it again, and it would stay failed with
-// a reason that no longer holds. A policy refused for another reason is not.
+// its port, as the backend reports it (backend.RemovalRetrier), is applied
+// again once that policy is removed, whichever way it is removed: nothing
+// else would apply it again, and it would stay failed with a reason that no
+// longer holds. A policy refused for another reason is not.
 func TestRemovingAPolicyAppliesAgainThePoliciesRefusedForAnAddressInUse(t *testing.T) {
 	for name, remove := range map[string]func(mgr policymgr.PolicyManager, beName string, be backend.Backend){
 		"remove": func(mgr policymgr.PolicyManager, beName string, _ backend.Backend) {
@@ -69,7 +80,7 @@ func TestRemovingAPolicyAppliesAgainThePoliciesRefusedForAnAddressInUse(t *testi
 			mgr.ManagePolicy(config.PolicyPayload{Action: "remove", ID: "sflow", Name: "sflow", Backend: beName})
 		},
 		"last dataset": func(mgr policymgr.PolicyManager, beName string, be backend.Backend) {
-			mgr.RemovePolicyDataset("sflow", "ds-sflow", beName, be)
+			mgr.RemovePolicyDataset("sflow", "ds-sflow", beName, retryingBackend{be.(*mockBackend)})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -151,4 +162,25 @@ func TestRemovingAPolicyThatHeldNothingAppliesNothingAgain(t *testing.T) {
 			assert.Equal(t, []string{"sflow", "netflow-a", "netflow-b"}, applied(be), "nothing applied again")
 		})
 	}
+}
+
+// A backend that does not report which refusals another policy causes gets
+// nothing applied again: the policy manager does not read its reasons itself.
+func TestRemovingAPolicyAppliesNothingAgainOnABackendThatReportsNoSuchRefusal(t *testing.T) {
+	be := &mockBackend{name: "address_in_use_no_retrier"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	backend.Register("address_in_use_no_retrier", be)
+	mgr, err := policymgr.New(slog.New(slog.NewTextHandler(os.Stdout, nil)), &mockSecretsManager{passthrough: true}, config.Config{})
+	require.NoError(t, err)
+	be.On("ApplyPolicy", isPolicy("sflow", 1), false).Return(nil).Once()
+	manage(mgr, "address_in_use_no_retrier", "sflow")
+	be.On("ApplyPolicy", isPolicy("netflow", 1), false).Return(addressInUse("netflow")).Once()
+	manage(mgr, "address_in_use_no_retrier", "netflow")
+
+	be.On("RemovePolicy", isPolicy("sflow", 1)).Return(nil).Once()
+	require.NoError(t, mgr.RemovePolicy("sflow", "sflow", "address_in_use_no_retrier"))
+
+	be.AssertExpectations(t)
+	assert.Equal(t, []string{"sflow", "netflow"}, applied(be))
+	assert.Equal(t, policies.FailedToApply, stored(t, mgr, "netflow").State)
 }
