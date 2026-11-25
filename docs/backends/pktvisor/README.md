@@ -196,9 +196,8 @@ orb:
   `[A-Za-z0-9_]` as `_`, so `netbox.site.name` becomes `netbox_site_name`.
 - **Values are text.** A value is a string, a number or a boolean, and `pktvisord` exports it as
   text, because its labels are text. Quote a value whose exact text matters: `"007"` stays `007`,
-  while an unquoted `007` is a number. Quote large numbers and identifiers too. A policy delivered
-  as JSON can turn a whole number of 1,000,000 or more into a float, and a whole number too large
-  for 64 bits is sent in exponent form, such as `1.8446744073709552e+19`.
+  while an unquoted `007` is a number. Quote large numbers and identifiers too: a whole number too
+  large for 64 bits is sent in exponent form, such as `1.8446744073709552e+19`.
 
 ### Checks before the policy is applied
 The agent checks `attributes` before it sends the policy to `pktvisord`, and refuses the policy

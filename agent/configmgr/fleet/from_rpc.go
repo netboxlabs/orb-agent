@@ -1,11 +1,14 @@
 package fleet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"sync"
 
 	"go.yaml.in/yaml/v3"
@@ -99,8 +102,8 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 		}
 		messaging.handleGroupMemberships(ctx, groupMemberships.Payload, orgID, agentID, topicActions)
 	case messages.AgentPolicyRPCFunc:
-		agentPolicies := messages.AgentPolicyRPC{}
-		if err := json.Unmarshal(payload, &agentPolicies); err != nil {
+		agentPolicies, err := decodeAgentPolicies(payload)
+		if err != nil {
 			messaging.logger.Error("failed to unmarshal payload", "error", err)
 			return err
 		}
@@ -149,6 +152,68 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 		messaging.logger.Debug("unknown rpc function", "func", rpc.Func)
 	}
 	return nil
+}
+
+// decodeAgentPolicies decodes an agent_policy RPC as json.Unmarshal does,
+// but keeps the whole numbers of a policy's data whole when Fleet sends the
+// data as a JSON object rather than as a YAML string. json.Unmarshal reads
+// every number of an object as a float64, which the backends' YAML encoder
+// writes in exponent form from a magnitude of 1,000,000 (1e+06), so the
+// backend would read a float.
+func decodeAgentPolicies(payload []byte) (messages.AgentPolicyRPC, error) {
+	var rpc messages.AgentPolicyRPC
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	dec.UseNumber()
+	if err := dec.Decode(&rpc); err != nil {
+		return messages.AgentPolicyRPC{}, err
+	}
+	for i := range rpc.Payload {
+		data, err := withNumbers(rpc.Payload[i].Data)
+		if err != nil {
+			return messages.AgentPolicyRPC{}, err
+		}
+		rpc.Payload[i].Data = data
+	}
+	return rpc, nil
+}
+
+// withNumbers returns v, a value decoded with json.Decoder.UseNumber, with
+// each json.Number in it, in its maps and lists too, as an int64 when it is a
+// whole number that fits one, as a uint64 when it is a larger whole number
+// that fits one, and as a float64 otherwise, as json.Unmarshal reads it. It
+// fails for a number no float64 holds, as json.Unmarshal does.
+func withNumbers(v any) (any, error) {
+	switch v := v.(type) {
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			return i, nil
+		}
+		if u, err := strconv.ParseUint(v.String(), 10, 64); err == nil {
+			return u, nil
+		}
+		f, err := v.Float64()
+		if err != nil {
+			return nil, fmt.Errorf("policy data: number %s: %w", v, err)
+		}
+		return f, nil
+	case map[string]any:
+		for k, e := range v {
+			n, err := withNumbers(e)
+			if err != nil {
+				return nil, err
+			}
+			v[k] = n
+		}
+	case []any:
+		for i, e := range v {
+			n, err := withNumbers(e)
+			if err != nil {
+				return nil, err
+			}
+			v[i] = n
+		}
+	}
+	return v, nil
 }
 
 func (messaging *Messaging) handleGroupMemberships(ctx context.Context, groupMemberships messages.GroupMembershipRPCPayload, orgID string, agentID string, topicActions TopicActions) {

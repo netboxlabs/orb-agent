@@ -96,7 +96,7 @@ orb:
 - Two ranges sharing an address with different attributes are refused when the policy is applied; give them the same attributes, or split the ranges so they share no address. A target naming a single address inside a range keeps its own attributes, as it keeps its own port and credentials, but does not clear a conflict between two ranges.
 - `gnmi.target_up` carries the target's attributes too.
 - A change takes effect when the policy is applied again: an edit reaches the backend as a removal followed by an apply.
-- The agent re-encodes a policy before posting it, so some numbers change type on the way: a float with no fractional part below 1,000,000 in magnitude, such as `3.0`, arrives as the integer `3`; an integer of 2^64 or more, or below -2^63, arrives as a float; and when Fleet delivers the policy as a JSON object, an integer of magnitude 1,000,000 or more (1,000,000 or more, or -1,000,000 or less) arrives as a float. Quote a number to keep its exact text.
+- The agent re-encodes a policy before posting it, so some numbers change type on the way: a float with no fractional part below 1,000,000 in magnitude, such as `3.0`, arrives as the integer `3`; and an integer of 2^64 or more, or below -2^63, arrives as a float. This holds whether Fleet delivers the policy as YAML or as a JSON object. Quote a number to keep its exact text.
 
 `attributes` needs orb-agent 2.18.0 (gnmi-telemetry 1.2.0). With an older agent, the backend logs `ignoring unrecognized policy key` with `key=attributes` and runs the policy without them. The full rules are under [`attributes`](../../orb-telemetry/gnmi-telemetry/README.md#attributes) in the backend README.
 
