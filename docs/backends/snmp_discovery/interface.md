@@ -20,9 +20,19 @@ Interface types are determined using the following priority order (first match w
 
 ### 0. Subinterface Detection (Highest Priority - Structural)
 - Subinterfaces are identified by name patterns containing `.` or `:` separators
-- If a subinterface is detected, it is ALWAYS assigned type `virtual`
+- A dot-separated name is assigned type `virtual` whatever its `ifType`, since
+  some SNMP agents report a unit with the `ifType` of the port it runs on. A
+  unit carries the dot in both ifName and ifDescr, so when the other of the
+  two names has no dot and `ifType` maps to a type of its own (Ethernet,
+  wireless, xDSL and the like), the dot is taken as part of that name alone,
+  as in a firmware version, and the interface goes on to the tiers below.
+  It is still typed `virtual` when the interface the name points to as its
+  parent is on the device
+- A colon-separated name is assigned type `virtual` only when `ifType` is
+  missing or logical; channelized lanes and similar ports keep their `ifType`
+  (see [Interface type of colon-named ports](./supported_platforms.md#interface--vlan-associations))
 - Parent interface tracking is performed in a post-processing phase
-- This takes precedence over ALL other matching methods
+- A name typed `virtual` here takes precedence over ALL other matching methods
 - **Descriptive-ifDescr short-circuit**: Tier 0 does **not** fire on names
   that look like labeled-field descriptions (names containing the
   `": "` substring — Dell PowerConnect's `Unit: 1 Slot: 0 Port: 1

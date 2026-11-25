@@ -51,6 +51,26 @@ func ExtractParentInterfaceName(interfaceName string) string {
 	return ""
 }
 
+// dotSeparated reports whether name parses as a child whose separator is a
+// dot.
+func dotSeparated(name string) bool {
+	parent := ExtractParentInterfaceName(name)
+	return parent != "" && name[len(parent)] == '.'
+}
+
+// dottedNameDisputed reports whether a dot-separated name is contradicted:
+// the other name the device reports for the interface has no dot, and the
+// ifType maps to a type on its own. An empty, placeholder or descriptive
+// other name, or an ifType with no mapping, is no evidence against the name.
+func dottedNameDisputed(name, alternateName, ifType string) bool {
+	if !dotSeparated(name) || alternateName == "" || alternateName == DefaultInterfaceName ||
+		looksDescriptive(alternateName) || dotSeparated(alternateName) {
+		return false
+	}
+	_, mapped := InterfaceTypeMap[ifType]
+	return mapped || isEthernetInterfaceType(ifType)
+}
+
 // InterfaceTypeMap maps SNMP ifType integer values to NetBox interface type strings
 var InterfaceTypeMap = map[string]string{
 	// Virtual Interfaces
@@ -264,8 +284,13 @@ func getEthernetInterfaceType(speed *int64) string {
 // 3. Built-in patterns
 // 4. Speed-based detection (for Ethernet)
 // 5. Default fallback
+//
+// alternateName is the other name the device reports for the interface:
+// ifName when interfaceName came from ifDescr, ifDescr when it came from
+// ifName. Empty when the walk carries only one.
 func ResolveInterfaceType(
 	interfaceName string,
+	alternateName string,
 	ifType string,
 	speed *int64,
 	defaultInterfaceType string,
@@ -285,9 +310,19 @@ func ResolveInterfaceType(
 	// only makes it virtual when the reported ifType agrees, or when the
 	// walk reported no ifType at all and there is nothing to weigh the
 	// name against.
+	//
+	// A dot is overruled only when the other name the device reports has
+	// none and the ifType names a type of its own: a unit carries the dot in
+	// both ifName and ifDescr, while a dot in a version string or a free-form
+	// ifDescr is in that name alone.
 	if parent := ExtractParentInterfaceName(interfaceName); parent != "" {
 		colonSeparated := len(interfaceName) > len(parent) && interfaceName[len(parent)] == ':'
-		if !colonSeparated || ifType == "" || isLogicalIfType(ifType) {
+		switch {
+		case colonSeparated:
+			if ifType == "" || isLogicalIfType(ifType) {
+				return "virtual"
+			}
+		case !dottedNameDisputed(interfaceName, alternateName, ifType):
 			return "virtual"
 		}
 	}
@@ -335,5 +370,5 @@ func ResolveInterfaceType(
 // GetNetboxType maps an SNMP ifType integer to a NetBox interface type
 // Maintained for backward compatibility - wraps ResolveInterfaceType
 func GetNetboxType(ifType, defaultInterfaceType string, speed *int64) string {
-	return ResolveInterfaceType("", ifType, speed, defaultInterfaceType, nil, 0)
+	return ResolveInterfaceType("", "", ifType, speed, defaultInterfaceType, nil, 0)
 }

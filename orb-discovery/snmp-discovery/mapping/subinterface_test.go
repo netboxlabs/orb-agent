@@ -385,6 +385,7 @@ func TestResolveInterfaceType_Subinterfaces(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := mapping.ResolveInterfaceType(
 				tt.interfaceName,
+				"",
 				tt.ifType,
 				tt.speed,
 				tt.defaultInterfaceType,
