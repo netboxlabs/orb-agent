@@ -118,9 +118,11 @@ func maskLogin(text, login string) string {
 		return beforeAt && (hasColon || word) || hasPassword && word
 	})
 	if hasColon && !hasPassword && user != "" {
-		text = maskWhere(text, user, func(text string, start, end int) bool {
-			return startsWord(text, start) && (end == len(text) || !isHostByte(text[end]))
-		})
+		for _, hostUser := range []string{user, strings.ToLower(user)} {
+			text = maskWhere(text, hostUser, func(text string, start, end int) bool {
+				return startsWord(text, start) && (end == len(text) || !isHostByte(text[end]))
+			})
+		}
 	}
 	return text
 }
