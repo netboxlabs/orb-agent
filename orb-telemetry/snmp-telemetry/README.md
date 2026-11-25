@@ -199,6 +199,12 @@ first. A device reports a refusal with `(check the priv_protocol and
 priv_passphrase)` only for a request it cannot decrypt at all, as net-snmp
 does for a user with DES that is asked with AES.
 
+These texts say what to check, and prove nothing. A device sends such a
+report without authentication, so whoever can send packets from the device's
+address can forge one. A forged report changes only the text of a collection
+that has already failed. It cannot make a collection succeed, and nothing
+else in it is read.
+
 ### Receiving traps
 
 A policy receives SNMP traps and informs from the devices its targets expand
