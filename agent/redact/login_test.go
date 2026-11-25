@@ -235,6 +235,12 @@ func TestMaskLogins_MasksTheUserAURLParserReadsAsAHost(t *testing.T) {
 		},
 		{"grpc://canary-user:?canary@127.0.0.1:8080/diode", refused("canary-user", "/auth/token"), refused("********", "/auth/token")},
 		{"grpc://canary-user:#canary@127.0.0.1:8080/diode", refused("canary-user", "/auth/token"), refused("********", "/auth/token")},
+		// urllib3 writes the host lowercased, so a user with capitals too.
+		{
+			"grpc://Canary-User:/canary@127.0.0.1:8080/diode",
+			refused("canary-user", "/canary@127.0.0.1:8080/diode/auth/token"),
+			refused("********", "/********@127.0.0.1:8080/diode/auth/token"),
+		},
 		{
 			"grpc://canary-user:/canary@127.0.0.1:8080/diode",
 			"DEBUG: urllib3.connectionpool: Starting new HTTP connection (1): canary-user:80",
@@ -255,11 +261,15 @@ func TestMaskLogins_MasksTheUserAURLParserReadsAsAHost(t *testing.T) {
 }
 
 // A user and a password are masked with no @ after them too, where they
-// start a word, but not inside a longer word; a user alone still needs its @.
+// start a word and end one, as before a port or at the end of a sentence,
+// but not inside a longer word, at its start or past it; a user alone still
+// needs its @.
 func TestMaskLogins_MasksAUserAndAPasswordWithNoAtWhereTheyStartAWord(t *testing.T) {
 	logins := Logins([]string{"--otel-endpoint", "grpc://user:pass@h:4317"})
-	line := "authority user:pass, host 'user:pass', \"user:pass\", =user:pass, /user:pass and xuser:pass"
-	want := "authority ********, host '********', \"********\", =********, /******** and xuser:pass"
+	line := "authority user:pass, host 'user:pass', \"user:pass\", =user:pass, /user:pass and xuser:pass;" +
+		" user:pass:443, user:pass. user:passage and user:pass1"
+	want := "authority ********, host '********', \"********\", =********, /******** and xuser:pass;" +
+		" ********:443, ********. user:passage and user:pass1"
 	if got := MaskLogins(line, logins); got != want {
 		t.Errorf("MaskLogins() = %q, want %q", got, want)
 	}

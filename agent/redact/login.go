@@ -85,11 +85,11 @@ func LoginForms(s string) []string {
 // only where it starts a word: after the start of the text, a space, a
 // quote, a bracket, a ,, a =, a / or an escaped line break, so it is not
 // masked inside a longer user, as ops is in noc-ops@host. A user and a
-// password are also masked where they start a word with no @ after them, as
-// a URL parser writes the authority it read short (see LoginForms), and a
-// user whose password starts with a /, ? or # where it is written as a host
-// (see maskLogin). The longest are masked first, so no part of one that
-// holds a shorter one is left.
+// password are also masked where they start a word and end one with no @
+// after them, as a URL parser writes the authority it read short (see
+// LoginForms), and a user whose password starts with a /, ? or # where it
+// is written as a host (see maskLogin). The longest are masked first, so no
+// part of one that holds a shorter one is left.
 func MaskLogins(text string, logins []string) string {
 	for _, l := range longestFirst(logins) {
 		text = maskLogin(text, l)
@@ -99,13 +99,15 @@ func MaskLogins(text string, logins []string) string {
 
 // maskLogin returns text with login masked where it comes before an @, and,
 // for a user alone, where it also starts a word. A login that holds a
-// password is also masked where it starts a word, with or without an @
-// after it. A login that ends in : with no password after it, as the
+// password is also masked where it starts a word and ends one, with no @
+// after it, so not at the start of a longer word, as bob:secret is in
+// bob:secretary. A login that ends in : with no password after it, as the
 // authority a URL parser reads short when the password starts with a /, ?
 // or # (see withURLParts), also has its user masked where a host is written:
 // the parser reads the user as the host with an empty port, and urllib3
-// writes it as one, as in host='user' and Failed to resolve 'user'. A login
-// written with an empty password, as user:@host, is masked the same way.
+// writes it as one, lowercased, as in host='user' and Failed to resolve
+// 'user', so the user is masked as written and lowercased. A login written
+// with an empty password, as user:@host, is masked the same way.
 func maskLogin(text, login string) string {
 	if login == "" {
 		return text
@@ -115,7 +117,7 @@ func maskLogin(text, login string) string {
 	text = maskWhere(text, login, func(text string, start, end int) bool {
 		beforeAt := end < len(text) && text[end] == '@'
 		word := startsWord(text, start)
-		return beforeAt && (hasColon || word) || hasPassword && word
+		return beforeAt && (hasColon || word) || hasPassword && word && endsWord(text, end)
 	})
 	if hasColon && !hasPassword && user != "" {
 		for _, hostUser := range []string{user, strings.ToLower(user)} {
@@ -163,6 +165,13 @@ func startsWord(text string, i int) bool {
 		return true
 	}
 	return i >= 2 && text[i-2] == '\\' && strings.IndexByte("nrt", text[i-1]) >= 0
+}
+
+// endsWord reports whether a login found ending at end in text ends a word
+// there: no byte a login holds comes right after it, but for a : that can
+// start a port and a . that can end a sentence.
+func endsWord(text string, end int) bool {
+	return end == len(text) || text[end] == ':' || text[end] == '.' || !isLoginByte(text[end])
 }
 
 // isLoginByte reports whether c can be part of a user or a password as an
