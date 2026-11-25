@@ -256,7 +256,8 @@ This reference can be used by downstream systems to understand interface hierarc
 ### Orphan Handling
 
 If a parent interface is not found (e.g., parent administratively down, filtered, or not discoverable via SNMP):
-- The subinterface keeps the type Phase 1 gave it: `virtual`, or for a disputed dotted name the type its `ifType` gives
+- The subinterface keeps the type Phase 1 gave it: `virtual`, or for a disputed dotted name the type the tiers below Tier 0 give
+- A parent removed by `interface_exclude_patterns` is still on the device: a disputed dotted name pointing to it is typed `virtual`, without a parent reference
 - No parent reference is set (`Parent` field is `nil`)
 - No errors are raised
 - The subinterface is still included in discovery results
