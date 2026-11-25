@@ -218,8 +218,10 @@ _YEAR_SECONDS = 365 * _DAY_SECONDS
 
 # ``Switch : 800614-00-20 1234G-00001 Rev 20 BootROM: ...`` -> group(1) = "1234G-00001".
 # The token after the part number is the unit serial; ``Rev`` would mean it is absent.
+# The part number's last group is its revision, which can carry letters
+# (``801106-00-AD`` on a 5320), so it is matched as ``\w+``.
 _EXOS_SWITCH_LINE_SERIAL_RE = re.compile(
-    r"^Switch\s*:\s*\d{6}-\d{2}-\d+\s+(?!Rev\b)(\S+)", re.M
+    r"^Switch\s*:\s*\d{6}-\d{2}-\w+\s+(?!Rev\b)(\S+)", re.M
 )
 
 

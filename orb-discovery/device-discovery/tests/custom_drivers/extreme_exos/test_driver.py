@@ -2,12 +2,15 @@
 
 from pathlib import Path
 
+import pytest
+
 from custom_napalm.extreme_exos import (
     _EXOS_MODULE_CLASSIFIER,
     ExosDriver,
     _exos_classify_module,
     _exos_is_modular,
     _parse_show_slot_detail,
+    _parse_version_serial,
 )
 from tests.custom_drivers.base_test import BaseDriverTest
 from tests.custom_drivers.mock_device import FakeCLIDevice
@@ -230,3 +233,25 @@ def test_parse_show_slot_detail_case_insensitive_header() -> None:
     )
     rows = _parse_show_slot_detail(text)
     assert [r["slot"] for r in rows] == ["slot-1", "msm-a"]
+
+
+# --- show version serial --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "serial"),
+    [
+        # X440-G2: numeric part-number revision.
+        ("Switch          : 800614-00-20 1234G-00001 Rev 20 BootROM: 1.0.1.8", "1234G-00001"),
+        # 5320: the revision carries letters.
+        ("Switch          : 801106-00-AD TB0000000-00001 Rev AD BootROM: 3.4.2.11", "TB0000000-00001"),
+        # A dedicated SysSerial line wins over the Switch line.
+        ("SysSerial : 1234G-99999\nSwitch : 800614-00-20 1234G-00001 Rev 20", "1234G-99999"),
+        # A stack has one Slot line per member and no single unit serial.
+        ("Slot-1          : 801106-00-AD TB0000000-00001 Rev AD BootROM: 3.4.2.11\n"
+         "Slot-2          : 801106-00-AL TB0000000-00002 Rev AL BootROM: 3.4.2.11", None),
+    ],
+)
+def test_parse_version_serial(text: str, serial: str | None) -> None:
+    """The unit serial is the token after the part number, whatever its revision."""
+    assert _parse_version_serial(text) == serial
