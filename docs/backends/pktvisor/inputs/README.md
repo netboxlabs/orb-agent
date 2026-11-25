@@ -313,7 +313,9 @@ written without brackets; a hostname such as `localhost` is refused. Any port
 from 1 to 65535 is accepted, so an exporter sending to a different one simply
 needs that number here. A `bind` and `port` that overlap another listener fail
 the input with `unable to bind flow UDP server on <bind>:<port>: address already
-in use`. They overlap when the port is the same and so is the address, or either
+in use`, and the agent applies the policy again once a policy that ran on
+`pktvisord` is removed; see [Taps the agent manages](../README.md#taps-the-agent-manages).
+They overlap when the port is the same and so is the address, or either
 side is the wildcard of the other's family: `0.0.0.0` for IPv4, `::` for IPv6.
 Two different specific addresses can share a port. A dual-stack `::`, described
 below, also overlaps IPv4 listeners on its port. Other bind failures end with

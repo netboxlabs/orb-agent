@@ -491,11 +491,15 @@ func (a *policyManager) removePolicyLocked(policyID string, policyName string, b
 		}
 	}
 	// Remove policy from orb-agent local repo
+	freed := err == nil && pd.State == policies.Running
 	err = a.repo.Remove(pd.ID)
 	if err != nil {
 		return err
 	}
 	a.secrets.ForgetPolicy(pd.ID)
+	if freed {
+		a.retryAddressInUseLocked(beName, be)
+	}
 	return nil
 }
 
@@ -553,6 +557,7 @@ func (a *policyManager) removePolicyDatasetLocked(policyID string, datasetID str
 		if err != nil {
 			a.logger.Warn("policy failed to remove", "policy_id", policyID, "policy_name", policyData.Name, "error", err)
 		}
+		freed := err == nil && policyData.State == policies.Running
 		// Remove policy from orb-agent local repo
 		err = a.repo.Remove(policyData.ID)
 		if err != nil {
@@ -560,6 +565,59 @@ func (a *policyManager) removePolicyDatasetLocked(policyID string, datasetID str
 			return
 		}
 		a.secrets.ForgetPolicy(policyData.ID)
+		if freed {
+			a.retryAddressInUseLocked(policyData.Backend, be)
+		}
+	}
+}
+
+// addressInUse is how a backend says it refused a policy because the address
+// the policy listens on is taken: pktvisord refuses a flow or dnstap input
+// whose address and port overlap a listener already running with "unable to
+// bind flow UDP server on <bind>:<port>: address already in use".
+const addressInUse = "address already in use"
+
+// refusedForAddressInUse reports whether the backend refused the policy
+// because the address it listens on was in use.
+func refusedForAddressInUse(p policies.PolicyData) bool {
+	return p.State == policies.FailedToApply && strings.Contains(strings.ToLower(p.BackendErr), addressInUse)
+}
+
+// retryAddressInUseLocked applies again the policies of the named backend
+// that it refused because the address they listen on was in use. It is
+// called once a policy that ran on the backend, and so could hold that
+// address, is removed from it: nothing else applies such a policy again, so
+// it would stay failed, with a reason that no longer holds, until Fleet sent
+// it again. They are applied in name order, so when two of them ask for the
+// same address the first gets it and the other is refused again, for the
+// same reason. A policy refused this way never started, so it is not run
+// twice. A backend that stops answering leaves the rest as they were. The
+// caller holds the backend's apply mutex.
+func (a *policyManager) retryAddressInUseLocked(name string, be backend.Backend) {
+	plcies, err := a.repo.GetAll()
+	if err != nil {
+		a.logger.Error("failed to retrieve list of policies", "error", err)
+		return
+	}
+	var refused []policies.PolicyData
+	for _, p := range plcies {
+		if p.Backend == name && refusedForAddressInUse(p) {
+			refused = append(refused, p)
+		}
+	}
+	slices.SortFunc(refused, func(x, y policies.PolicyData) int {
+		return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.ID, y.ID))
+	})
+	for _, policy := range refused {
+		a.logger.Info("a policy was removed from the backend; applying again a policy it refused because its address was in use",
+			"backend", name, "policy_id", policy.ID, "policy_name", policy.Name)
+		if err := a.applyStoredPolicy(&policy, be); errors.Is(err, ErrBackendNotRunning) {
+			return
+		}
+		if err := a.persistApplyOutcome(policy); err != nil {
+			a.logger.Error("got error in update last status", "error", err)
+			return
+		}
 	}
 }
 

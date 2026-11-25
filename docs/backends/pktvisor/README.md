@@ -124,6 +124,13 @@ changes the config or the tap of a flow policy that shares its listener with ano
 and still overlaps that listener, fails the same way. The old version has already been removed
 by then, so the policy runs nothing until the edit is fixed; see [Edits](#edits).
 
+When a policy that runs on `pktvisord` is removed, the agent applies again every pktvisor
+policy that `pktvisord` refused because its address was in use, a flow or a dnstap listener:
+a policy refused for the port of one that is gone runs once that one is removed, without Fleet
+sending it again. They are applied in name order, so when several ask for the same port, the
+first gets it and the others are refused again. An edit that moves a policy to another port
+does not apply them again; edit them or send them again.
+
 `pktvisord` puts the tap name in its handler names, so moving a policy between a managed
 tap and a local one starts new metric series.
 
