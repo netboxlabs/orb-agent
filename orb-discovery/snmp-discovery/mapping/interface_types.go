@@ -298,9 +298,11 @@ func ResolveInterfaceType(
 	userPatternCount int,
 ) string {
 	// Tier 0: Subinterface detection (highest priority - structural)
-	// A dot-separated child is a subinterface and is virtual regardless of
-	// what else it reports: platforms commonly publish a unit with the
-	// ifType of the port it runs on.
+	// A dot-separated child is a subinterface and is virtual whatever its
+	// ifType: platforms commonly publish a unit with the ifType of the port
+	// it runs on. A unit carries the dot in both ifName and ifDescr, so the
+	// dot is set aside only when the other name disputes it; see
+	// dottedNameDisputed.
 	//
 	// The colon is not that separator. It also names channelized lanes
 	// (Aruba CX 1/1/11:1, Extreme SLX Ethernet 0/54:1), ONU ports (BDCOM
@@ -310,11 +312,6 @@ func ResolveInterfaceType(
 	// only makes it virtual when the reported ifType agrees, or when the
 	// walk reported no ifType at all and there is nothing to weigh the
 	// name against.
-	//
-	// A dot is overruled only when the other name the device reports has
-	// none and the ifType names a type of its own: a unit carries the dot in
-	// both ifName and ifDescr, while a dot in a version string or a free-form
-	// ifDescr is in that name alone.
 	if parent := ExtractParentInterfaceName(interfaceName); parent != "" {
 		colonSeparated := len(interfaceName) > len(parent) && interfaceName[len(parent)] == ':'
 		switch {

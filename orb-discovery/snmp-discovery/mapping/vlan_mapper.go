@@ -1479,9 +1479,8 @@ func int64Ptr(v int64) *int64 {
 // ifIndex and left in the numeric form the agent reported. Switchport
 // placement is decided on this value rather than on the NetBox type the
 // interface carries, because that type is resolved from the interface's
-// NAME first: every name that parses as a child — a Junos unit, but equally
-// a channelized lane or a GPON ONU port — is typed virtual before ifType is
-// consulted at all.
+// name first: a name that parses as a unit can be typed virtual whatever its
+// ifType.
 func walkedIfTypes(oids ObjectIDValueMap) map[int]string {
 	out := make(map[int]string)
 	for oid, v := range oids {

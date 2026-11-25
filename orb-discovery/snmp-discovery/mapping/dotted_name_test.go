@@ -27,6 +27,7 @@ func TestResolveInterfaceType_DottedNameNeedsTheOtherNameToAgree(t *testing.T) {
 		{"aggregate", "lag 901 Access Node 8.1.4", "lag 901", "161", nil, "lag"},
 		{"ifType that maps to virtual", "radio.if0", "Radio1", "135", nil, "virtual"},
 		{"other name split by a colon only", "radio.if0", "radio:if0", "188", nil, "other-wireless"},
+		{"Ethernet with no speed falls to the default", "radio.if0", "Radio1", "6", nil, "other"},
 
 		// Both names carry the dot: a unit, whatever its ifType.
 		{"unit on an Ethernet port", "eth0.100", "eth0.100", "6", int64Ptr(1000000), "virtual"},
@@ -153,7 +154,7 @@ func TestResolveSubinterfaceParents_DisputedDottedName(t *testing.T) {
 		assert.Nil(t, child.Parent)
 	})
 
-	t.Run("an excluded parent does not count", func(t *testing.T) {
+	t.Run("an excluded parent is still on the device", func(t *testing.T) {
 		mapper, err := mapping.NewInterfaceMapper(logger, nil, config.InterfaceNameSourceAuto)
 		require.NoError(t, err)
 		registry := mapping.NewEntityRegistry(logger)
@@ -163,8 +164,40 @@ func TestResolveSubinterfaceParents_DisputedDottedName(t *testing.T) {
 
 		registry.ResolveSubinterfaceParents()
 
-		assert.Equal(t, "other-wireless", *child.Type)
-		assert.Nil(t, child.Parent)
+		assert.Equal(t, "virtual", *child.Type)
+		assert.Nil(t, child.Parent, "an excluded interface is no parent")
+	})
+
+	t.Run("the parent overrides a user pattern", func(t *testing.T) {
+		mapper, err := mapping.NewInterfaceMapper(logger, []config.InterfacePattern{{Match: `^radio\.`, Type: "other"}}, config.InterfaceNameSourceAuto)
+		require.NoError(t, err)
+		registry := mapping.NewEntityRegistry(logger)
+		child := mapInterfaceRow(t, mapper, registry, "2", "radio.if0", "Radio1", "188")
+		mapInterfaceRow(t, mapper, registry, "1", "radio", "radio", "188")
+
+		registry.ResolveSubinterfaceParents()
+
+		assert.Equal(t, "virtual", *child.Type)
+		assert.NotNil(t, child.Parent)
+	})
+
+	t.Run("a nested unit's parent reference carries the settled type", func(t *testing.T) {
+		mapper, err := mapping.NewInterfaceMapper(logger, nil, config.InterfaceNameSourceIfName)
+		require.NoError(t, err)
+		// Parents are assigned in map order, so repeat to cover the order
+		// in which the nested unit is visited first.
+		for range 100 {
+			registry := mapping.NewEntityRegistry(logger)
+			mapInterfaceRow(t, mapper, registry, "1", "uplink", "ae1", "161")
+			unit := mapInterfaceRow(t, mapper, registry, "2", "uplink A", "ae1.10", "161")
+			nested := mapInterfaceRow(t, mapper, registry, "3", "uplink B", "ae1.10.20", "161")
+
+			registry.ResolveSubinterfaceParents()
+
+			require.Equal(t, "virtual", *unit.Type)
+			require.NotNil(t, nested.Parent)
+			require.Equal(t, "virtual", *nested.Parent.Type)
+		}
 	})
 
 	t.Run("a colon lane with its port on the device stays a port", func(t *testing.T) {
