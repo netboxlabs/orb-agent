@@ -318,6 +318,7 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 			pd.Datasets = currentPolicy.Datasets
 			pd.GroupIDs = currentPolicy.GroupIDs
 			pd.NotOnBackend = currentPolicy.NotOnBackend
+			pd.BackendHasPolicy = currentPolicy.BackendHasPolicy
 			// The record is replaced below; the versions applied so far are
 			// still needed to stamp the runs the backend still holds.
 			pd.Applied = currentPolicy.Applied
@@ -491,7 +492,7 @@ func (a *policyManager) removePolicyLocked(policyID string, policyName string, b
 		}
 	}
 	// Remove policy from orb-agent local repo
-	freed := err == nil && pd.State == policies.Running
+	freed := err == nil && pd.BackendHasPolicy
 	err = a.repo.Remove(pd.ID)
 	if err != nil {
 		return err
@@ -557,7 +558,7 @@ func (a *policyManager) removePolicyDatasetLocked(policyID string, datasetID str
 		if err != nil {
 			a.logger.Warn("policy failed to remove", "policy_id", policyID, "policy_name", policyData.Name, "error", err)
 		}
-		freed := err == nil && policyData.State == policies.Running
+		freed := err == nil && policyData.BackendHasPolicy
 		// Remove policy from orb-agent local repo
 		err = a.repo.Remove(policyData.ID)
 		if err != nil {
@@ -707,6 +708,7 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 		a.logger.Info("policy applied successfully", "policy_id", payload.ID, "policy_name", payload.Name,
 			"backend", pd.Backend)
 		pd.State = policies.Running
+		pd.BackendHasPolicy = true
 		pd.BackendErr = ""
 		// payload.Data holds the references unresolved: the secrets only an
 		// earlier version named no longer count for the policy.
@@ -792,6 +794,7 @@ func (a *policyManager) removeBackendPoliciesLocked(name string, be backend.Back
 			// restart keeps its process: the replay applies it without
 			// removing it again. A removal that failed may have left it.
 			plcy.NotOnBackend = true
+			plcy.BackendHasPolicy = false
 		}
 		if permanently {
 			err = a.repo.Remove(plcy.ID)
@@ -827,10 +830,11 @@ func (a *policyManager) BackendProcessReplaced(name string) {
 		return
 	}
 	for _, plcy := range plcies {
-		if plcy.Backend != name || plcy.NotOnBackend {
+		if plcy.Backend != name || (plcy.NotOnBackend && !plcy.BackendHasPolicy) {
 			continue
 		}
 		plcy.NotOnBackend = true
+		plcy.BackendHasPolicy = false
 		if err := a.persistApplyOutcome(plcy); err != nil {
 			a.logger.Error("got error in update last status", "error", err)
 			return
@@ -1101,6 +1105,7 @@ func (a *policyManager) stopUnresolvedLocked(policy policies.PolicyData) {
 			// secret resolves, the policy is applied fresh, not removed
 			// first.
 			policy.NotOnBackend = true
+			policy.BackendHasPolicy = false
 		} else {
 			a.logger.Error("backend failed to stop the policy", "policy_id", policy.ID, "policy_name", policy.Name, "error", err)
 		}

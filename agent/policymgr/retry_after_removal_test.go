@@ -35,13 +35,19 @@ func (b retryingBackend) RetryAfterRemoval(reason string) bool {
 // backend.RemovalRetrier, and returns the mock with a policy manager that
 // applies to it at once.
 func addressFixture(t *testing.T, name string) (*mockBackend, policymgr.PolicyManager) {
+	be, mgr, _ := addressFixtureWithSecrets(t, name)
+	return be, mgr
+}
+
+func addressFixtureWithSecrets(t *testing.T, name string) (*mockBackend, policymgr.PolicyManager, *mockSecretsManager) {
 	t.Helper()
 	be := &mockBackend{name: name}
 	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register(name, retryingBackend{be})
-	mgr, err := policymgr.New(slog.New(slog.NewTextHandler(os.Stdout, nil)), &mockSecretsManager{passthrough: true}, config.Config{})
+	secrets := &mockSecretsManager{passthrough: true}
+	mgr, err := policymgr.New(slog.New(slog.NewTextHandler(os.Stdout, nil)), secrets, config.Config{})
 	require.NoError(t, err)
-	return be, mgr
+	return be, mgr, secrets
 }
 
 // applied returns the names of the policies applied to be, in order.
@@ -161,6 +167,54 @@ func TestRemovingAPolicyThatHeldNothingAppliesNothingAgain(t *testing.T) {
 			be.AssertExpectations(t)
 			assert.Equal(t, []string{"sflow", "netflow-a", "netflow-b"}, applied(be), "nothing applied again")
 		})
+	}
+}
+
+// A failed edit leaves the previous version on the backend, so removing that
+// policy must still retry policies the previous version kept from applying.
+func TestRemovingAPolicyAfterFailedEditAppliesAgainThePoliciesRefusedForAnAddressInUse(t *testing.T) {
+	for _, failure := range []string{"secret resolution", "pre-send validation"} {
+		for _, remove := range []string{"policy", "last dataset"} {
+			t.Run(failure+"/"+remove, func(t *testing.T) {
+				beName := "address_in_use_failed_edit_" + strings.ReplaceAll(failure+"_"+remove, " ", "_")
+				be, mgr, secrets := addressFixtureWithSecrets(t, beName)
+				be.On("ApplyPolicy", isPolicy("sflow", 1), false).Return(nil).Once()
+				manage(mgr, beName, "sflow")
+				be.On("ApplyPolicy", isPolicy("netflow", 1), false).Return(addressInUse("netflow")).Once()
+				manage(mgr, beName, "netflow")
+
+				edit := config.PolicyPayload{
+					Action: "manage", ID: "sflow", Name: "sflow", Backend: beName, Version: 2,
+					Data: map[string]any{},
+				}
+				if failure == "secret resolution" {
+					secrets.passthrough = false
+					secrets.On("SolvePolicySecrets", payloadByID("sflow")).
+						Return(config.PolicyPayload{}, errors.New("secret not found")).Once()
+				} else {
+					edit.Name = "sflow/invalid"
+				}
+				mgr.ManagePolicy(edit)
+				secrets.passthrough = true
+				assert.Equal(t, policies.FailedToApply, stored(t, mgr, "sflow").State)
+				assert.False(t, stored(t, mgr, "sflow").NotOnBackend)
+				assert.True(t, stored(t, mgr, "sflow").BackendHasPolicy)
+
+				be.On("RemovePolicy", isPolicy("sflow", 2)).Return(nil).Once()
+				be.On("ApplyPolicy", isPolicy("netflow", 1), true).Return(nil).Once()
+				switch remove {
+				case "policy":
+					require.NoError(t, mgr.RemovePolicy("sflow", "sflow/invalid", beName))
+				case "last dataset":
+					mgr.RemovePolicyDataset("sflow", "ds-sflow", beName, retryingBackend{be})
+				}
+
+				be.AssertExpectations(t)
+				secrets.AssertExpectations(t)
+				assert.Equal(t, []string{"sflow", "netflow", "netflow"}, applied(be))
+				assert.Equal(t, policies.Running, stored(t, mgr, "netflow").State)
+			})
+		}
 	}
 }
 

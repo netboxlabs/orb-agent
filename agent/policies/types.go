@@ -50,6 +50,9 @@ type PolicyData struct {
 	// to apply the policy clears it, unless the backend refused the policy
 	// before sending its process anything.
 	NotOnBackend bool
+	// BackendHasPolicy records that an apply succeeded and the backend may
+	// still hold that copy even if a later edit failed before reaching it.
+	BackendHasPolicy bool
 	// Applied lists the last versions the agent sent to the backend, oldest
 	// first, with when it sent each. A new run gets the last version sent at
 	// or before the run's created_at. It lives on the record, and every
