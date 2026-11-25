@@ -1,0 +1,39 @@
+
+SysName:          exos-edge-01
+SysLocation:      
+SysContact:       https://www.extremenetworks.com/support/
+System MAC:       00:04:96:00:00:01
+System Type:      X440G2-12p-10G4
+
+SysHealth check:  Enabled (Normal)
+Recovery Mode:    All
+System Watchdog:  Enabled
+
+Current Time:     Wed Jan  7 10:09:00 2026
+Timezone:         [Auto DST Enabled] GMT Offset: -360 minutes, name is not set.
+                  DST of 60 minutes is currently not in effect, name is not set.
+                  DST begins every second Sunday March at 2:00
+                  DST ends every first Sunday November at 2:00
+
+Boot Time:        Mon Jan  5 14:28:07 2026
+Boot Count:       19
+Next Reboot:      None scheduled
+System UpTime:    1 days 19 hours 40 minutes 52 seconds
+
+Current State:    OPERATIONAL             
+Image Selected:   primary                 
+Image Booted:     primary                 
+Primary ver:      31.7.1.4                
+                  patch1-56
+Secondary ver:    30.6.1.11   
+                  patch1-11
+
+Config Selected:  primary.cfg                                          
+Config Booted:    Factory Default                                      
+Config Automatic: NONE (Disabled)
+
+primary.cfg       Created by ExtremeXOS version 31.7.1.4
+                  243764 bytes saved on Tue Jan  6 15:39:04 2026
+
+
+LAA MAC:          Locally Administered MAC Address Disabled

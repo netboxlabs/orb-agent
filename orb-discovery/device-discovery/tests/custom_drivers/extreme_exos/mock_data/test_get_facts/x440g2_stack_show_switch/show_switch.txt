@@ -1,0 +1,10 @@
+
+SysName:          exos-stack-02
+SysLocation:      
+SysContact:       https://www.extremenetworks.com/support/
+System MAC:       02:04:96:00:00:21
+System Type:      X440G2-48p-10G4 (Stack)
+
+SysHealth check:  Enabled (Normal)
+Recovery Mode:    All
+System Watchdog:  Enabled

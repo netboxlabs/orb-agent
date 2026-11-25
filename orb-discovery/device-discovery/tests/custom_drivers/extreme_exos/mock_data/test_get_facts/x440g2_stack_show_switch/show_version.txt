@@ -1,0 +1,15 @@
+Slot-1          : 800618-00-04 1234N-00001 Rev 04 BootROM: 1.0.1.7    IMG: 32.7.1.9  
+Slot-2          : 800618-00-04 1234N-00002 Rev 04 BootROM: 1.0.1.7    IMG: 32.7.1.9  
+Slot-3          : 800618-00-04 1234N-00003 Rev 04 BootROM: 1.0.1.7    IMG: 32.7.1.9  
+Slot-4          : 800618-00-20 1234N-00004 Rev 20 BootROM: 1.0.1.8    IMG: 32.7.1.9  
+Slot-5          : 800618-00-04 1234N-00005 Rev 04 BootROM: 1.0.1.7    IMG: 32.7.1.9  
+Slot-6          :
+Slot-7          :
+Slot-8          :
+
+Image   : ExtremeXOS version 32.7.1.9 32.7.1.9-patch1-68 by release-manager
+          on Tue Nov 19 18:04:22 EST 2024
+BootROM : Default 1.0.1.7  Alternate 1.0.1.7
+Diagnostics : 5.13
+Certified Version : EXOS Linux 4.14.253, Extreme Networks FIPS Object Module 2.0.16m
+Build Tools Version : exos-mips-sdk-3.1.19.1.0

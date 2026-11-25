@@ -1,0 +1,16 @@
+{
+  "hostname": "exos-edge-01",
+  "vendor": "Extreme Networks",
+  "model": "X440G2-12p-10G4",
+  "os_version": "31.7.1.4",
+  "serial_number": "1234G-00001",
+  "uptime": 157252.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+  ]
+}
