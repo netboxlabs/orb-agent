@@ -194,7 +194,12 @@ func (v *vaultManager) watchToken(secret *vault.Secret) error {
 
 	stop := make(chan struct{})
 	var once sync.Once
-	v.stopWatch = func() { once.Do(func() { close(stop) }) }
+	v.stopWatch = func() {
+		once.Do(func() {
+			lw.Stop()
+			close(stop)
+		})
+	}
 
 	go lw.Start()
 
