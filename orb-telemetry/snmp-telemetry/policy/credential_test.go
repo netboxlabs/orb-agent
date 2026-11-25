@@ -12,6 +12,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/collector"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/snmp"
 )
 
 // erringCollector fails every collection with err.
@@ -26,8 +27,10 @@ func (e *erringCollector) CollectTarget(context.Context, config.Target, *config.
 
 // A device that refuses an SNMPv3 credential answers with a report PDU, so the
 // policy's error says it refused the credential and which setting to check,
-// keeping what gosnmp said; a device that does not answer still reads as a
-// timeout. No credential value is in either.
+// keeping what gosnmp said. One that answers engine discovery and then not
+// the request reads as the timeout with the privacy settings to check, and
+// one that does not answer at all still reads as a timeout. No credential
+// value is in any of them.
 func TestRunMetrics_NamesARefusedSNMPv3Credential(t *testing.T) {
 	for name, tc := range map[string]struct {
 		err  error
@@ -48,6 +51,10 @@ func TestRunMetrics_NamesARefusedSNMPv3Credential(t *testing.T) {
 		"security level": {
 			err:  gosnmp.ErrUnknownSecurityLevel,
 			want: "the device refused the SNMPv3 credential (the device does not accept the security_level for the username): getting sysObjectID from 10.0.0.1: unknown security level",
+		},
+		"no answer after engine discovery": {
+			err:  &snmp.NoAnswerAfterDiscoveryError{Err: errors.New("request timeout (after 1 retries)")},
+			want: "the device answered SNMPv3 discovery but not the request (check the priv_protocol and priv_passphrase): getting sysObjectID from 10.0.0.1: request timeout (after 1 retries)",
 		},
 		"timeout": {
 			err:  errors.New("request timeout (after 1 retries)"),
