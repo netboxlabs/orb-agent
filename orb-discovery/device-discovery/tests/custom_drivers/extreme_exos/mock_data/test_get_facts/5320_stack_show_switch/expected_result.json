@@ -1,0 +1,16 @@
+{
+  "hostname": "exos-stack-01",
+  "vendor": "Extreme Networks",
+  "model": "5320-48P-8XE (Stack)",
+  "os_version": "32.7.1.9",
+  "serial_number": "Unknown",
+  "uptime": 157252.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+  ]
+}
