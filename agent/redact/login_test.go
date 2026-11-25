@@ -215,6 +215,45 @@ func TestMaskLogins_MasksTheLoginAURLParserReadsShort(t *testing.T) {
 	}
 }
 
+// A password that starts with a /, ? or # leaves only the user and its : in
+// the authority a URL parser reads short. urllib3 reads the user as the host,
+// with an empty port, and writes it as a host: the lines below are the ones
+// the worker printed for each of the three, with --debug for the last, as the
+// SDK raised them. With a /, the URL it quotes holds the password before its
+// @ too.
+func TestMaskLogins_MasksTheUserAURLParserReadsAsAHost(t *testing.T) {
+	refused := func(host, url string) string {
+		return "ERROR: Unable to connect to Diode Server: Failed to obtain access token: HTTPConnectionPool(host='" + host +
+			"', port=80): Max retries exceeded with url: " + url + " (Caused by NameResolutionError(\"HTTPConnection(host='" + host +
+			"', port=80): Failed to resolve '" + host + "' ([Errno -2] Name or service not known)\"))"
+	}
+	for _, tc := range []struct{ target, line, want string }{
+		{
+			"grpc://canary-user:/canary@127.0.0.1:8080/diode",
+			refused("canary-user", "/canary@127.0.0.1:8080/diode/auth/token"),
+			refused("********", "/********@127.0.0.1:8080/diode/auth/token"),
+		},
+		{"grpc://canary-user:?canary@127.0.0.1:8080/diode", refused("canary-user", "/auth/token"), refused("********", "/auth/token")},
+		{"grpc://canary-user:#canary@127.0.0.1:8080/diode", refused("canary-user", "/auth/token"), refused("********", "/auth/token")},
+		{
+			"grpc://canary-user:/canary@127.0.0.1:8080/diode",
+			"DEBUG: urllib3.connectionpool: Starting new HTTP connection (1): canary-user:80",
+			"DEBUG: urllib3.connectionpool: Starting new HTTP connection (1): ********:80",
+		},
+	} {
+		if got := MaskLogins(tc.line, Logins([]string{"--diode-target", tc.target})); got != tc.want {
+			t.Errorf("for %q, MaskLogins(%q) = %q, want %q", tc.target, tc.line, got, tc.want)
+		}
+	}
+	logins := Logins([]string{"--diode-target", "grpc://canary-user:/canary@127.0.0.1:8080/diode"})
+	if got := MaskLogins("hosts canary-user-2, canary-user.example and xcanary-user", logins); got != "hosts canary-user-2, canary-user.example and xcanary-user" {
+		t.Errorf("MaskLogins() masked the user inside a longer host: %q", got)
+	}
+	if got := MaskLogins("user canary-user", Logins([]string{"--diode-target", "grpc://canary-user:canary@127.0.0.1:8080/diode"})); got != "user canary-user" {
+		t.Errorf("MaskLogins() masked as a host a user whose password does not start with a /, ? or #: %q", got)
+	}
+}
+
 // A user and a password are masked with no @ after them too, where they
 // start a word, but not inside a longer word; a user alone still needs its @.
 func TestMaskLogins_MasksAUserAndAPasswordWithNoAtWhereTheyStartAWord(t *testing.T) {

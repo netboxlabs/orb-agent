@@ -86,9 +86,10 @@ func LoginForms(s string) []string {
 // quote, a bracket, a ,, a =, a / or an escaped line break, so it is not
 // masked inside a longer user, as ops is in noc-ops@host. A user and a
 // password are also masked where they start a word with no @ after them, as
-// a URL parser writes the authority it read short (see LoginForms). The
-// longest are masked first, so no part of one that holds a shorter one is
-// left.
+// a URL parser writes the authority it read short (see LoginForms), and a
+// user whose password starts with a /, ? or # where it is written as a host
+// (see maskLogin). The longest are masked first, so no part of one that
+// holds a shorter one is left.
 func MaskLogins(text string, logins []string) string {
 	for _, l := range longestFirst(logins) {
 		text = maskLogin(text, l)
@@ -99,25 +100,44 @@ func MaskLogins(text string, logins []string) string {
 // maskLogin returns text with login masked where it comes before an @, and,
 // for a user alone, where it also starts a word. A login that holds a
 // password is also masked where it starts a word, with or without an @
-// after it.
+// after it. A login that ends in : with no password after it, as the
+// authority a URL parser reads short when the password starts with a /, ?
+// or # (see withURLParts), also has its user masked where a host is written:
+// the parser reads the user as the host with an empty port, and urllib3
+// writes it as one, as in host='user' and Failed to resolve 'user'. A login
+// written with an empty password, as user:@host, is masked the same way.
 func maskLogin(text, login string) string {
 	if login == "" {
 		return text
 	}
-	_, password, hasColon := strings.Cut(login, ":")
+	user, password, hasColon := strings.Cut(login, ":")
 	hasPassword := password != ""
+	text = maskWhere(text, login, func(text string, start, end int) bool {
+		beforeAt := end < len(text) && text[end] == '@'
+		word := startsWord(text, start)
+		return beforeAt && (hasColon || word) || hasPassword && word
+	})
+	if hasColon && !hasPassword && user != "" {
+		text = maskWhere(text, user, func(text string, start, end int) bool {
+			return startsWord(text, start) && (end == len(text) || !isHostByte(text[end]))
+		})
+	}
+	return text
+}
+
+// maskWhere returns text with s masked as ******** wherever masked, given
+// text and where s starts and ends in it, reports true.
+func maskWhere(text, s string, masked func(text string, start, end int) bool) string {
 	var b strings.Builder
 	last := 0
 	for i := 0; i < len(text); {
-		j := strings.Index(text[i:], login)
+		j := strings.Index(text[i:], s)
 		if j < 0 {
 			break
 		}
 		j += i
-		end := j + len(login)
-		beforeAt := end < len(text) && text[end] == '@'
-		word := startsWord(text, j)
-		if mask := beforeAt && (hasColon || word) || hasPassword && word; !mask {
+		end := j + len(s)
+		if !masked(text, j, end) {
 			i = j + 1
 			continue
 		}
@@ -149,6 +169,13 @@ func startsWord(text string, i int) bool {
 // lets one hold, ' ( ) , and =, also separate words in a text.
 func isLoginByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("%-._~!$&*+;:", c) >= 0
+}
+
+// isHostByte reports whether c can be part of a host name as an address
+// writes it: a letter, a digit, a % that escapes a byte, or one of - . _ ~.
+// A : that starts the port, a quote or a space ends the host.
+func isHostByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("%-._~", c) >= 0
 }
 
 // grpcResolvers are the schemes of the gRPC resolvers a target can name
