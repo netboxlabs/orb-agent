@@ -93,6 +93,7 @@ orb:
         http: "http://<alloy-host>:4318"     # push metrics to Grafana Alloy's OTLP receiver
     pktvisor:                 # orb-agent's flow / network-analytics backend
       host: 0.0.0.0
+      expose_api: true   # host is not loopback; the admin API has no authentication
       port: "10853"
       geo_asn: /geo/GeoLite2-ASN.mmdb        # optional — enables ASN (mount the DB)
       taps:

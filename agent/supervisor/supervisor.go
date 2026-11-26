@@ -192,6 +192,57 @@ func parseStartOptions(name string, cEntity map[string]any) (mode startMode, bud
 	return mode, budget, stripped, nil
 }
 
+const (
+	apiHostKey   = "host"
+	exposeAPIKey = "expose_api"
+)
+
+// checkAPIExposure keeps a backend's API, which has no authentication, on
+// loopback unless the entry opts in with expose_api: true. It reports
+// whether the API is exposed and edits settings, the copy parseStartOptions
+// made: expose_api is stripped so Configure never sees it, and an empty or
+// null host is removed so the backend keeps its loopback default, since most
+// backends would pass an empty host on and listen on every interface. Every
+// backend reads host as the address its API listens on.
+func checkAPIExposure(name string, settings map[string]any) (exposed bool, err error) {
+	if settings == nil {
+		return false, nil
+	}
+	optIn := false
+	if raw, ok := settings[exposeAPIKey]; ok {
+		delete(settings, exposeAPIKey)
+		switch v := raw.(type) {
+		case bool:
+			optIn = v
+		case string:
+			if optIn, err = strconv.ParseBool(v); err != nil {
+				return false, fmt.Errorf("backend %s: %s must be true or false", name, exposeAPIKey)
+			}
+		default:
+			return false, fmt.Errorf("backend %s: %s must be true or false", name, exposeAPIKey)
+		}
+	}
+	raw, ok := settings[apiHostKey]
+	if !ok {
+		return false, nil
+	}
+	host, isString := raw.(string)
+	if raw == nil || (isString && host == "") {
+		delete(settings, apiHostKey)
+		return false, nil
+	}
+	if !isString {
+		return false, fmt.Errorf("backend %s: %s must be a string", name, apiHostKey)
+	}
+	if backend.LoopbackHost(host) {
+		return false, nil
+	}
+	if !optIn {
+		return false, fmt.Errorf("backend %s: host %q is not localhost or a loopback IP address, and the backend API has no authentication; set %s: true to expose it", name, host, exposeAPIKey)
+	}
+	return true, nil
+}
+
 // wholeSeconds accepts the integer shapes a YAML decoder produces and the
 // string the environment overlay delivers.
 func wholeSeconds(raw any) (int64, bool) {
@@ -442,6 +493,13 @@ func (s *Supervisor) ConfigureAll(cfgBackends map[string]any, commons config.Bac
 		mode, budget, stripped, err := parseStartOptions(name, cEntity)
 		if err != nil {
 			return err
+		}
+		exposed, err := checkAPIExposure(name, stripped)
+		if err != nil {
+			return err
+		}
+		if exposed {
+			s.logger.Warn("backend API exposed off loopback; it has no authentication", "backend", name, "host", fmt.Sprintf("%v", stripped[apiHostKey]))
 		}
 		declared[name] = &entry{name: name, be: backend.GetBackend(name), config: stripped, mode: mode, budget: budget, phase: Declared}
 	}
