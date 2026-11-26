@@ -87,9 +87,29 @@ jobs:
     steps:
       - run: echo "The new release version is ${{ needs.get-next-version.outputs.new-release-version }} commit ${{ needs.get-next-version.outputs.short-sha }}"
 
+  resolve-otel:
+    name: Resolve opentelemetry-infinity latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Resolved once, so both platform builds and a re-run of a failed one
+      # embed the same otlpinf even if infinity releases meanwhile.
+      - name: Resolve the latest tag to a digest
+        id: digest
+        run: |
+          digest=$(docker buildx imagetools inspect docker.io/netboxlabs/opentelemetry-infinity:latest --format '{{.Manifest.Digest}}')
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::could not resolve netboxlabs/opentelemetry-infinity:latest to a digest, got '$digest'"
+            exit 1
+          fi
+          echo "opentelemetry-infinity:latest is $digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+
   build:
     name: Build (${{ matrix.platform }})
-    needs: get-next-version
+    needs: [get-next-version, resolve-otel]
     runs-on: ${{ matrix.runner }}
     if: needs.get-next-version.outputs.new-release-published == 'true'
     permissions:
@@ -139,6 +159,7 @@ jobs:
             GO_VERSION=${{ env.GO_VERSION }}
             BUILD_COMMIT=${{ env.BUILD_COMMIT }}
             BUILD_TRACK=release
+            OTEL_TAG=latest@${{ needs.resolve-otel.outputs.digest }}
             NETWORK_DISCOVERY_VERSION=${{ inputs.network-version }}
             SNMP_DISCOVERY_VERSION=${{ inputs.snmp-version }}
             GNMI_DISCOVERY_VERSION=${{ inputs.gnmi-version }}
