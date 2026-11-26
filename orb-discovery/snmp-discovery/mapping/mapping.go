@@ -72,8 +72,8 @@ type EntityRegistry struct {
 	namedVlanInterfaces   map[*diode.Interface]struct{}
 	unnamedVlanInterfaces int
 
-	// disputedUnits holds the interfaces whose dot-separated name the other
-	// name disputed, so the name did not type them virtual; see
+	// disputedUnits holds the interfaces whose dot-separated name ifName
+	// disputed, so the name did not type them virtual; see
 	// dottedNameDisputed.
 	disputedUnits map[*diode.Interface]struct{}
 }
@@ -114,8 +114,8 @@ func (r *EntityRegistry) MarkInterfaceVerified(iface *diode.Interface) {
 	r.verifiedInterfaces[iface] = struct{}{}
 }
 
-// markDisputedUnit records an interface whose dot-separated name the other
-// name disputed.
+// markDisputedUnit records an interface whose dot-separated name ifName
+// disputed.
 func (r *EntityRegistry) markDisputedUnit(iface *diode.Interface) {
 	if r.disputedUnits == nil {
 		r.disputedUnits = make(map[*diode.Interface]struct{})
@@ -237,7 +237,7 @@ func (r *EntityRegistry) ResolveSubinterfaceParents() {
 	resolvedCount := 0
 	notFoundCount := 0
 
-	// A unit name the other name disputed still names a unit when the
+	// A unit name ifName disputed still names a unit when the
 	// interface it points to is on the device, excluded or not: typing it
 	// virtual again keeps a parent an earlier discovery stored valid in
 	// NetBox. Settled before any parent is assigned, since a parent

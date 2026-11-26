@@ -58,13 +58,14 @@ func dotSeparated(name string) bool {
 	return parent != "" && name[len(parent)] == '.'
 }
 
-// dottedNameDisputed reports whether a dot-separated name is contradicted:
-// the other name the device reports for the interface has no dot, and the
-// ifType maps to a type on its own. An empty, placeholder or descriptive
-// other name, or an ifType with no mapping, is no evidence against the name.
-func dottedNameDisputed(name, alternateName, ifType string) bool {
-	if !dotSeparated(name) || alternateName == "" || alternateName == DefaultInterfaceName ||
-		looksDescriptive(alternateName) || dotSeparated(alternateName) {
+// dottedNameDisputed reports whether ifName, the device's own name for the
+// interface, contradicts a dot-separated name taken from ifDescr: ifName has
+// no dot, and the ifType maps to a type on its own. A dot in ifName itself is
+// never disputed. An empty, placeholder or descriptive ifName, or an ifType
+// with no mapping, is no evidence against the name.
+func dottedNameDisputed(name, ifName, ifType string) bool {
+	if !dotSeparated(name) || ifName == "" || ifName == DefaultInterfaceName ||
+		looksDescriptive(ifName) || dotSeparated(ifName) {
 		return false
 	}
 	_, mapped := InterfaceTypeMap[ifType]
@@ -285,12 +286,11 @@ func getEthernetInterfaceType(speed *int64) string {
 // 4. Speed-based detection (for Ethernet)
 // 5. Default fallback
 //
-// alternateName is the other name the device reports for the interface:
-// ifName when interfaceName came from ifDescr, ifDescr when it came from
-// ifName. Empty when the walk carries only one.
+// ifName is the interface's IF-MIB ifName, which can dispute a dot in an
+// interfaceName taken from ifDescr. Empty when the walk carries none.
 func ResolveInterfaceType(
 	interfaceName string,
-	alternateName string,
+	ifName string,
 	ifType string,
 	speed *int64,
 	defaultInterfaceType string,
@@ -300,9 +300,9 @@ func ResolveInterfaceType(
 	// Tier 0: Subinterface detection (highest priority - structural)
 	// A dot-separated child is a subinterface and is virtual whatever its
 	// ifType: platforms commonly publish a unit with the ifType of the port
-	// it runs on. A unit carries the dot in both ifName and ifDescr, so the
-	// dot is set aside only when the other name disputes it; see
-	// dottedNameDisputed.
+	// it runs on. ifName is the device's own name for the interface and
+	// ifDescr is free text, so a dot that only ifDescr carries is set aside
+	// when ifName disputes it; see dottedNameDisputed.
 	//
 	// The colon is not that separator. It also names channelized lanes
 	// (Aruba CX 1/1/11:1, Extreme SLX Ethernet 0/54:1), ONU ports (BDCOM
@@ -319,7 +319,7 @@ func ResolveInterfaceType(
 			if ifType == "" || isLogicalIfType(ifType) {
 				return "virtual"
 			}
-		case !dottedNameDisputed(interfaceName, alternateName, ifType):
+		case !dottedNameDisputed(interfaceName, ifName, ifType):
 			return "virtual"
 		}
 	}

@@ -1094,14 +1094,9 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	// Resolve Interface.Name from the two SNMP sources once, after the
 	// property loop, so the choice is explicit and order-independent.
 	// Done before type resolution below, which reads interfaceEntity.Name.
-	var alternateName string // the source the name was not taken from
 	if name := resolveInterfaceName(m.nameSource, ifDescrRaw, ifNameRaw); name != "" {
 		interfaceEntity.Name = &name
 		fieldFound = true
-		alternateName = ifNameRaw
-		if name == ifNameRaw {
-			alternateName = ifDescrRaw
-		}
 		if vid, ok := numericVlanID(getIndex(values), name); ok {
 			prefix := ""
 			if defaults != nil {
@@ -1128,7 +1123,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 
 		interfaceType := ResolveInterfaceType(
 			interfaceName,
-			alternateName,
+			ifNameRaw,
 			snmpIfType,
 			interfaceEntity.Speed,
 			defaultType,
@@ -1136,7 +1131,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 			m.userPatternCount,
 		)
 		interfaceEntity.Type = &interfaceType
-		if dottedNameDisputed(interfaceName, alternateName, snmpIfType) {
+		if dottedNameDisputed(interfaceName, ifNameRaw, snmpIfType) {
 			entityRegistry.markDisputedUnit(interfaceEntity)
 		}
 	}

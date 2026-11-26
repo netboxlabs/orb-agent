@@ -22,15 +22,15 @@ Interface types are determined using the following priority order (first match w
 - Subinterfaces are identified by name patterns containing `.` or `:` separators
 - A dot-separated name is assigned type `virtual` whatever its `ifType`, since
   some SNMP agents report a unit with the `ifType` of the port it runs on.
-- A unit carries the dot in both ifName and ifDescr, so the dot is set aside
-  when the other of the two names (ifName when the name came from ifDescr,
-  ifDescr when it came from ifName) disputes it: that name is present, is not
-  the `unknown` placeholder, does not look descriptive (see below), and has
-  no dot, while `ifType` is Ethernet or has an entry in the
-  [ifType mapping](#snmp-iftype-mappings). A dot in a firmware version or a
-  free-form ifDescr is the usual case. The interface keeps its name and goes
-  on to the tiers below; an Ethernet `ifType` with no usable speed ends at
-  the built-in patterns or the default type.
+- ifName is the device's own name for the interface, while ifDescr is free
+  text that can carry a dot from a firmware version or a description. So a
+  dot in a name taken from ifDescr is set aside when ifName disputes it:
+  ifName is present, is not the `unknown` placeholder, does not look
+  descriptive (see below), and has no dot, while `ifType` is Ethernet or has
+  an entry in the [ifType mapping](#snmp-iftype-mappings). The interface
+  keeps its name and goes on to the tiers below; an Ethernet `ifType` with no
+  usable speed ends at the built-in patterns or the default type. A dot in
+  ifName itself, including a name taken from ifName, is never set aside.
 - Such an interface is typed `virtual` after all when the interface its name
   points to as its parent is on the device, excluded or not.
 - A colon-separated name is assigned type `virtual` only when `ifType` is
@@ -227,7 +227,7 @@ Subinterface resolution uses a two-phase approach to handle SNMP discovery order
 
 **Phase 1: Mapping (During SNMP Walk)**
 - All interfaces are discovered and mapped
-- Subinterfaces are assigned type `virtual` by Tier 0, except a dotted name the other name disputes, which the tiers below type
+- Subinterfaces are assigned type `virtual` by Tier 0, except a dotted name taken from ifDescr that ifName disputes, which the tiers below type
 - Parent relationships are NOT resolved yet (parent names may not exist in registry)
 
 **Phase 2: Post-Processing (After All Interfaces Discovered)**

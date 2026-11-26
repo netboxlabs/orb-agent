@@ -12,33 +12,34 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping"
 )
 
-func TestResolveInterfaceType_DottedNameNeedsTheOtherNameToAgree(t *testing.T) {
+func TestResolveInterfaceType_DottedNameAgainstIfName(t *testing.T) {
 	tests := []struct {
 		name          string
 		interfaceName string
-		alternateName string
+		ifName        string
 		ifType        string
 		speed         *int64
 		want          string
 	}{
-		// The other name has no dot, so the reported ifType decides.
+		// ifName has no dot, so the reported ifType decides.
 		{"radio port", "radio.if0", "Radio1", "188", nil, "other-wireless"},
 		{"version string in ifDescr", "Switch R3.00.012 Port 13 on Unit 1", "1/13", "6", int64Ptr(1000000), "1000base-t"},
 		{"aggregate", "lag 901 Access Node 8.1.4", "lag 901", "161", nil, "lag"},
 		{"ifType that maps to virtual", "radio.if0", "Radio1", "135", nil, "virtual"},
-		{"other name split by a colon only", "radio.if0", "radio:if0", "188", nil, "other-wireless"},
+		{"ifName split by a colon only", "radio.if0", "radio:if0", "188", nil, "other-wireless"},
 		{"Ethernet with no speed falls to the default", "radio.if0", "Radio1", "6", nil, "other"},
 
-		// Both names carry the dot: a unit, whatever its ifType.
+		// ifName carries the dot: a unit, whatever its ifType.
+		{"name taken from ifName", "ae1.10", "ae1.10", "161", nil, "virtual"},
 		{"unit on an Ethernet port", "eth0.100", "eth0.100", "6", int64Ptr(1000000), "virtual"},
 		{"unit named differently in each", "GigabitEthernet0/0.100", "Gi0/0.100", "6", int64Ptr(1000000), "virtual"},
 		{"letter suffix in both", "pxc-1.a, Port cross-connect", "pxc-1.a", "6", int64Ptr(1000000), "virtual"},
 		{"routed unit with text after the name", `lag-11.100, IP interface, "private"`, "lag-11.100", "142", nil, "virtual"},
 
-		// The other name is no evidence: the dot still decides.
-		{"no other name", "radio.if0", "", "188", nil, "virtual"},
-		{"descriptive other name", "radio.if0", "Unit: 1 Slot: 0 Port: 1", "188", nil, "virtual"},
-		{"placeholder other name", "radio.if0", mapping.DefaultInterfaceName, "188", nil, "virtual"},
+		// ifName is no evidence: the dot still decides.
+		{"no ifName", "radio.if0", "", "188", nil, "virtual"},
+		{"descriptive ifName", "radio.if0", "Unit: 1 Slot: 0 Port: 1", "188", nil, "virtual"},
+		{"placeholder ifName", "radio.if0", mapping.DefaultInterfaceName, "188", nil, "virtual"},
 
 		// An ifType with no mapping says nothing against the name.
 		{"unmapped ifType", "rif0(192.0.2.1)", "System", "142", nil, "virtual"},
@@ -49,7 +50,7 @@ func TestResolveInterfaceType_DottedNameNeedsTheOtherNameToAgree(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := mapping.ResolveInterfaceType(tt.interfaceName, tt.alternateName, tt.ifType, tt.speed, "", nil, 0)
+			got := mapping.ResolveInterfaceType(tt.interfaceName, tt.ifName, tt.ifType, tt.speed, "", nil, 0)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -89,7 +90,7 @@ func mapInterfaceRow(t *testing.T, mapper *mapping.InterfaceMapper, registry *ma
 	return iface
 }
 
-func TestInterfaceMapper_DottedNameTheOtherNameDisputes(t *testing.T) {
+func TestInterfaceMapper_DottedNameAgainstIfName(t *testing.T) {
 	logger := slog.Default()
 
 	t.Run("keeps the ifDescr name and types from ifType", func(t *testing.T) {
@@ -100,12 +101,20 @@ func TestInterfaceMapper_DottedNameTheOtherNameDisputes(t *testing.T) {
 		assert.Equal(t, "other-wireless", *iface.Type)
 	})
 
-	t.Run("an ifName source weighs ifDescr", func(t *testing.T) {
-		mapper, err := mapping.NewInterfaceMapper(logger, nil, config.InterfaceNameSourceIfName)
+	t.Run("an ifDescr source is weighed against ifName", func(t *testing.T) {
+		mapper, err := mapping.NewInterfaceMapper(logger, nil, config.InterfaceNameSourceIfDescr)
 		require.NoError(t, err)
-		iface := mapInterfaceRow(t, mapper, mapping.NewEntityRegistry(logger), "1", "Radio1", "radio.if0", "188")
+		iface := mapInterfaceRow(t, mapper, mapping.NewEntityRegistry(logger), "1", "radio.if0", "Radio1", "188")
 		assert.Equal(t, "radio.if0", *iface.Name)
 		assert.Equal(t, "other-wireless", *iface.Type)
+	})
+
+	t.Run("a dotted ifName is a unit whatever ifDescr says", func(t *testing.T) {
+		mapper, err := mapping.NewInterfaceMapper(logger, nil, config.InterfaceNameSourceIfName)
+		require.NoError(t, err)
+		iface := mapInterfaceRow(t, mapper, mapping.NewEntityRegistry(logger), "1", "uplink A", "ae1.10", "161")
+		assert.Equal(t, "ae1.10", *iface.Name)
+		assert.Equal(t, "virtual", *iface.Type)
 	})
 
 	t.Run("both names dotted stays a unit", func(t *testing.T) {
@@ -115,7 +124,7 @@ func TestInterfaceMapper_DottedNameTheOtherNameDisputes(t *testing.T) {
 		assert.Equal(t, "virtual", *iface.Type)
 	})
 
-	t.Run("user patterns apply once the name is disputed", func(t *testing.T) {
+	t.Run("user patterns apply once ifName disputes the name", func(t *testing.T) {
 		mapper, err := mapping.NewInterfaceMapper(logger, []config.InterfacePattern{{Match: `^radio\.`, Type: "other"}}, config.InterfaceNameSourceAuto)
 		require.NoError(t, err)
 		iface := mapInterfaceRow(t, mapper, mapping.NewEntityRegistry(logger), "1", "radio.if0", "Radio1", "188")
@@ -182,15 +191,15 @@ func TestResolveSubinterfaceParents_DisputedDottedName(t *testing.T) {
 	})
 
 	t.Run("a nested unit's parent reference carries the settled type", func(t *testing.T) {
-		mapper, err := mapping.NewInterfaceMapper(logger, nil, config.InterfaceNameSourceIfName)
+		mapper, err := mapping.NewInterfaceMapper(logger, nil, config.InterfaceNameSourceAuto)
 		require.NoError(t, err)
 		// Parents are assigned in map order, so repeat to cover the order
 		// in which the nested unit is visited first.
 		for range 100 {
 			registry := mapping.NewEntityRegistry(logger)
-			mapInterfaceRow(t, mapper, registry, "1", "uplink", "ae1", "161")
-			unit := mapInterfaceRow(t, mapper, registry, "2", "uplink A", "ae1.10", "161")
-			nested := mapInterfaceRow(t, mapper, registry, "3", "uplink B", "ae1.10.20", "161")
+			mapInterfaceRow(t, mapper, registry, "1", "radio", "radio", "188")
+			unit := mapInterfaceRow(t, mapper, registry, "2", "radio.if0", "Radio1", "161")
+			nested := mapInterfaceRow(t, mapper, registry, "3", "radio.if0.b", "Radio1b", "161")
 
 			registry.ResolveSubinterfaceParents()
 
@@ -198,6 +207,41 @@ func TestResolveSubinterfaceParents_DisputedDottedName(t *testing.T) {
 			require.NotNil(t, nested.Parent)
 			require.Equal(t, "virtual", *nested.Parent.Type)
 		}
+	})
+
+	t.Run("a unit named by ifName stays virtual without its parent", func(t *testing.T) {
+		mapper, err := mapping.NewInterfaceMapper(logger, nil, config.InterfaceNameSourceIfName)
+		require.NoError(t, err)
+		for _, row := range []struct{ ifDescr, ifName, ifType string }{
+			{"uplink A", "ae1.10", "161"},
+			{"customer uplink", "eth0.100", "6"},
+		} {
+			registry := mapping.NewEntityRegistry(logger)
+			unit := mapInterfaceRow(t, mapper, registry, "2", row.ifDescr, row.ifName, row.ifType)
+
+			registry.ResolveSubinterfaceParents()
+
+			assert.Equal(t, "virtual", *unit.Type, row.ifName)
+			assert.Nil(t, unit.Parent, row.ifName)
+		}
+	})
+
+	t.Run("a unit named by ifName stays virtual once its parent leaves the walk", func(t *testing.T) {
+		mapper, err := mapping.NewInterfaceMapper(logger, nil, config.InterfaceNameSourceIfName)
+		require.NoError(t, err)
+
+		first := mapping.NewEntityRegistry(logger)
+		mapInterfaceRow(t, mapper, first, "1", "uplink", "ae1", "161")
+		unit := mapInterfaceRow(t, mapper, first, "2", "uplink A", "ae1.10", "161")
+		first.ResolveSubinterfaceParents()
+		require.Equal(t, "virtual", *unit.Type)
+		require.NotNil(t, unit.Parent)
+
+		second := mapping.NewEntityRegistry(logger)
+		unit = mapInterfaceRow(t, mapper, second, "2", "uplink A", "ae1.10", "161")
+		second.ResolveSubinterfaceParents()
+		assert.Equal(t, "virtual", *unit.Type)
+		assert.Nil(t, unit.Parent)
 	})
 
 	t.Run("a colon lane with its port on the device stays a port", func(t *testing.T) {
