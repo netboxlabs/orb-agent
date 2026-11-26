@@ -7,8 +7,10 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -101,7 +103,7 @@ func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manag
 		port:   port,
 	}
 	server.httpServer = &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", host, port),
+		Addr:    net.JoinHostPort(host, strconv.Itoa(port)),
 		Handler: server.router,
 	}
 
