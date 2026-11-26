@@ -71,6 +71,11 @@ type EntityRegistry struct {
 	// had it been set.
 	namedVlanInterfaces   map[*diode.Interface]struct{}
 	unnamedVlanInterfaces int
+
+	// disputedUnits holds the interfaces whose dot-separated name ifName
+	// disputed, so the name did not type them virtual; see
+	// dottedNameDisputed.
+	disputedUnits map[*diode.Interface]struct{}
 }
 
 // NewEntityRegistry creates a new EntityRegistry
@@ -107,6 +112,15 @@ func (r *EntityRegistry) MarkInterfaceVerified(iface *diode.Interface) {
 		r.verifiedInterfaces = make(map[*diode.Interface]struct{})
 	}
 	r.verifiedInterfaces[iface] = struct{}{}
+}
+
+// markDisputedUnit records an interface whose dot-separated name ifName
+// disputed.
+func (r *EntityRegistry) markDisputedUnit(iface *diode.Interface) {
+	if r.disputedUnits == nil {
+		r.disputedUnits = make(map[*diode.Interface]struct{})
+	}
+	r.disputedUnits[iface] = struct{}{}
 }
 
 // IsInterfaceVerified reports whether the given Interface was marked
@@ -196,11 +210,12 @@ func (r *EntityRegistry) GetInterfaceByName(interfaceName string) *diode.Interfa
 	if r.IsInterfaceExcluded(interfaceName) {
 		return nil
 	}
-	if r.entities[InterfaceEntityType] == nil {
-		return nil
-	}
+	return r.interfaceNamed(interfaceName)
+}
 
-	// Search through all interface entities to find one with matching name
+// interfaceNamed returns an interface entity with the given name, excluded
+// or not.
+func (r *EntityRegistry) interfaceNamed(interfaceName string) *diode.Interface {
 	for _, entity := range r.entities[InterfaceEntityType] {
 		if iface, ok := entity.(*diode.Interface); ok {
 			if iface.Name != nil && *iface.Name == interfaceName {
@@ -221,6 +236,17 @@ func (r *EntityRegistry) ResolveSubinterfaceParents() {
 	r.logger.Debug("resolving parent interfaces for subinterfaces")
 	resolvedCount := 0
 	notFoundCount := 0
+
+	// A unit name ifName disputed still names a unit when the
+	// interface it points to is on the device, excluded or not: typing it
+	// virtual again keeps a parent an earlier discovery stored valid in
+	// NetBox. Settled before any parent is assigned, since a parent
+	// reference copies the parent's type.
+	for iface := range r.disputedUnits {
+		if iface.Name != nil && r.interfaceNamed(ExtractParentInterfaceName(*iface.Name)) != nil {
+			iface.Type = StringPtr("virtual")
+		}
+	}
 
 	// Iterate through all interfaces to find subinterfaces
 	for _, entity := range r.entities[InterfaceEntityType] {

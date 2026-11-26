@@ -28,6 +28,7 @@ func TestResolveInterfaceType_Priority(t *testing.T) {
 		// But user pattern should override all
 		result := ResolveInterfaceType(
 			"GigabitEthernet0/1",
+			"",
 			"117", // SNMP ifType for gigabitEthernet
 			&speed,
 			"other", // Default
@@ -47,6 +48,7 @@ func TestResolveInterfaceType_Priority(t *testing.T) {
 		// But SNMP ifType says it's virtual
 		result := ResolveInterfaceType(
 			"Port-channel1",
+			"",
 			"24", // SNMP ifType for softwareLoopback (virtual)
 			nil,
 			"other",
@@ -65,6 +67,7 @@ func TestResolveInterfaceType_Priority(t *testing.T) {
 		// ifType is ethernet, speed indicates 10G
 		result := ResolveInterfaceType(
 			"UnknownEthernetInterface",
+			"",
 			"6", // SNMP ifType for ethernetCsmacd
 			&speed,
 			"other",
@@ -83,6 +86,7 @@ func TestResolveInterfaceType_Priority(t *testing.T) {
 		// Interface name matches built-in, SNMP ifType unknown
 		result := ResolveInterfaceType(
 			"TenGigabitEthernet0/1",
+			"",
 			"999", // Unknown SNMP ifType
 			nil,
 			"other",
@@ -96,6 +100,7 @@ func TestResolveInterfaceType_Priority(t *testing.T) {
 		// No matches anywhere, should use default
 		result := ResolveInterfaceType(
 			"CompletelyUnknownInterface",
+			"",
 			"9999", // Unknown SNMP ifType
 			nil,
 			"custom-default",
@@ -109,6 +114,7 @@ func TestResolveInterfaceType_Priority(t *testing.T) {
 		// No matches anywhere, no default specified
 		result := ResolveInterfaceType(
 			"CompletelyUnknownInterface",
+			"",
 			"9999",
 			nil,
 			"", // No default
@@ -133,6 +139,7 @@ func TestResolveInterfaceType_EdgeCases(t *testing.T) {
 		// Empty name with known SNMP ifType
 		result := ResolveInterfaceType(
 			"",
+			"",
 			"161", // ieee8023adLag
 			nil,
 			"other",
@@ -146,6 +153,7 @@ func TestResolveInterfaceType_EdgeCases(t *testing.T) {
 		// No pattern matcher, should skip to SNMP ifType
 		result := ResolveInterfaceType(
 			"GigabitEthernet0/1",
+			"",
 			"117", // gigabitEthernet
 			nil,
 			"other",
@@ -165,6 +173,7 @@ func TestResolveInterfaceType_EdgeCases(t *testing.T) {
 		speed := int64(0)
 		result := ResolveInterfaceType(
 			"eth0",
+			"",
 			"6", // ethernetCsmacd
 			&speed,
 			"other",
@@ -183,6 +192,7 @@ func TestResolveInterfaceType_EdgeCases(t *testing.T) {
 
 		result := ResolveInterfaceType(
 			"TenGigabitEthernet0/1",
+			"",
 			"6", // ethernetCsmacd
 			nil, // No speed
 			"other",
@@ -208,6 +218,7 @@ func TestResolveInterfaceType_RealWorldScenarios(t *testing.T) {
 
 		result := ResolveInterfaceType(
 			"mgmt-eth0",
+			"",
 			"6",
 			nil,
 			"other",
@@ -225,6 +236,7 @@ func TestResolveInterfaceType_RealWorldScenarios(t *testing.T) {
 		speed := int64(10000000) // 10G
 		result := ResolveInterfaceType(
 			"xe-0/0/0",
+			"",
 			"6", // ethernetCsmacd
 			&speed,
 			"other",
@@ -243,6 +255,7 @@ func TestResolveInterfaceType_RealWorldScenarios(t *testing.T) {
 		speed := int64(10000) // 10 Mbps in kbps
 		result := ResolveInterfaceType(
 			"GigabitEthernet1/0/34",
+			"",
 			"6",
 			&speed,
 			"other",
@@ -259,6 +272,7 @@ func TestResolveInterfaceType_RealWorldScenarios(t *testing.T) {
 
 		result := ResolveInterfaceType(
 			"Bundle-Ether100",
+			"",
 			"161", // ieee8023adLag
 			nil,
 			"other",

@@ -112,8 +112,8 @@ func cannotCarryLag(t *string) bool {
 //
 // Whether a member is logical is decided on the ifType the device reported
 // for it, not on the NetBox type the interface carries: that type is
-// resolved from the name first, so every name that parses as a child is
-// typed virtual before ifType is consulted. A channelized lane
+// resolved from the name first, so a name that parses as a unit can be
+// typed virtual whatever its ifType. A channelized lane
 // (et-0/0/0:0, what a split 100G port gives you) is a member in its own
 // right and keeps the membership, where deriving from the name would
 // collapse every lane onto the un-channelized port.

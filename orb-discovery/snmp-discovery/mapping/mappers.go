@@ -1123,6 +1123,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 
 		interfaceType := ResolveInterfaceType(
 			interfaceName,
+			ifNameRaw,
 			snmpIfType,
 			interfaceEntity.Speed,
 			defaultType,
@@ -1130,6 +1131,9 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 			m.userPatternCount,
 		)
 		interfaceEntity.Type = &interfaceType
+		if dottedNameDisputed(interfaceName, ifNameRaw, snmpIfType) {
+			entityRegistry.markDisputedUnit(interfaceEntity)
+		}
 	}
 
 	// Apply defaults if available

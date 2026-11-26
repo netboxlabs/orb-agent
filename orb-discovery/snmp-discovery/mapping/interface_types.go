@@ -51,6 +51,27 @@ func ExtractParentInterfaceName(interfaceName string) string {
 	return ""
 }
 
+// dotSeparated reports whether name parses as a child whose separator is a
+// dot.
+func dotSeparated(name string) bool {
+	parent := ExtractParentInterfaceName(name)
+	return parent != "" && name[len(parent)] == '.'
+}
+
+// dottedNameDisputed reports whether ifName, the device's own name for the
+// interface, contradicts a dot-separated name taken from ifDescr: ifName has
+// no dot, and the ifType maps to a type on its own. A dot in ifName itself is
+// never disputed. An empty, placeholder or descriptive ifName, or an ifType
+// with no mapping, is no evidence against the name.
+func dottedNameDisputed(name, ifName, ifType string) bool {
+	if !dotSeparated(name) || ifName == "" || ifName == DefaultInterfaceName ||
+		looksDescriptive(ifName) || dotSeparated(ifName) {
+		return false
+	}
+	_, mapped := InterfaceTypeMap[ifType]
+	return mapped || isEthernetInterfaceType(ifType)
+}
+
 // InterfaceTypeMap maps SNMP ifType integer values to NetBox interface type strings
 var InterfaceTypeMap = map[string]string{
 	// Virtual Interfaces
@@ -264,8 +285,12 @@ func getEthernetInterfaceType(speed *int64) string {
 // 3. Built-in patterns
 // 4. Speed-based detection (for Ethernet)
 // 5. Default fallback
+//
+// ifName is the interface's IF-MIB ifName, which can dispute a dot in an
+// interfaceName taken from ifDescr. Empty when the walk carries none.
 func ResolveInterfaceType(
 	interfaceName string,
+	ifName string,
 	ifType string,
 	speed *int64,
 	defaultInterfaceType string,
@@ -273,9 +298,11 @@ func ResolveInterfaceType(
 	userPatternCount int,
 ) string {
 	// Tier 0: Subinterface detection (highest priority - structural)
-	// A dot-separated child is a subinterface and is virtual regardless of
-	// what else it reports: platforms commonly publish a unit with the
-	// ifType of the port it runs on.
+	// A dot-separated child is a subinterface and is virtual whatever its
+	// ifType: platforms commonly publish a unit with the ifType of the port
+	// it runs on. ifName is the device's own name for the interface and
+	// ifDescr is free text, so a dot that only ifDescr carries is set aside
+	// when ifName disputes it; see dottedNameDisputed.
 	//
 	// The colon is not that separator. It also names channelized lanes
 	// (Aruba CX 1/1/11:1, Extreme SLX Ethernet 0/54:1), ONU ports (BDCOM
@@ -287,7 +314,12 @@ func ResolveInterfaceType(
 	// name against.
 	if parent := ExtractParentInterfaceName(interfaceName); parent != "" {
 		colonSeparated := len(interfaceName) > len(parent) && interfaceName[len(parent)] == ':'
-		if !colonSeparated || ifType == "" || isLogicalIfType(ifType) {
+		switch {
+		case colonSeparated:
+			if ifType == "" || isLogicalIfType(ifType) {
+				return "virtual"
+			}
+		case !dottedNameDisputed(interfaceName, ifName, ifType):
 			return "virtual"
 		}
 	}
@@ -335,5 +367,5 @@ func ResolveInterfaceType(
 // GetNetboxType maps an SNMP ifType integer to a NetBox interface type
 // Maintained for backward compatibility - wraps ResolveInterfaceType
 func GetNetboxType(ifType, defaultInterfaceType string, speed *int64) string {
-	return ResolveInterfaceType("", ifType, speed, defaultInterfaceType, nil, 0)
+	return ResolveInterfaceType("", "", ifType, speed, defaultInterfaceType, nil, 0)
 }

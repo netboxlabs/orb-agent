@@ -20,9 +20,24 @@ Interface types are determined using the following priority order (first match w
 
 ### 0. Subinterface Detection (Highest Priority - Structural)
 - Subinterfaces are identified by name patterns containing `.` or `:` separators
-- If a subinterface is detected, it is ALWAYS assigned type `virtual`
+- A dot-separated name is assigned type `virtual` whatever its `ifType`, since
+  some SNMP agents report a unit with the `ifType` of the port it runs on.
+- ifName is the device's own name for the interface, while ifDescr is free
+  text that can carry a dot from a firmware version or a description. So a
+  dot in a name taken from ifDescr is set aside when ifName disputes it:
+  ifName is present, is not the `unknown` placeholder, does not look
+  descriptive (see below), and has no dot, while `ifType` is Ethernet or has
+  an entry in the [ifType mapping](#snmp-iftype-mappings). The interface
+  keeps its name and goes on to the tiers below; an Ethernet `ifType` with no
+  usable speed ends at the built-in patterns or the default type. A dot in
+  ifName itself, including a name taken from ifName, is never set aside.
+- Such an interface is typed `virtual` after all when the interface its name
+  points to as its parent is on the device, excluded or not.
+- A colon-separated name is assigned type `virtual` only when `ifType` is
+  missing or logical; channelized lanes and similar ports keep their `ifType`
+  (see [Interface type of colon-named ports](./supported_platforms.md#interface--vlan-associations))
 - Parent interface tracking is performed in a post-processing phase
-- This takes precedence over ALL other matching methods
+- A name typed `virtual` here takes precedence over ALL other matching methods
 - **Descriptive-ifDescr short-circuit**: Tier 0 does **not** fire on names
   that look like labeled-field descriptions (names containing the
   `": "` substring — Dell PowerConnect's `Unit: 1 Slot: 0 Port: 1
@@ -212,15 +227,16 @@ Subinterface resolution uses a two-phase approach to handle SNMP discovery order
 
 **Phase 1: Mapping (During SNMP Walk)**
 - All interfaces are discovered and mapped
-- Subinterfaces are immediately assigned type `virtual` (Tier 0 priority)
+- Subinterfaces are assigned type `virtual` by Tier 0, except a dotted name taken from ifDescr that ifName disputes, which the tiers below type
 - Parent relationships are NOT resolved yet (parent names may not exist in registry)
 
 **Phase 2: Post-Processing (After All Interfaces Discovered)**
 - `ResolveSubinterfaceParents()` is called after mapping completes
+- A disputed dotted name whose parent is on the device, excluded or not, is typed `virtual` first, before any parent is assigned
 - Parent interface names are extracted from subinterface names
 - Parent interfaces are looked up by name in the entity registry
 - If parent is found, a reference is stored in the subinterface entity
-- If parent is not found (orphan), the subinterface still retains type `virtual`
+- If parent is not found (orphan), the subinterface keeps the type Phase 1 gave it
 
 This two-phase approach is critical because SNMP walks return interfaces in arbitrary order - subinterfaces are often discovered BEFORE their parent interfaces.
 
@@ -240,12 +256,15 @@ This reference can be used by downstream systems to understand interface hierarc
 ### Orphan Handling
 
 If a parent interface is not found (e.g., parent administratively down, filtered, or not discoverable via SNMP):
-- The subinterface retains type `virtual`
+- The subinterface keeps the type Phase 1 gave it: `virtual`, or for a disputed dotted name the type the tiers below Tier 0 give
+- A parent removed by `interface_exclude_patterns` is still on the device: a disputed dotted name pointing to it is typed `virtual`, without a parent reference
 - No parent reference is set (`Parent` field is `nil`)
 - No errors are raised
 - The subinterface is still included in discovery results
 
 This graceful handling ensures discovery continues successfully even when parent interfaces are missing.
+
+> **A parent that leaves the walk.** Discovery sees only the current walk, not what NetBox stores. If an earlier poll linked a disputed dotted name to its parent and a later walk no longer reports that parent (removed, or renamed), the interface is sent with the type the tiers below Tier 0 give and no parent. Diode never clears a field the payload omits, so NetBox keeps the stored parent and refuses the new type, which fails that target's ingestion. Clear the interface's parent in NetBox, or delete the stale interface, to resolve it.
 
 ## User-Defined Interface Patterns
 
