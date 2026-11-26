@@ -264,7 +264,7 @@ If a parent interface is not found (e.g., parent administratively down, filtered
 
 This graceful handling ensures discovery continues successfully even when parent interfaces are missing.
 
-> **A parent that leaves the walk.** Discovery sees only the current walk, not what NetBox stores. If an earlier poll linked a disputed dotted name to its parent and a later walk no longer reports that parent (removed, or renamed), the interface is sent with the type its `ifType` gives and no parent. Diode never clears a field the payload omits, so NetBox keeps the stored parent and refuses the new type, which fails that target's ingestion. Clear the interface's parent in NetBox, or delete the stale interface, to resolve it.
+> **A parent that leaves the walk.** Discovery sees only the current walk, not what NetBox stores. If an earlier poll linked a disputed dotted name to its parent and a later walk no longer reports that parent (removed, or renamed), the interface is sent with the type the tiers below Tier 0 give and no parent. Diode never clears a field the payload omits, so NetBox keeps the stored parent and refuses the new type, which fails that target's ingestion. Clear the interface's parent in NetBox, or delete the stale interface, to resolve it.
 
 ## User-Defined Interface Patterns
 
