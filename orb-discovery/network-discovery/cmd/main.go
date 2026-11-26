@@ -38,8 +38,13 @@ func resolveEnv(value string) string {
 	return value
 }
 
+// defaultHost is the address the policy API binds unless --host says otherwise.
+// The API has no authentication, so it stays on loopback unless told to bind
+// wider.
+const defaultHost = "localhost"
+
 func main() {
-	host := flag.String("host", "0.0.0.0", "server host")
+	host := flag.String("host", defaultHost, "server host")
 	port := flag.Int("port", 8073, "server port")
 	diodeTarget := flag.String("diode-target", "", "diode target."+
 		" Environment variable can be used by wrapping it in ${} (e.g. ${DIODE_TARGET})")

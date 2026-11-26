@@ -2,12 +2,14 @@
 # Copyright 2025 NetBox Labs Inc
 """NetBox Labs - Main Unit Tests."""
 
+import ipaddress
+import socket
 import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from worker.main import main, resolve_env_var
+from worker.main import build_parser, main, resolve_env_var
 
 
 @pytest.fixture
@@ -234,3 +236,18 @@ def test_main_without_debug_flag(mock_parse_args, mock_uvicorn_run, mock_diode_c
     # Verify system log level is INFO
     root_logger = logging.getLogger()
     assert root_logger.level == logging.INFO
+
+
+def test_default_host_binds_loopback_only():
+    """
+    The policy API has no authentication, so the default host must be loopback.
+
+    Resolve the default rather than comparing the string: a name is only safe
+    when every address behind it is a loopback address.
+    """
+    host = build_parser().parse_args([]).host
+    infos = socket.getaddrinfo(host, None)
+    assert infos
+    for info in infos:
+        addr = ipaddress.ip_address(info[4][0].split("%")[0])
+        assert addr.is_loopback, f"default host {host} resolves to non-loopback {addr}"

@@ -58,8 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-s",
         "--host",
-        default="0.0.0.0",
-        help="Server host",
+        default="localhost",
+        help="Server host (default: localhost)",
         type=str,
         required=False,
     )
