@@ -37,12 +37,8 @@ def resolve_env_var(value: str) -> str:
     return value
 
 
-def main():
-    """
-    Main entry point for the Agent CLI.
-
-    Parses command-line arguments and starts the backend.
-    """
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(description="Orb Worker Backend")
     parser.add_argument(
         "-V",
@@ -55,8 +51,8 @@ def main():
     parser.add_argument(
         "-s",
         "--host",
-        default="0.0.0.0",
-        help="Server host",
+        default="localhost",
+        help="Server host (default: localhost)",
         type=str,
         required=False,
     )
@@ -137,6 +133,16 @@ def main():
         action="store_true",
         required=False,
     )
+    return parser
+
+
+def main():
+    """
+    Main entry point for the Agent CLI.
+
+    Parses command-line arguments and starts the backend.
+    """
+    parser = build_parser()
 
     try:
         args = parser.parse_args()

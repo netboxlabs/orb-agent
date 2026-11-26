@@ -2,12 +2,14 @@
 # Copyright 2024 NetBox Labs Inc
 """NetBox Labs - Main Unit Tests."""
 
+import ipaddress
+import socket
 import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from device_discovery.main import main
+from device_discovery.main import build_parser, main
 
 
 @pytest.fixture
@@ -195,3 +197,18 @@ def test_main_dry_run(monkeypatch, mock_parse_args, mock_client, mock_uvicorn_ru
         dry_run_output_dir="/tmp/outdir",
     )
     mock_uvicorn_run.assert_called_once()
+
+
+def test_default_host_binds_loopback_only():
+    """
+    The policy API has no authentication, so the default host must be loopback.
+
+    Resolve the default rather than comparing the string: a name is only safe
+    when every address behind it is a loopback address.
+    """
+    host = build_parser().parse_args([]).host
+    infos = socket.getaddrinfo(host, None)
+    assert infos
+    for info in infos:
+        addr = ipaddress.ip_address(info[4][0].split("%")[0])
+        assert addr.is_loopback, f"default host {host} resolves to non-loopback {addr}"

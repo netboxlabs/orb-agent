@@ -42,7 +42,7 @@ Usage of gnmi-discovery:
   -help
         show this help
   -host string
-        server host (default "0.0.0.0")
+        server host (default "localhost")
   -log-format string
         log format (default "TEXT")
   -log-level string

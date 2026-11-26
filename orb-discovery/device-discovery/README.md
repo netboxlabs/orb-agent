@@ -11,7 +11,7 @@ Orb Device Discovery Backend
 options:
   -h, --help            show this help message and exit
   -V, --version         Display Device Discovery, NAPALM and Diode SDK versions
-  -s HOST, --host HOST  Server host
+  -s HOST, --host HOST  Server host (default: localhost)
   -p PORT, --port PORT  Server port
   -t DIODE_TARGET, --diode-target DIODE_TARGET
                         Diode target. Environment variable can be used by wrapping it in ${} (e.g. ${TARGET})
