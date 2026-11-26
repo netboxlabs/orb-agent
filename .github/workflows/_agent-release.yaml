@@ -91,6 +91,8 @@ jobs:
     name: Resolve opentelemetry-infinity latest
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    needs: get-next-version
+    if: needs.get-next-version.outputs.new-release-published == 'true'
     steps:
       # Resolved once, so both platform builds and a re-run of a failed one
       # embed the same otlpinf even if infinity releases meanwhile.
