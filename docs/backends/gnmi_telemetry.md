@@ -27,7 +27,7 @@ orb:
 
 | Parameter | Type | Default | Description |
 |:---------:|:----:|:-------:|:------------|
-| host | str | `localhost` | Address the backend's API binds. The agent reaches it on loopback; the API has no authentication, so widen it only behind your own access control. |
+| host | str | `localhost` | Address the backend's API binds. The agent reaches it on loopback; the API has no authentication, so widen it only behind your own access control, and set `expose_api: true` for a host that is not loopback. |
 | port | int | free port | Port of the backend's API, 1 to 65535. Unset, a loopback `host` gets a port free at each start and any other `host` gets 8079; see [Backend keys](../configs/agent_yaml.md#backend-keys). |
 | log_level | str | `INFO` | `DEBUG`, `INFO`, `WARN` or `ERROR`; any other value is refused. The agent passes `DEBUG` when the backend has `debug: true` or the agent runs with its debug flag. |
 | log_format | str | `TEXT` | `TEXT` or `JSON`; any other value is refused. |

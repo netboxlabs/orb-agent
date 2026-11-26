@@ -35,7 +35,8 @@ orb:
 
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
-| host | str | no | REST API host (default `localhost`) |
+| host | str | no | REST API host (default `localhost`). A host that is not loopback also needs `expose_api` |
+| expose_api | bool | no | Allows a `host` that is not loopback; the API has no authentication (default `false`) |
 | port | int | no | REST API port (default: a free port at each start on a loopback `host`, `8075` otherwise; see [Backend keys](../configs/agent_yaml.md#backend-keys)) |
 | log_level | str | no | Log level: `DEBUG`/`INFO`/`WARN`/`ERROR` (default `INFO`) |
 | log_format | str | no | Log format: `TEXT` or `JSON` (default `TEXT`) |

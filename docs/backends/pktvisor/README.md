@@ -17,7 +17,8 @@ Orb writes a temporary pktvisor configuration file each time it starts `pktvisor
 ### Backend settings
 | Parameter | Type | Required | Default | Description |
 |:---------:|:----:|:--------:|:-------:|-------------|
-| `host` | string | no | `localhost` | Admin API host. Written to `visor.config.host`, which is the address the `pktvisord` the agent starts binds its admin API to, and the address the agent uses to reach it. Change it only to alter that bind address. |
+| `host` | string | no | `localhost` | Admin API host. Written to `visor.config.host`, which is the address the `pktvisord` the agent starts binds its admin API to, and the address the agent uses to reach it. Change it only to alter that bind address. A host that is not loopback also needs `expose_api: true`. |
+| `expose_api` | bool | no | `false` | Allows a `host` that is not loopback; the admin API has no authentication. |
 | `port` | string | no | free port | Admin API port, written to `visor.config.port` and passed to `pktvisord` with `-p`. Unset, a loopback `host` gets a port free at each start and any other `host` gets `10853`; see [Backend keys](../../configs/agent_yaml.md#backend-keys). |
 | `taps` | map | no | – | Declarative tap definitions copied into `visor.taps`. Each tap sets the data source (`input_type`, `config`, and optional `tags`). Not required: `netprobe` and `flow` policies can run on taps the agent manages. Tap names that start with `fleet_` are refused here. |
 | *other keys* | any | no | – | Added verbatim under `visor.config` (for example `log_level`, crashpad options, or storage paths). |
@@ -43,6 +44,7 @@ orb:
     pktvisor:
       start_mode: on_demand   # the image declares this backend on demand; see the README's Backends section
       host: 0.0.0.0
+      expose_api: true   # host is not loopback; the admin API has no authentication
       port: "10853"
       taps:
         edge_dns:

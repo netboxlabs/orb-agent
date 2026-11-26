@@ -786,6 +786,64 @@ func TestParseStartOptions(t *testing.T) {
 	}
 }
 
+// A backend API has no authentication, so a host off loopback needs the
+// explicit expose_api opt-in; expose_api never reaches Configure.
+func TestCheckAPIExposure(t *testing.T) {
+	cases := map[string]struct {
+		in          map[string]any
+		exposed     bool
+		errHas      string
+		hostRemoved bool
+	}{
+		"nil entry":                   {in: nil},
+		"no host":                     {in: map[string]any{"port": 8072}},
+		"nil host":                    {in: map[string]any{"host": nil}, hostRemoved: true},
+		"empty host":                  {in: map[string]any{"host": ""}, hostRemoved: true},
+		"empty host with opt-in":      {in: map[string]any{"host": "", "expose_api": true}, hostRemoved: true},
+		"localhost":                   {in: map[string]any{"host": "localhost"}},
+		"localhost any case":          {in: map[string]any{"host": "LocalHost"}},
+		"ipv4 loopback":               {in: map[string]any{"host": "127.0.0.1"}},
+		"ipv4 loopback range":         {in: map[string]any{"host": "127.1.2.3"}},
+		"ipv6 loopback":               {in: map[string]any{"host": "::1"}},
+		"opt-in on loopback is fine":  {in: map[string]any{"host": "localhost", "expose_api": true}},
+		"all interfaces refused":      {in: map[string]any{"host": "0.0.0.0"}, errHas: `host "0.0.0.0" is not localhost or a loopback IP address`},
+		"interface address refused":   {in: map[string]any{"host": "192.0.2.10"}, errHas: "expose_api: true"},
+		"ipv6 any refused":            {in: map[string]any{"host": "::"}, errHas: `host "::"`},
+		"hostname refused":            {in: map[string]any{"host": "agent.example.com"}, errHas: "not localhost or a loopback IP address"},
+		"non-string host refused":     {in: map[string]any{"host": 10}, errHas: "host must be a string"},
+		"non-string host with opt-in": {in: map[string]any{"host": 10, "expose_api": true}, errHas: "host must be a string"},
+		"opt-in false refused":        {in: map[string]any{"host": "0.0.0.0", "expose_api": false}, errHas: "not localhost or a loopback IP address"},
+		"opt-in exposes":              {in: map[string]any{"host": "0.0.0.0", "expose_api": true}, exposed: true},
+		"opt-in from an env string":   {in: map[string]any{"host": "192.0.2.10", "expose_api": "true"}, exposed: true},
+		"opt-in not a boolean":        {in: map[string]any{"host": "0.0.0.0", "expose_api": "yes"}, errHas: "expose_api must be true or false"},
+		"opt-in wrong type":           {in: map[string]any{"host": "0.0.0.0", "expose_api": 1}, errHas: "expose_api must be true or false"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, _, stripped, err := parseStartOptions("sup_api", tc.in)
+			require.NoError(t, err)
+			exposed, err := checkAPIExposure("sup_api", stripped)
+			if tc.errHas != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.errHas)
+				assert.Contains(t, err.Error(), "sup_api", "the error names the backend")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.exposed, exposed)
+			_, hasOptIn := stripped["expose_api"]
+			assert.False(t, hasOptIn, "expose_api is stripped before Configure")
+			host, hasHost := stripped["host"]
+			switch {
+			case tc.hostRemoved:
+				assert.False(t, hasHost, "an empty or null host leaves the backend its loopback default")
+			case tc.in != nil:
+				assert.Equal(t, tc.in["host"], host, "host reaches Configure as written")
+			}
+		})
+	}
+}
+
 // Other keys survive the strip and reach Configure, in a copy.
 func TestParseStartOptionsKeepsTheOtherKeys(t *testing.T) {
 	in := map[string]any{"start_mode": "on_demand", "port": 8079, "log_level": "INFO"}
@@ -846,6 +904,66 @@ func TestConfigureAllRefusesABadStartKeyBeforeStartingAnything(t *testing.T) {
 	assert.Contains(t, err.Error(), `start_mode "sometimes"`)
 	assert.Empty(t, rec.snapshot(), "nothing is configured or started")
 	assert.Empty(t, s.Declared())
+}
+
+// A backend API off loopback without the opt-in is refused before anything
+// starts; with it, the backend starts and Configure never sees expose_api.
+func TestConfigureAllKeepsBackendAPIsOnLoopbackUnlessExposed(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	backend.Register("sup_api_local", newStub(rec, "api_local"))
+	backend.Register("sup_api_open", newStub(rec, "api_open"))
+
+	err := s.ConfigureAll(map[string]any{
+		"sup_api_local": map[string]any{"host": "127.0.0.1"},
+		"sup_api_open":  map[string]any{"host": "0.0.0.0"},
+	}, config.BackendCommons{}, background)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sup_api_open")
+	assert.Contains(t, err.Error(), "expose_api: true")
+	assert.Empty(t, rec.snapshot(), "nothing is configured or started")
+
+	rec2 := &recorder{}
+	s2 := newTestSupervisor(t, rec2, nil, nil)
+	logs := &lockedBuffer{}
+	s2.logger = slog.New(slog.NewTextHandler(logs, nil))
+	t.Cleanup(func() { s2.StopAll(context.Background()) })
+	open := newStub(rec2, "api_open2")
+	backend.Register("sup_api_open2", open)
+	blank := newStub(rec2, "api_blank")
+	backend.Register("sup_api_blank", blank)
+	openEntry := map[string]any{"host": "0.0.0.0", "expose_api": true, "port": 8072}
+	require.NoError(t, s2.ConfigureAll(map[string]any{
+		"sup_api_open2": openEntry,
+		"sup_api_blank": map[string]any{"host": ""},
+	}, config.BackendCommons{}, background))
+	assert.Equal(t, 1, rec2.count("start:api_open2"))
+	assert.Equal(t, map[string]any{"host": "0.0.0.0", "port": 8072}, open.configuredWith, "expose_api never reaches Configure")
+	assert.Equal(t, map[string]any{}, blank.configuredWith, "an empty host never reaches Configure")
+	assert.Equal(t, true, openEntry["expose_api"], "the caller's entry keeps expose_api")
+	assert.Contains(t, logs.String(), "backend API exposed off loopback")
+	assert.Contains(t, logs.String(), "backend=sup_api_open2")
+	assert.NotContains(t, logs.String(), "backend=sup_api_blank")
+}
+
+// lockedBuffer collects log output written from more than one goroutine.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	return len(p), nil
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf)
 }
 
 // A Configure failure on an on-demand entry aborts the start like an eager
