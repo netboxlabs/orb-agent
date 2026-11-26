@@ -194,8 +194,17 @@ def load_class(module_name: str) -> type[Backend]:
     """
     try:
         module = importlib.import_module(module_name)
-        for _, obj in inspect.getmembers(module):
-            if inspect.isclass(obj) and issubclass(obj, Backend):
+        # The module's own namespace also holds the classes it imports: Backend
+        # itself, and any base it builds on. Those are not the backend to run,
+        # so skip Backend and prefer a class no other match subclasses; members
+        # come sorted by name, which breaks a remaining tie.
+        found = [
+            obj
+            for _, obj in inspect.getmembers(module)
+            if inspect.isclass(obj) and issubclass(obj, Backend) and obj is not Backend
+        ]
+        for obj in found:
+            if not any(other is not obj and issubclass(other, obj) for other in found):
                 return obj
         raise ImportError("No class inheriting 'Backend'")
     except (ImportError, AttributeError) as e:
