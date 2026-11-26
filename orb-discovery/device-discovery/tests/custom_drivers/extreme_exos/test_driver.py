@@ -10,6 +10,7 @@ from custom_napalm.extreme_exos import (
     _exos_classify_module,
     _exos_is_modular,
     _parse_show_slot_detail,
+    _parse_show_switch,
     _parse_version_serial,
 )
 from tests.custom_drivers.base_test import BaseDriverTest
@@ -45,6 +46,12 @@ def test_get_facts_captures_multi_token_model(tmp_path: Path) -> None:
     drv.device = FakeCLIDevice(mock_dir)
     facts = drv.get_facts()
     assert facts["model"] == "BlackDiamond X8"
+
+
+def test_parse_show_switch_preserves_zero_uptime() -> None:
+    """A just-rebooted switch's zero uptime is a valid fact."""
+    facts = _parse_show_switch("System UpTime : 0 seconds\n")
+    assert facts["uptime"] == 0
 
 
 # --- get_modules attribute test ----------------------------------------------

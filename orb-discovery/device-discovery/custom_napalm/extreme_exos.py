@@ -279,7 +279,7 @@ def _parse_show_switch(text: str) -> dict:
     m = re.search(r"^System UpTime\s*:\s*(.+?)\s*$", text, re.M)
     if m:
         uptime = _parse_uptime(m.group(1))
-        if uptime > 0:
+        if uptime >= 0:
             facts["uptime"] = uptime
     return facts
 
