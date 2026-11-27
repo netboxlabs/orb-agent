@@ -2878,7 +2878,10 @@ func TestIPv6PrefixLength_UnboundRowAcceptsAnnotation(t *testing.T) {
 // table that only describes prefixes.
 func TestIPv6PrefixLength_AnnotationWithNoRowMintsNothing(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	cfg, err := mapping.NewConfig(primaryIPFixtureWithV6PrefixLength(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, config.Options{})
+	// Link-locals opted in, so the link-local drop cannot hide an address the
+	// annotation minted.
+	cfg, err := mapping.NewConfig(primaryIPFixtureWithV6PrefixLength(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil,
+		config.Options{EmitIPv6LinkLocalAddresses: boolPtr(true)})
 	assert.NoError(t, err)
 	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "")
 	// An interface PDU rides along so the assertion below is made against
@@ -2921,7 +2924,8 @@ func TestIPv6PrefixLength_OutOfRangeIsIgnored(t *testing.T) {
 func TestIPv6PrefixLength_AnnotationWithNoRowIsQuiet(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	cfg, err := mapping.NewConfig(primaryIPFixtureWithV6PrefixLength(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, config.Options{})
+	cfg, err := mapping.NewConfig(primaryIPFixtureWithV6PrefixLength(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil,
+		config.Options{EmitIPv6LinkLocalAddresses: boolPtr(true)})
 	assert.NoError(t, err)
 
 	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "")
