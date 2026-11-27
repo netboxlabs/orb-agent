@@ -692,7 +692,7 @@ policies:
 
 No prefix is derived from a link-local address either way (see [Prefix](#prefix)), and `emit_ip_addresses: false` still sends no address at all.
 
-Discovery does not delete what it stops sending: link-local addresses that earlier runs sent stay in NetBox until you delete them, for example by filtering IP addresses on the parent prefix `fe80::/10`.
+Discovery does not delete what it stops sending: link-local addresses that earlier runs sent stay in NetBox until you delete them, for example by filtering IP addresses on the parent prefix `fe80::/10` and the devices this policy discovers.
 
 ### Prefix
 
