@@ -280,7 +280,11 @@ func TranslateWithOptions(profile *Profile, snap map[string]any, defaults *confi
 				return false
 			}
 			if logger != nil {
-				logger.Debug("not sending the IPv6 link-local address", "address", ip.GetAddress())
+				var iface string
+				if i, ok := ip.AssignedObject.(*diode.Interface); ok && i != nil {
+					iface = i.GetName()
+				}
+				logger.Debug("not sending the IPv6 link-local address", "address", ip.GetAddress(), "interface", iface)
 			}
 			return true
 		})
