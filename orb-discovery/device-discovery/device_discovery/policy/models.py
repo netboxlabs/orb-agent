@@ -5,7 +5,6 @@
 import ipaddress
 import logging
 import re
-import string
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -15,6 +14,7 @@ from typing import Any, Literal
 from croniter import CroniterBadCronError, croniter
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from device_discovery.platform_naming import platform_template_problem
 from device_discovery.policy.portscan import (
     MAX_EXPANDED_HOSTS as _MAX_EXPANDED_HOSTS,
 )
@@ -80,38 +80,6 @@ class ObjectParameters(BaseModel):
     tags: list[str] | None = Field(default=None, description="Tags, optional")
 
 
-PLATFORM_FORMAT_FIELDS = ("driver", "DRIVER", "os_version")
-
-
-def render_platform_format(template: str, driver: str, os_version: str) -> str:
-    """
-    Render ``defaults.device.platform_format``.
-
-    Only the plain placeholders ``{driver}``, ``{DRIVER}`` (upper case) and
-    ``{os_version}`` are allowed. ``str.format`` is never called: it would also
-    allow attribute and item access (``{driver.__class__}``, ``{os_version[0]}``),
-    conversions and format specs. Raises ``ValueError`` for anything else.
-    """
-    values = {"driver": driver, "DRIVER": driver.upper(), "os_version": os_version}
-    parts = []
-    try:
-        parsed = list(string.Formatter().parse(template))
-    except ValueError as exc:
-        raise ValueError(f"platform_format {template!r} is invalid: {exc}") from exc
-    for literal, field_name, format_spec, conversion in parsed:
-        parts.append(literal)
-        if field_name is None:
-            continue
-        if field_name not in PLATFORM_FORMAT_FIELDS or format_spec or conversion:
-            raise ValueError(
-                f"platform_format {template!r} is invalid: only "
-                + ", ".join("{" + f + "}" for f in PLATFORM_FORMAT_FIELDS)
-                + " are allowed"
-            )
-        parts.append(values[field_name])
-    return "".join(parts)
-
-
 class DeviceParameters(ObjectParameters):
     """Model for device specific parameters."""
 
@@ -128,22 +96,25 @@ class DeviceParameters(ObjectParameters):
         default=None,
         description="Parent platform of the device platform (NetBox platform hierarchy), optional",
     )
-    platform_format: str | None = Field(
+    platform_name_template: str | None = Field(
         default=None,
         description=(
-            "Name format of the discovered platform with {driver}, {DRIVER} and "
-            '{os_version}, optional (default "{DRIVER} {os_version}")'
+            "Template for the discovered platform name, optional. Placeholder: "
+            "{os_version}, required together with other text, e.g. "
+            "'Fabric Engine {os_version}'. Unset keeps '<DRIVER> <os_version>'."
         ),
     )
     asset_tag: str | None = Field(default=None, description="Asset tag, optional")
 
-    @field_validator("platform_format")
+    @field_validator("platform_name_template")
     @classmethod
-    def validate_platform_format(cls, value: str | None) -> str | None:
-        """Reject a format with anything but the plain placeholders of ``render_platform_format``."""
-        if value is not None:
-            render_platform_format(value, driver="", os_version="")
-        return value
+    def _validate_platform_name_template(cls, v: str | None) -> str | None:
+        """Refuse an unusable template when the policy is loaded."""
+        if v is not None:
+            problem = platform_template_problem(v)
+            if problem is not None:
+                raise ValueError(f"platform_name_template {v!r}: {problem}")
+        return v
 
 
 class TenantParameters(ObjectParameters):

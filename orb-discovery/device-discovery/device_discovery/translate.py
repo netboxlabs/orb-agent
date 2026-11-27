@@ -30,6 +30,7 @@ from netboxlabs.diode.sdk.ingester import (
 from device_discovery.device_name import apply_device_name_emission
 from device_discovery.interface import build_interface_entities
 from device_discovery.lag import apply_interface_lags
+from device_discovery.platform_naming import render_platform_name
 from device_discovery.policy.models import (
     UNDEFINED_PLACEHOLDER,
     Defaults,
@@ -37,7 +38,6 @@ from device_discovery.policy.models import (
     TenantParameters,
     VlanGroupParameters,
     VrfParameters,
-    render_platform_format,
 )
 from device_discovery.proto_presence import blank_to_none
 from device_discovery.slug import slug
@@ -769,19 +769,15 @@ def assign_primary_ip(
     device.primary_ip4.CopyFrom(hits[0][2])
 
 
-DEFAULT_PLATFORM_FORMAT = "{DRIVER} {os_version}"
-
-
 def _resolve_platform(data: dict, options: Options) -> None:
     """
     Mutate data['device']['platform'] to the resolved platform string.
 
-    Format is ``defaults.device.platform_format`` (default
-    ``"{DRIVER} {os_version}"``; placeholders ``{driver}``, ``{DRIVER}``,
-    ``{os_version}``), or just ``<driver>`` when ``platform_omit_version`` is
-    set. Long platform strings are truncated to 100 chars while preserving the
-    format — the previous behaviour replaced the whole string with
-    ``os_version[:100]`` on overflow, which dropped the driver prefix and
+    Format is ``"<DRIVER> <os_version>"``, or ``defaults.device.platform_name_template``
+    rendered with ``{os_version}``, or just ``<driver>`` when
+    ``platform_omit_version`` is set. Long platform strings are truncated to 100 chars
+    while preserving the format — the previous behaviour replaced the whole string
+    with ``os_version[:100]`` on overflow, which dropped the driver prefix and
     crashed when ``os_version`` was ``None``.
     """
     device_info = data.get("device") or {}
@@ -790,12 +786,14 @@ def _resolve_platform(data: dict, options: Options) -> None:
     if options.platform_omit_version:
         device_info["platform"] = data.get("driver")
         return
-    defaults = data.get("defaults")
-    device_defaults = getattr(defaults, "device", None)
-    platform_format = getattr(device_defaults, "platform_format", None) or DEFAULT_PLATFORM_FORMAT
-    driver = data.get("driver") or ""
     os_version = device_info.get("os_version") or ""
-    platform = render_platform_format(platform_format, driver, os_version).strip()
+    device_defaults = getattr(data.get("defaults"), "device", None)
+    template = getattr(device_defaults, "platform_name_template", None)
+    if template:
+        platform = render_platform_name(template, os_version).strip()
+    else:
+        driver = (data.get("driver") or "").upper()
+        platform = f"{driver} {os_version}".strip()
     device_info["platform"] = platform[:100]
 
 
