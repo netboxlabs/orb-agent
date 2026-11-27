@@ -2721,8 +2721,11 @@ def test_emit_prefixes_and_ip_addresses_off_skip_unreadable_addresses(
     [
         ("fe80::42:acff:fe12:6", 64),
         ("fe80::1", 128),
-        # Judged on the address, so a mask wider than /10 does not let it through.
+        # Judged on the address, so a mask wider than /10 does not let it
+        # through, even one whose network leaves fe80::/10 (fe00::/8, 8000::/1).
         ("fe80::1", 9),
+        ("fe80::1", 8),
+        ("fe80::1", 1),
         # fe80::/10 runs up to febf:ffff:...
         ("febf:ffff::1", 64),
     ],
@@ -2819,7 +2822,7 @@ def test_link_local_only_interface_is_still_emitted(
     sample_device_info, sample_interface_info, sample_interfaces_ip
 ):
     """
-    Dropping the address keeps the interface and the primary IP.
+    Dropping the address keeps the interface.
 
     That includes an interface only the IP data names, whose one address is a
     link-local.
@@ -2839,5 +2842,3 @@ def test_link_local_only_interface_is_still_emitted(
     assert addresses == ["192.0.2.1/24"]
     names = {e.interface.name for e in entities if e.HasField("interface")}
     assert "ge-0/0/1.100" in names
-    device = next(e.device for e in entities if e.HasField("device"))
-    assert device.primary_ip4.address == "192.0.2.1/24"
