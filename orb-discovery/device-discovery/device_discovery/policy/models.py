@@ -5,6 +5,7 @@
 import ipaddress
 import logging
 import re
+import string
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -79,6 +80,38 @@ class ObjectParameters(BaseModel):
     tags: list[str] | None = Field(default=None, description="Tags, optional")
 
 
+PLATFORM_FORMAT_FIELDS = ("driver", "DRIVER", "os_version")
+
+
+def render_platform_format(template: str, driver: str, os_version: str) -> str:
+    """
+    Render ``defaults.device.platform_format``.
+
+    Only the plain placeholders ``{driver}``, ``{DRIVER}`` (upper case) and
+    ``{os_version}`` are allowed. ``str.format`` is never called: it would also
+    allow attribute and item access (``{driver.__class__}``, ``{os_version[0]}``),
+    conversions and format specs. Raises ``ValueError`` for anything else.
+    """
+    values = {"driver": driver, "DRIVER": driver.upper(), "os_version": os_version}
+    parts = []
+    try:
+        parsed = list(string.Formatter().parse(template))
+    except ValueError as exc:
+        raise ValueError(f"platform_format {template!r} is invalid: {exc}") from exc
+    for literal, field_name, format_spec, conversion in parsed:
+        parts.append(literal)
+        if field_name is None:
+            continue
+        if field_name not in PLATFORM_FORMAT_FIELDS or format_spec or conversion:
+            raise ValueError(
+                f"platform_format {template!r} is invalid: only "
+                + ", ".join("{" + f + "}" for f in PLATFORM_FORMAT_FIELDS)
+                + " are allowed"
+            )
+        parts.append(values[field_name])
+    return "".join(parts)
+
+
 class DeviceParameters(ObjectParameters):
     """Model for device specific parameters."""
 
@@ -107,16 +140,9 @@ class DeviceParameters(ObjectParameters):
     @field_validator("platform_format")
     @classmethod
     def validate_platform_format(cls, value: str | None) -> str | None:
-        """Reject a format with placeholders other than driver, DRIVER and os_version."""
-        if value is None:
-            return value
-        try:
-            value.format(driver="", DRIVER="", os_version="")
-        except (KeyError, IndexError, ValueError) as exc:
-            raise ValueError(
-                f"platform_format {value!r} is invalid ({exc!r}); "
-                "use {driver}, {DRIVER} and {os_version}"
-            ) from exc
+        """Reject a format with anything but the plain placeholders of ``render_platform_format``."""
+        if value is not None:
+            render_platform_format(value, driver="", os_version="")
         return value
 
 

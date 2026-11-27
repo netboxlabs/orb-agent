@@ -37,6 +37,7 @@ from device_discovery.policy.models import (
     TenantParameters,
     VlanGroupParameters,
     VrfParameters,
+    render_platform_format,
 )
 from device_discovery.proto_presence import blank_to_none
 from device_discovery.slug import slug
@@ -794,9 +795,7 @@ def _resolve_platform(data: dict, options: Options) -> None:
     platform_format = getattr(device_defaults, "platform_format", None) or DEFAULT_PLATFORM_FORMAT
     driver = data.get("driver") or ""
     os_version = device_info.get("os_version") or ""
-    platform = platform_format.format(
-        driver=driver, DRIVER=driver.upper(), os_version=os_version
-    ).strip()
+    platform = render_platform_format(platform_format, driver, os_version).strip()
     device_info["platform"] = platform[:100]
 
 

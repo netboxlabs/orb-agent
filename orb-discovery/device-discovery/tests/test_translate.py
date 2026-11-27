@@ -793,11 +793,35 @@ def test_platform_format_truncated(sample_device_info, sample_defaults):
     assert entities[0].device.platform.name == "v" * 100
 
 
-@pytest.mark.parametrize("bad", ["{version}", "{0}", "{os_version", "{driver.upper}x{"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "{version}",
+        "{0}",
+        "{}",
+        "{os_version",
+        "{driver.upper}x{",
+        # attribute / item access, conversions and format specs (str.format injection)
+        "{driver.__class__}",
+        "{driver.__class__.__mro__[1].__subclasses__()}",
+        "{os_version[0]}",
+        "{driver!r}",
+        "{os_version:>20}",
+    ],
+)
 def test_platform_format_rejects_unknown_placeholders(bad):
     """An unknown placeholder is a policy error, not a failure during discovery."""
     with pytest.raises(ValueError, match="platform_format"):
         DeviceParameters(platform_format=bad)
+
+
+def test_render_platform_format_never_calls_str_format():
+    """Values are inserted as they are, braces in them are not interpreted."""
+    from device_discovery.policy.models import render_platform_format
+
+    assert render_platform_format("{{x}} {DRIVER}-{os_version}", "ios", "{driver}") == (
+        "{x} IOS-{driver}"
+    )
 
 
 def test_platform_parent(sample_device_info, sample_defaults):
