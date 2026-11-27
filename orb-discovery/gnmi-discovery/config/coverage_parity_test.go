@@ -101,3 +101,14 @@ func TestOptions_EmitPrefixesAndIPAddresses(t *testing.T) {
 	assert.True(t, np.PrefixEmissionEnabled())
 	assert.True(t, np.IPAddressEmissionEnabled())
 }
+
+func TestOptions_EmitIPv6LinkLocalAddresses(t *testing.T) {
+	enabled := func(y string) bool {
+		var pc PolicyConfig
+		require.NoError(t, yaml.Unmarshal([]byte(y), &pc))
+		return pc.Options.IPv6LinkLocalAddressEmissionEnabled()
+	}
+	assert.False(t, enabled("defaults: {}"))
+	assert.True(t, enabled("options:\n  emit_ipv6_link_local_addresses: true\n"))
+	assert.False(t, enabled("options:\n  emit_ipv6_link_local_addresses: false\n"))
+}

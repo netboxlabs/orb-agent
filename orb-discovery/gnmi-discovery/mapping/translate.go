@@ -267,20 +267,38 @@ func TranslateWithOptions(profile *Profile, snap map[string]any, defaults *confi
 		entities = append(entities, translatePrefixes(entities, dev, defaults)...)
 	}
 	// Last, so prefixes inherit the VRF the post-pass set on each address. The
-	// runner picks the primary IP from these entities, so none is set either.
-	if !opts.IPAddressEmissionEnabled() {
-		entities = withoutIPAddresses(entities)
+	// runner picks the primary IP from these entities, so none is set from an
+	// address dropped here.
+	switch {
+	case !opts.IPAddressEmissionEnabled():
+		entities = withoutIPAddresses(entities, func(*diode.IPAddress) bool { return true })
+	case !opts.IPv6LinkLocalAddressEmissionEnabled():
+		// Only unique on its own link, while Diode matches an IP address by
+		// address and VRF.
+		entities = withoutIPAddresses(entities, func(ip *diode.IPAddress) bool {
+			if !isIPv6LinkLocal(ip.GetAddress()) {
+				return false
+			}
+			if logger != nil {
+				var iface string
+				if i, ok := ip.AssignedObject.(*diode.Interface); ok && i != nil {
+					iface = i.GetName()
+				}
+				logger.Debug("not sending the IPv6 link-local address", "address", ip.GetAddress(), "interface", iface)
+			}
+			return true
+		})
 	}
 	return entities
 }
 
-// withoutIPAddresses drops the IPAddress entities. The interfaces they name
-// are sent on their own: translateInterfaces emits every interface and
-// translateIPs every subinterface before its first address.
-func withoutIPAddresses(entities []diode.Entity) []diode.Entity {
+// withoutIPAddresses drops the IPAddress entities drop reports. The interfaces
+// they name are sent on their own: translateInterfaces emits every interface
+// and translateIPs every subinterface before its first address.
+func withoutIPAddresses(entities []diode.Entity, drop func(*diode.IPAddress) bool) []diode.Entity {
 	out := make([]diode.Entity, 0, len(entities))
 	for _, e := range entities {
-		if _, ok := e.(*diode.IPAddress); !ok {
+		if ip, ok := e.(*diode.IPAddress); !ok || !drop(ip) {
 			out = append(out, e)
 		}
 	}

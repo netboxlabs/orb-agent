@@ -21,9 +21,10 @@ func vrfName(v *diode.VRF) string {
 // discovered IPAddress in entities (net.ParseCIDR masks to the network), deduped by
 // (cidr, vrf). Each prefix inherits the IP's discovered VRF (nil = global), the
 // device Site as scope, and the policy defaults.prefix role/tenant/tags/description.
-// Host-length networks (/32,/128) are emitted (parity with device-discovery). The
-// Device.PrimaryIp matcher stub is nested in the Device, not a top-level entity, so
-// it is not seen here.
+// Host-length networks (/32,/128) are emitted. No prefix is derived from an IPv6
+// link-local address, judged on the address, as in the other discovery backends:
+// fe80::/10 is per link. The Device.PrimaryIp matcher stub is nested in the
+// Device, not a top-level entity, so it is not seen here.
 func translatePrefixes(entities []diode.Entity, dev *diode.Device, defaults *config.Defaults) []diode.Entity {
 	var site *diode.Site
 	if dev != nil {
@@ -50,7 +51,7 @@ func translatePrefixes(entities []diode.Entity, dev *diode.Device, defaults *con
 	var order []key
 	for _, e := range entities {
 		ip, ok := e.(*diode.IPAddress)
-		if !ok || ip.Address == nil {
+		if !ok || ip.Address == nil || isIPv6LinkLocal(*ip.Address) {
 			continue
 		}
 		_, ipnet, err := net.ParseCIDR(*ip.Address)
