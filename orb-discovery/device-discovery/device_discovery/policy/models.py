@@ -817,6 +817,17 @@ class Options(WarnUnknownKeys):
             "emit_prefixes is False."
         ),
     )
+    emit_ipv6_link_local_addresses: bool = Field(
+        default=False,
+        description=(
+            "Send IPv6 link-local addresses (fe80::/10) as IPAddress entities. "
+            "A link-local address is only unique on its own link, while Diode "
+            "matches an IP address by address and VRF, so this defaults to "
+            "False and they are not sent. Set True to send them. No prefix is "
+            "derived from them either way, and emit_ip_addresses False still "
+            "sends no address at all."
+        ),
+    )
 
 
 class Config(WarnUnknownKeys):

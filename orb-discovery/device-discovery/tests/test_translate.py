@@ -2237,13 +2237,15 @@ def test_no_prefix_derived_for_host_and_ipv6_link_local(
 
     A /32 or /128 "prefix" only restates the address, and an fe80:: prefix is
     per-link noise. Both produced thousands of spurious Assurance deviations.
-    The IPAddress entity is still emitted so the interface stays documented.
+    The IPAddress entity is still emitted so the interface stays documented;
+    a link-local address only when emit_ipv6_link_local_addresses opts in.
     """
     interfaces_ip = {
         "GigabitEthernet0/0/1": {family: {ip: {"prefix_length": prefix_length}}}
     }
     prefixes, addresses = _emit_ips_for(
-        sample_device_info, sample_interface_info, sample_defaults, interfaces_ip
+        sample_device_info, sample_interface_info, sample_defaults, interfaces_ip,
+        options=Options(emit_ipv6_link_local_addresses=True),
     )
 
     assert prefixes == [], f"no prefix may be derived from a {reason}, got {prefixes}"
@@ -2288,6 +2290,9 @@ def test_prefix_still_derived_when_no_prefix_length_reported(
         ("ipv6", "2001:db8::1", 64, "2001:db8::/64"),
         # A global-unicast /127 p2p link is not a host prefix.
         ("ipv6", "2001:db8::2", 127, "2001:db8::2/127"),
+        # IPv4-mapped, so not an IPv6 link-local, although newer Python
+        # versions call it link-local after the IPv4 address it carries.
+        ("ipv6", "::ffff:169.254.10.5", 120, "::ffff:169.254.10.0/120"),
     ],
 )
 def test_ordinary_prefixes_are_still_derived(
@@ -2328,7 +2333,7 @@ def test_suppressed_prefix_does_not_drop_sibling_prefixes(
     )
 
     assert sorted(prefixes) == ["172.24.0.0/24", "2001:db8::/64"]
-    assert len(addresses) == 3, "every address is still emitted, including the fe80::"
+    assert sorted(addresses) == ["172.24.0.101/24", "2001:db8::1/64"]
 
 
 @pytest.mark.parametrize(
@@ -2400,7 +2405,7 @@ def test_emit_host_prefixes_does_not_resurrect_ipv6_link_local(
         sample_interface_info,
         sample_defaults,
         interfaces_ip,
-        options=Options(emit_host_prefixes=True),
+        options=Options(emit_host_prefixes=True, emit_ipv6_link_local_addresses=True),
     )
 
     assert prefixes == [], (
@@ -2709,3 +2714,130 @@ def test_emit_prefixes_and_ip_addresses_off_skip_unreadable_addresses(
     )
     assert prefixes == []
     assert addresses == []
+
+
+@pytest.mark.parametrize(
+    ("ip", "prefix_length"),
+    [
+        ("fe80::42:acff:fe12:6", 64),
+        ("fe80::1", 128),
+        # Judged on the address, so a mask wider than /10 does not let it through.
+        ("fe80::1", 9),
+        # fe80::/10 runs up to febf:ffff:...
+        ("febf:ffff::1", 64),
+    ],
+)
+@pytest.mark.parametrize("options", [None, Options()], ids=["no options", "defaults"])
+def test_ipv6_link_local_addresses_not_emitted_by_default(
+    sample_device_info, sample_interface_info, sample_defaults, options, ip, prefix_length
+):
+    """
+    An IPv6 link-local address is not sent unless the policy opts in.
+
+    It is only unique on its own link, while Diode matches an IPAddress by
+    address and VRF, so the same fe80:: address on two interfaces would land
+    on one NetBox object.
+    """
+    interfaces_ip = {
+        "GigabitEthernet0/0/1": {"ipv6": {ip: {"prefix_length": prefix_length}}}
+    }
+    prefixes, addresses = _emit_ips_for(
+        sample_device_info, sample_interface_info, sample_defaults, interfaces_ip,
+        options=options,
+    )
+    assert addresses == []
+    assert prefixes == []
+
+
+@pytest.mark.parametrize(
+    ("family", "ip", "prefix_length"),
+    [
+        # Just outside fe80::/10 on either side.
+        ("ipv6", "fe7f:ffff::1", 64),
+        ("ipv6", "fec0::1", 64),
+        # IPv4 link-local is kept, as it is for prefixes.
+        ("ipv4", "169.254.10.5", 16),
+        # An IPv4-mapped address is not an IPv6 link-local, although newer
+        # Python versions call it link-local after the IPv4 address it carries.
+        ("ipv6", "::ffff:169.254.10.5", 128),
+    ],
+)
+def test_addresses_outside_ipv6_link_local_are_still_emitted(
+    sample_device_info, sample_interface_info, sample_defaults, family, ip, prefix_length
+):
+    """Only fe80::/10 is dropped."""
+    interfaces_ip = {
+        "GigabitEthernet0/0/1": {family: {ip: {"prefix_length": prefix_length}}}
+    }
+    _, addresses = _emit_ips_for(
+        sample_device_info, sample_interface_info, sample_defaults, interfaces_ip,
+        options=Options(),
+    )
+    assert addresses == [f"{ip}/{prefix_length}"]
+
+
+def test_emit_ipv6_link_local_addresses_defaults_to_off():
+    """Unset, link-local addresses are not sent."""
+    assert Options().emit_ipv6_link_local_addresses is False
+
+
+def test_emit_ipv6_link_local_addresses_sends_them_without_a_prefix(
+    sample_device_info, sample_interface_info, sample_defaults
+):
+    """The opt-in sends the address again, but still derives no prefix from it."""
+    interfaces_ip = {
+        "GigabitEthernet0/0/1": {
+            "ipv6": {
+                "2001:db8::1": {"prefix_length": 64},
+                "fe80::42:acff:fe12:6": {"prefix_length": 64},
+            },
+        }
+    }
+    prefixes, addresses = _emit_ips_for(
+        sample_device_info, sample_interface_info, sample_defaults, interfaces_ip,
+        options=Options(emit_ipv6_link_local_addresses=True),
+    )
+    assert sorted(addresses) == ["2001:db8::1/64", "fe80::42:acff:fe12:6/64"]
+    assert prefixes == ["2001:db8::/64"]
+
+
+def test_emit_ip_addresses_off_overrides_the_link_local_opt_in(
+    sample_device_info, sample_interface_info, sample_defaults
+):
+    """With emit_ip_addresses off, no address is sent, link-local or not."""
+    interfaces_ip = {
+        "GigabitEthernet0/0/1": {"ipv6": {"fe80::42:acff:fe12:6": {"prefix_length": 64}}}
+    }
+    _, addresses = _emit_ips_for(
+        sample_device_info, sample_interface_info, sample_defaults, interfaces_ip,
+        options=Options(emit_ip_addresses=False, emit_ipv6_link_local_addresses=True),
+    )
+    assert addresses == []
+
+
+def test_link_local_only_interface_is_still_emitted(
+    sample_device_info, sample_interface_info, sample_interfaces_ip
+):
+    """
+    Dropping the address keeps the interface and the primary IP.
+
+    That includes an interface only the IP data names, whose one address is a
+    link-local.
+    """
+    interfaces_ip = dict(sample_interfaces_ip)
+    interfaces_ip["ge-0/0/1.100"] = {"ipv6": {"fe80::1": {"prefix_length": 64}}}
+    data = {
+        "device": sample_device_info,
+        "interface": sample_interface_info,
+        "interface_ip": interfaces_ip,
+        "driver": "ios",
+        "target_hostname": "192.0.2.1",
+        "options": Options(),
+    }
+    entities = list(translate_data(data))
+    addresses = [e.ip_address.address for e in entities if e.HasField("ip_address")]
+    assert addresses == ["192.0.2.1/24"]
+    names = {e.interface.name for e in entities if e.HasField("interface")}
+    assert "ge-0/0/1.100" in names
+    device = next(e.device for e in entities if e.HasField("device"))
+    assert device.primary_ip4.address == "192.0.2.1/24"

@@ -28,7 +28,7 @@ The device discovery backend uses [Diode Python SDK](https://github.com/netboxla
 * [Module](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/module.py)
 * [ModuleBay](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/module_bay.py)
 
-Interfaces are attached to the device and ip addresses will be attached to the interfaces. Prefixes are added to the same interface site that it belongs to. Host prefixes (IPv4 `/32`, IPv6 `/128`) and IPv6 link-locals (`fe80::/10`) are not derived as prefixes by default; host prefixes can be restored with the `emit_host_prefixes` option — see [Prefix](#prefix). Set `emit_ip_addresses: false` and `emit_prefixes: false` to send neither IP addresses nor prefixes, for example when they are planned in NetBox.
+Interfaces are attached to the device and ip addresses will be attached to the interfaces. Prefixes are added to the same interface site that it belongs to. Host prefixes (IPv4 `/32`, IPv6 `/128`) and IPv6 link-locals (`fe80::/10`) are not derived as prefixes by default; host prefixes can be restored with the `emit_host_prefixes` option — see [Prefix](#prefix). IPv6 link-local addresses are not sent as IP addresses by default either; set `emit_ipv6_link_local_addresses: true` to send them, see [IP Address](#ip-address). Set `emit_ip_addresses: false` and `emit_prefixes: false` to send neither IP addresses nor prefixes, for example when they are planned in NetBox.
 
 When a target is a switch stack / Virtual Chassis (NetBox `VirtualChassis`), device-discovery emits one `VirtualChassis` entity plus one `Device` per member, and routes each interface/IP to the member that physically owns it — see [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis) below. Drivers that do not implement stack discovery (or devices not in stack mode) fall through to the existing single-`Device` path with no change in behaviour.
 
@@ -136,6 +136,7 @@ Current supported options:
 | emit_host_prefixes | bool | Derive a `Prefix` from IPv4 `/32` and IPv6 `/128` addresses. Defaults to `False`: a host prefix only restates the address, which is already emitted as an `IPAddress` entity, so no prefix is derived for them. Set `True` to restore them, e.g. when loopback `/32`s are deliberately tracked as prefixes in NetBox. IPv6 link-local prefixes (`fe80::/10`) are never derived and are unaffected by this option. See [Prefix](#prefix). |
 | emit_prefixes | bool | Derive a `Prefix` from the discovered IP addresses. Defaults to `True`; set `False` to send no prefixes, for example when they are planned in NetBox. |
 | emit_ip_addresses | bool | Send the discovered IP addresses as `IPAddress` entities. Defaults to `True`; set `False` to send none, for example when addressing is planned in NetBox. The run sets no primary IP and leaves one already in NetBox as it is; Diode matches the device by its other identifiers, such as name and site. Where the NetBox name differs from the discovered one, set the target's `netbox_id`. Prefixes are still derived unless `emit_prefixes` is `False`, and VRFs are still sent when `discover_vrfs` is `True`. |
+| emit_ipv6_link_local_addresses | bool | Send IPv6 link-local addresses (`fe80::/10`) as `IPAddress` entities. Defaults to `False`: a link-local address is only unique on its own link, while Diode matches an IP address by address and VRF, so they are not sent. Set `True` to send them. No prefix is derived from them either way, and `emit_ip_addresses: false` still sends no address at all. See [IP Address](#ip-address). |
 | emit_prefix_vlan | str | Associate a derived `Prefix` with the VLAN of the interface the contributing address lives on: the VLAN ID the device reports for that interface where the driver supports it, else the one an SVI-style name states. One of `off` (default) or `svi-name`. Any scalar is read as its text, so a bare `on`, a number and a mistyped mode all resolve to `off` with a warning rather than erroring; a list or mapping is a policy error, as it is for snmp-discovery. See [Prefix](#prefix). |
 | emit_device_name | bool | Emit `Device.name` from the discovered device name — the hostname fact, or the fqdn fact under `device_name_source: fqdn`. Defaults to `True`. Set `False` to suppress the name on the matched device so continual discovery stops proposing a hostname rename when the discovered hostname differs from the NetBox name. **Only takes effect when the device is matchable another way** — a scope `netbox_id`, or `defaults.device.asset_tag`; otherwise the name is kept and a warning is logged, because `name` is a primary NetBox device matcher and dropping it unguarded would emit a device NetBox cannot resolve. Matching by `serial` alone does **not** qualify (`Device.serial` is not unique in NetBox). On a virtual-chassis stack only the master's name is suppressed; member names come from `stack_member_name_template`. Mirrors the snmp-discovery option of the same name. |
 | device_name_source | string | Fact used for `Device.name`: `hostname` (default) or `fqdn`. With `fqdn`, the fqdn fact is used only when it positively looks like a domain-qualified form of the hostname — no whitespace and, case-insensitively, the hostname followed by a dot and at least one more character. Anything else falls back to the hostname: placeholders such as `None` (junos), `Unknown` (ios family), `N/A` (paloalto) or ios's `<hostname>.not set`, an fqdn equal to the hostname, or a hostname that already contains a dot (several drivers blindly append the domain again, producing `rtr1.dc1.example.net.dc1.example.net`). Does not apply to virtual-chassis stacks: every member's name, the master's included, comes from `stack_member_name_template`. Note: Diode matches devices by name, so switching an existing deployment to `fqdn` creates new records unless the NetBox devices are renamed first. An unrecognized value logs a warning and resolves to `hostname`. |
@@ -669,13 +670,29 @@ The tables below show which fields are populated automatically from the device v
 
 | Field | Source | Notes |
 |-------|--------|-------|
-| Address (with prefix length) | `get_interfaces_ip()` | Auto-collected; IPv4 and IPv6 |
+| Address (with prefix length) | `get_interfaces_ip()` | Auto-collected; IPv4 and IPv6, except IPv6 link-locals (see below) |
 | Assigned interface | — | Automatically linked to the interface |
 | Role | **Not collected** | Must be set via `defaults.ipaddress.role` |
 | VRF | `get_network_instances()` when `options.discover_vrfs: true` | Otherwise set via `defaults.ipaddress.vrf` (a discovered VRF wins over the defaults — see [VRFs](#vrfs)) |
 | Tenant | **Not collected** | Must be set via `defaults.ipaddress.tenant` |
 
 Set `options.emit_ip_addresses: false` to send no IP addresses.
+
+IPv6 link-local addresses (`fe80::/10`, judged on the address whatever its mask) are not sent by default. A link-local address is only unique on its own link: the same address can sit on several interfaces of one device, or on many devices. Diode matches an IP address by its address and VRF, so every interface reporting it would point at one NetBox IP address. IPv4 link-local addresses (`169.254.0.0/16`) are still sent.
+
+Set `emit_ipv6_link_local_addresses: true` to send them anyway:
+
+```yaml
+policies:
+  my-policy:
+    config:
+      options:
+        emit_ipv6_link_local_addresses: true
+```
+
+No prefix is derived from a link-local address either way (see [Prefix](#prefix)), and `emit_ip_addresses: false` still sends no address at all.
+
+Discovery does not delete what it stops sending: link-local addresses that earlier runs sent stay in NetBox until you delete them, for example by filtering IP addresses on the parent prefix `fe80::/10`.
 
 ### Prefix
 
@@ -688,7 +705,7 @@ Two shapes are **not** derived by default, because they carry no IPAM value and 
 | Host prefixes — IPv4 `/32`, IPv6 `/128` | a `10.0.0.1/32` loopback | The "prefix" only restates the address, duplicating the `IPAddress` entity emitted alongside it. A driver that reports no prefix length defaults to `/32` / `/128`, so this also covers those. | Yes — `emit_host_prefixes: true` |
 | IPv6 link-local — `fe80::/10`, any mask | `fe80::5a86:70f0:a8:e47f/128` | Link-locals are per-link and not globally meaningful, so one prefix per link-local address is pure churn. | No |
 
-The `IPAddress` entity is still emitted in both cases, unless `emit_ip_addresses` is `false`, so the interface and its address stay documented. Only the derived `Prefix` is skipped. IPv4 link-local (`169.254.0.0/16`) and the loopback net (`127.0.0.0/8`) are ordinary networks by mask and are still derived.
+For a host prefix, the `IPAddress` entity is still emitted, unless `emit_ip_addresses` is `false`, so the interface and its address stay documented. Only the derived `Prefix` is skipped. An IPv6 link-local address is not sent by default either; see [IP Address](#ip-address). IPv4 link-local (`169.254.0.0/16`) and the loopback net (`127.0.0.0/8`) are ordinary networks by mask and are still derived.
 
 Set `emit_host_prefixes: true` in the policy options to derive host prefixes again — for example when loopback `/32`s are deliberately tracked as prefixes in NetBox:
 
