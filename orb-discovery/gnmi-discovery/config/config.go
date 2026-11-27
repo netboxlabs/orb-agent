@@ -443,6 +443,12 @@ type Options struct {
 	// Off, the run sets no primary IP; prefixes are still derived unless
 	// EmitPrefixes is off.
 	EmitIPAddresses *bool `yaml:"emit_ip_addresses,omitempty"`
+
+	// EmitIPv6LinkLocalAddresses sends IPv6 link-local addresses (fe80::/10).
+	// nil → off (default): a link-local address is only unique on its own
+	// link, while Diode matches an IP address by address and VRF. No prefix is
+	// derived from one either way, and EmitIPAddresses off still sends none.
+	EmitIPv6LinkLocalAddresses *bool `yaml:"emit_ipv6_link_local_addresses,omitempty"`
 }
 
 // ConfigCaptureEnabled reports the effective capture_config toggle (default off).
@@ -466,6 +472,12 @@ func (o *Options) PrefixEmissionEnabled() bool {
 // (default on).
 func (o *Options) IPAddressEmissionEnabled() bool {
 	return o == nil || o.EmitIPAddresses == nil || *o.EmitIPAddresses
+}
+
+// IPv6LinkLocalAddressEmissionEnabled reports the effective
+// emit_ipv6_link_local_addresses toggle (default off).
+func (o *Options) IPv6LinkLocalAddressEmissionEnabled() bool {
+	return o != nil && o.EmitIPv6LinkLocalAddresses != nil && *o.EmitIPv6LinkLocalAddresses
 }
 
 // PolicyConfig holds policy-wide config (spec §7).

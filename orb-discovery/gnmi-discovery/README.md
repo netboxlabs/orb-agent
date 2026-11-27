@@ -78,6 +78,7 @@ policies:
         emit_lag_membership: true  # link LAG member ports to their aggregate (default on)
         emit_prefixes: true        # derive a prefix from each IP address (default on)
         emit_ip_addresses: true    # send the discovered IP addresses (default on)
+        emit_ipv6_link_local_addresses: false # send IPv6 link-local (fe80::/10) addresses (default off)
       defaults:
         site: New York NY          # NetBox site (default "undefined")
         role: Router               # NetBox device role (default "undefined")

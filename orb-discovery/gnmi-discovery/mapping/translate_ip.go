@@ -73,6 +73,15 @@ func parseIPAddressPath(path, ifaceListPath string) (iface, index, family, ip, l
 	return iface, index, family, ip, leaf, true
 }
 
+// isIPv6LinkLocal reports whether the address of cidr is in fe80::/10. It is
+// judged on the address, so a mask wider than /10 does not change it, and an
+// IPv4 link-local (169.254.0.0/16), written as IPv4 or IPv4-mapped, is not
+// one.
+func isIPv6LinkLocal(cidr string) bool {
+	ip, _, err := net.ParseCIDR(cidr)
+	return err == nil && ip.To4() == nil && ip.IsLinkLocalUnicast()
+}
+
 // translateIPs emits an IPAddress per (interface, subinterface index, family, ip)
 // that reports a prefix-length. index 0 assigns to the parent interface; index>0
 // emits a child virtual subinterface "<iface>.<index>" (once) and assigns there.
