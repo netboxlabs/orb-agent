@@ -20,6 +20,8 @@ from device_discovery.svi_vlan import svi_vlan_id
 
 logger = logging.getLogger(__name__)
 
+_IPV6_LINK_LOCAL = ipaddress.IPv6Network("fe80::/10")
+
 
 def detect_type_by_speed(speed_mbps: float) -> str:
     """
@@ -411,6 +413,17 @@ def _resolve_prefix_scope_kwargs(
     return scope_kwargs
 
 
+def _is_ipv6_link_local(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """
+    Report whether ``address`` is in fe80::/10.
+
+    Tested by containment rather than ``is_link_local``, which is also true for
+    169.254.0.0/16 and, on newer Python versions, for an IPv4-mapped IPv6
+    address carrying one.
+    """
+    return address.version == 6 and address in _IPV6_LINK_LOCAL
+
+
 def _undesirable_prefix_reason(
     network: ipaddress.IPv4Network | ipaddress.IPv6Network,
     address: ipaddress.IPv4Address | ipaddress.IPv6Address,
@@ -438,7 +451,9 @@ def _undesirable_prefix_reason(
 
     Suppression applies only to the derived Prefix. The IPAddress entity is
     still emitted, unless emit_ip_addresses is False, so the interface and its
-    address stay documented.
+    address stay documented. An IPv6 link-local address is the exception: it
+    is sent only when emit_ipv6_link_local_addresses opts in (see
+    ``_address_entities``).
     """
     # Link-local is judged on the ADDRESS, not the derived network. A mask
     # shorter than /10 widens the network out of fe80::/10 — fe80::1/9
@@ -453,9 +468,7 @@ def _undesirable_prefix_reason(
     # link-local that happens to carry host length, not a loopback an operator
     # wants tracked. Checked first only so the logged reason names link-local
     # rather than host length.
-    # Only IPv6: ipaddress treats 169.254.0.0/16 as link-local too, and that
-    # one stays in scope for emission.
-    if address.version == 6 and address.is_link_local:
+    if _is_ipv6_link_local(address):
         return "IPv6 link-local"
     if not emit_host_prefixes and network.prefixlen == network.max_prefixlen:
         return "host prefix"
@@ -527,12 +540,15 @@ def _address_entities(
     prefix_fields: dict | None,
     ip_fields: dict | None,
     emit_host_prefixes: bool,
+    emit_ipv6_link_local_addresses: bool = False,
 ) -> list[Entity]:
     """
     Build the Prefix and the IPAddress for one discovered address.
 
     ``None`` fields send nothing of that kind, which is how emit_prefixes and
-    emit_ip_addresses turn them off.
+    emit_ip_addresses turn them off. An IPv6 link-local address is sent only
+    with ``emit_ipv6_link_local_addresses``: it is unique only on its link,
+    while Diode matches an IPAddress by address and VRF.
     """
     entities: list[Entity] = []
     # ip_interface keeps the host bits, so .ip is the address the device
@@ -553,7 +569,15 @@ def _address_entities(
             )
         else:
             entities.append(Entity(prefix=Prefix(prefix=str(network), **prefix_fields)))
-    if ip_fields is not None:
+    if (
+        ip_fields is not None
+        and not emit_ipv6_link_local_addresses
+        and _is_ipv6_link_local(interface_address.ip)
+    ):
+        logger.debug(
+            "%s: not sending the IPv6 link-local address %s", interface.name, ip_address
+        )
+    elif ip_fields is not None:
         entities.append(
             Entity(
                 ip_address=IPAddress(
@@ -663,6 +687,10 @@ def translate_interface_ips(
     scope_kwargs = _resolve_prefix_scope_kwargs(defaults, options)
     # Opt-in: host prefixes are not derived unless the operator asks for them.
     emit_host_prefixes = bool(options and options.emit_host_prefixes)
+    # Opt-in as well: IPv6 link-local addresses are not sent by default.
+    emit_ipv6_link_local_addresses = bool(
+        options and options.emit_ipv6_link_local_addresses
+    )
     emit_prefixes = options is None or options.emit_prefixes
     emit_ip_addresses = options is None or options.emit_ip_addresses
     if not emit_prefixes and not emit_ip_addresses:
@@ -732,6 +760,7 @@ def translate_interface_ips(
                             prefix_fields,
                             ip_fields,
                             emit_host_prefixes,
+                            emit_ipv6_link_local_addresses,
                         )
                     )
 
