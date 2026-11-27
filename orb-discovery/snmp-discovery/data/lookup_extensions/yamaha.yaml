@@ -1,0 +1,12 @@
+# Yamaha — sysObjectID -> device model lookups for SNMP discovery.
+# Manufacturer (IANA PEN 1182) is canonicalized in _manufacturers_ndx.yaml. Entries
+# are the WLX access points whose sysObjectID NDX records from each model's own
+# Yamaha SNMP page, under .1.3.6.1.4.1.1182.1 as YAMAHA-PRODUCTS-MIB numbers its
+# products, each named as its NDX device type so the device binds to the
+# imported type.
+devices:
+  .1.3.6.1.4.1.1182.1.77: WLX222
+  .1.3.6.1.4.1.1182.1.79: WLX322
+  .1.3.6.1.4.1.1182.1.80: WLX323
+  .1.3.6.1.4.1.1182.1.82: WLX232
+  .1.3.6.1.4.1.1182.1.83: WLX333

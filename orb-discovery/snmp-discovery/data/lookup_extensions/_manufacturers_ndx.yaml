@@ -1,7 +1,7 @@
 # Canonical manufacturer overrides aligning SNMP-discovered vendors to the
 # NetBox DeviceType-Library (DTL) / NDX manufacturer names. Keys are IANA
 # Private Enterprise Numbers (the 7th element of sysObjectID); values are the
-# exact DTL `manufacturer:` strings, so discovered devices attach to the right
+# exact NDX `manufacturer:` strings, so discovered devices attach to the right
 # manufacturer and device-types. PENs absent here keep their raw IANA name.
 #
 # A vendor may own several PENs (acquisitions, sub-brands, legacy agents). Where
@@ -23,7 +23,6 @@ manufacturers:
   332: Digi
   534: Eaton
   52587: Edgecore
-  193: Ericsson
   1916: Extreme Networks
   3375: F5
   12356: Fortinet
@@ -44,7 +43,6 @@ manufacturers:
   119: NEC
   789: NetApp
   4526: Netgear
-  6527: Nokia
   25049: Opengear
   23695: Peplink
   4346: Phoenix Contact
@@ -94,6 +92,9 @@ manufacturers:
   674: Dell
   6027: Dell
   19746: Dell
+  # Ericsson + Redback (SmartEdge / SSR)
+  193: Ericsson
+  2352: Ericsson
   # HPE — HP/HPE + Compaq + Aruba + Nimble + Aruba CX (all HPE-family)
   11: HPE
   232: HPE
@@ -103,9 +104,12 @@ manufacturers:
   # Juniper + Unisphere/ERX (acquired by Juniper)
   2636: Juniper
   4874: Juniper
-  # Palo Alto — PAN-OS + CloudGenix (Prisma SD-WAN)
-  25461: Palo Alto
-  50114: Palo Alto
+  # Nokia — SR OS + 1830 PSS optical (Alcatel-Lucent registry)
+  6527: Nokia
+  7483: Nokia
+  # Palo Alto Networks — PAN-OS + CloudGenix (Prisma SD-WAN)
+  25461: Palo Alto Networks
+  50114: Palo Alto Networks
   # Quantum Corporation (two enterprise numbers)
   2036: Quantum
   3697: Quantum

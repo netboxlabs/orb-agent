@@ -496,19 +496,19 @@ func TestEmbeddedLookupExtensions_CiscoCatalyst1200And1300(t *testing.T) {
 	// The Catalyst 1200/1300 smart-switch family (CISCO-PRODUCTS-MIB
 	// ciscoProducts 3210-3253) shipped after this table was last refreshed, so
 	// these sysObjectIDs resolved to "device ID not found" and the model fell
-	// back to the raw OID string.
+	// back to the raw OID string. Each is now named as its NDX device type.
 	deviceLookup, err := LoadDeviceLookupExtensions("")
 	require.NoError(t, err)
 
 	for oid, want := range map[string]string{
-		".1.3.6.1.4.1.9.1.3213": "ciscoC12008FP2G",   // C1200-8FP-2G
-		".1.3.6.1.4.1.9.1.3216": "ciscoC120024T4G",   // C1200-24T-4G
-		".1.3.6.1.4.1.9.1.3225": "ciscoC120048P4X",   // C1200-48P-4X
-		".1.3.6.1.4.1.9.1.3226": "ciscoC13008TE2G",   // C1300-8T-E-2G
-		".1.3.6.1.4.1.9.1.3247": "ciscoC130048MGP4X", // C1300-48MGP-4X
+		".1.3.6.1.4.1.9.1.3213": "Catalyst C1200-8FP-2G",  // ciscoC12008FP2G
+		".1.3.6.1.4.1.9.1.3216": "Catalyst C1200-24T-4G",  // ciscoC120024T4G
+		".1.3.6.1.4.1.9.1.3225": "Catalyst C1200-48P-4X",  // ciscoC120048P4X
+		".1.3.6.1.4.1.9.1.3226": "Catalyst 1300-8T-E-2G",  // ciscoC13008TE2G
+		".1.3.6.1.4.1.9.1.3247": "Catalyst 1300-48MGP-4X", // ciscoC130048MGP4X
 		// Entries past the Catalyst 1200/1300 block, from the same refresh.
-		".1.3.6.1.4.1.9.1.3293": "ciscoC935048U", // Catalyst 9350-48U
-		".1.3.6.1.4.1.9.1.3542": "ciscoC8475G2",  // highest suffix in the MIB
+		".1.3.6.1.4.1.9.1.3293": "Catalyst C9350-48U", // ciscoC935048U
+		".1.3.6.1.4.1.9.1.3542": "C8475-G2",           // ciscoC8475G2, highest suffix in the MIB
 		// ciscoProducts 229 carries a live ciscoMGX8830 plus a commented-out
 		// ciscoMGX8820 alias. A generator that ignores ASN.1 comments picks up
 		// the dead name, so pin the live one.
@@ -521,27 +521,31 @@ func TestEmbeddedLookupExtensions_CiscoCatalyst1200And1300(t *testing.T) {
 }
 
 func TestEmbeddedLookupExtensions_ExtremeBaseMIB(t *testing.T) {
-	// Product OIDs from EXTREME-BASE-MIB (extremeProduct, .1916.2), named by
-	// their MIB object names.
+	// Product OIDs from EXTREME-BASE-MIB (extremeProduct, .1916.2). A product
+	// NDX catalogs is named as its NDX device type; the others keep their MIB
+	// object names.
 	deviceLookup, err := LoadDeviceLookupExtensions("")
 	require.NoError(t, err)
 
 	for oid, want := range map[string]string{
-		".1.3.6.1.4.1.1916.2.1":   "summit1",                           // lowest suffix in the MIB
-		".1.3.6.1.4.1.1916.2.325": "vsp7400-48Y-8C",                    // VSP 7400-48Y-8C
-		".1.3.6.1.4.1.1916.2.352": "extreme552048WEXOS",                // 5520-48W, EXOS
-		".1.3.6.1.4.1.1916.2.361": "extreme552048WVOSS",                // 5520-48W, VOSS
-		".1.3.6.1.4.1.1916.2.433": "extreme552048WSwitchEngine",        // 5520-48W, Switch Engine
-		".1.3.6.1.4.1.1916.2.440": "extreme552048WFabricEngine",        // 5520-48W, Fabric Engine
-		".1.3.6.1.4.1.1916.2.549": "extreme5420M24W24S4YESwitchEngine", // highest suffix; only in the 2025-04-02 revision
+		".1.3.6.1.4.1.1916.2.1":   "summit1",               // lowest suffix in the MIB
+		".1.3.6.1.4.1.1916.2.227": "X440-G2-12p-10GE4",     // summitX440G2-12p-10G4
+		".1.3.6.1.4.1.1916.2.325": "VSP-7400-48Y-8C",       // vsp7400-48Y-8C
+		".1.3.6.1.4.1.1916.2.352": "5520-48W",              // 5520-48W, EXOS
+		".1.3.6.1.4.1.1916.2.361": "FabricEngine-5520-48W", // 5520-48W, VOSS
+		".1.3.6.1.4.1.1916.2.433": "5520-48W",              // 5520-48W, Switch Engine
+		".1.3.6.1.4.1.1916.2.440": "FabricEngine-5520-48W", // 5520-48W, Fabric Engine
+		// Highest suffix; only in the 2025-04-02 revision. NDX has only the
+		// Fabric Engine type of this switch, so the Switch Engine OID keeps
+		// its MIB name.
+		".1.3.6.1.4.1.1916.2.549": "extreme5420M24W24S4YESwitchEngine",
 		// Products registered under a series node.
 		".1.3.6.1.4.1.1916.2.131.15":  "summitWM3700",
-		".1.3.6.1.4.1.1916.2.504.1.1": "extreme873032D",
-		// Entries that predate the MIB import keep their names, so devices
-		// already in NetBox keep their device type.
+		".1.3.6.1.4.1.1916.2.504.1.1": "8730-32D", // extreme873032D
+		// Entries that predate the MIB import. NDX catalogs only the last.
 		".1.3.6.1.4.1.1916.2":     "extremeSwitch",
 		".1.3.6.1.4.1.1916.2.89":  "extremeSummitX250e",
-		".1.3.6.1.4.1.1916.2.343": "extremeSwitchingX435",
+		".1.3.6.1.4.1.1916.2.343": "X435-24P-4S",
 	} {
 		model, err := deviceLookup.GetDeviceModel(oid, map[string]string{})
 		assert.NoError(t, err, "OID %s should resolve", oid)
@@ -557,6 +561,30 @@ func TestEmbeddedLookupExtensions_ExtremeBaseMIB(t *testing.T) {
 	} {
 		_, err := deviceLookup.GetDeviceModel(oid, map[string]string{})
 		assert.Error(t, err, "series node %s should not name a model", oid)
+	}
+}
+
+func TestEmbeddedLookupExtensions_NDXModels(t *testing.T) {
+	// sysObjectIDs the tables gained or had corrected, named as their NDX
+	// device type: one per source of evidence.
+	deviceLookup, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+
+	for oid, want := range map[string]string{
+		".1.3.6.1.4.1.11.2.3.7.11.140":         "Aruba 2530-24G",    // HP-ICF-OID hpSwitchJ9776A, added
+		".1.3.6.1.4.1.11.2.3.7.11.129":         "Aruba 2620-24",     // was arubaSwitch129, hpSwitchJ9623A
+		".1.3.6.1.4.1.6486.801.1.1.2.1.11.1.1": "OS6860-24",         // AOS 7 deviceOmniSwitch6860-24, added
+		".1.3.6.1.4.1.2636.1.1.1.2.34":         "SRX3600",           // was juniSRX5400, jnxProductNameSRX3600
+		".1.3.6.1.4.1.2636.1.1.1.2.105":        "SRX5400",           // jnxProductNameSRX5400, added
+		".1.3.6.1.4.1.12356.101.1.644":         "FortiGate 60F",     // was fw60EI, fgt60F
+		".1.3.6.1.4.1.12356.103.1.4007":        "FortiManager 400G", // fmg400G, added
+		".1.3.6.1.4.1.3097.1.5.57":             "Firebox M4600",     // WATCHGUARD-PRODUCTS-MIB M4600, added
+		".1.3.6.1.4.1.6321.1.2.4.1.6":          "E9-2",              // CALIX-PRODUCT-MIB axosDevices e9-2, added
+		".1.3.6.1.4.1.1182.1.79":               "WLX322",            // Yamaha, from NDX, added
+	} {
+		model, err := deviceLookup.GetDeviceModel(oid, map[string]string{})
+		assert.NoError(t, err, "OID %s should resolve", oid)
+		assert.Equal(t, want, model, "OID %s", oid)
 	}
 }
 
@@ -722,36 +750,38 @@ func TestManufacturerResolver_CanonicalNDXOverrides(t *testing.T) {
 	require.NoError(t, err)
 
 	cases := map[string]string{
-		"9":     "Cisco",            // ciscoSystems
-		"29671": "Cisco",            // Meraki -> Cisco
-		"30065": "Arista",           // Arista Networks Inc
-		"2636":  "Juniper",          // Juniper Networks Inc
-		"4874":  "Juniper",          // Juniper Unisphere/ERX
-		"6027":  "Dell",             // Force10 Networks Inc
-		"19746": "Dell",             // Dell EMC OS10
-		"11":    "HPE",              // HewlettPackard
-		"14823": "HPE",              // Aruba
-		"47196": "HPE",              // Aruba CX
-		"232":   "HPE",              // Compaq
-		"37447": "HPE",              // Nimble Storage
-		"6527":  "Nokia",            // Nokia formerly AlcatelLucent
-		"2011":  "Huawei",           // HUAWEI Technology CoLtd
-		"25461": "Palo Alto",        // PALO ALTO NETWORKS
-		"50114": "Palo Alto",        // CloudGenix (Prisma SD-WAN)
-		"5528":  "APC",              // NetBotz
-		"476":   "Vertiv",           // Emerson Computer Power
-		"1916":  "Extreme Networks", // Extreme Networks
-		"248":   "Hirschmann",       // Richard Hirschmann GmbH Co
-		"10704": "Barracuda",        // Barracuda AG (ex-phion)
-		"26866": "Gigamon",          // Gigamon Systems LLC
-		"116":   "HITACHI",          // Hitachi Ltd
-		"89":    "Radware",          // RND (Radware origin)
-		"4329":  "Siemens",          // Siemens AG
-		"15004": "RuggedCOM",        // RuggedCom Inc (Siemens-owned, distinct NDX manufacturer)
-		"7244":  "QCT",              // Quanta Computer Inc
-		"2":     "IBM",              // IBM
-		"31746": "Thales",           // Thales DIS (second PEN)
-		"3697":  "Quantum",          // Quantum Corporation (second PEN)
+		"9":     "Cisco",              // ciscoSystems
+		"29671": "Cisco",              // Meraki -> Cisco
+		"30065": "Arista",             // Arista Networks Inc
+		"2636":  "Juniper",            // Juniper Networks Inc
+		"4874":  "Juniper",            // Juniper Unisphere/ERX
+		"6027":  "Dell",               // Force10 Networks Inc
+		"19746": "Dell",               // Dell EMC OS10
+		"11":    "HPE",                // HewlettPackard
+		"14823": "HPE",                // Aruba
+		"47196": "HPE",                // Aruba CX
+		"232":   "HPE",                // Compaq
+		"37447": "HPE",                // Nimble Storage
+		"6527":  "Nokia",              // Nokia formerly AlcatelLucent
+		"7483":  "Nokia",              // Nokia 1830 PSS (Alcatel-Lucent registry)
+		"2352":  "Ericsson",           // Ericsson formerly RedBack Networks
+		"2011":  "Huawei",             // HUAWEI Technology CoLtd
+		"25461": "Palo Alto Networks", // PALO ALTO NETWORKS
+		"50114": "Palo Alto Networks", // CloudGenix (Prisma SD-WAN)
+		"5528":  "APC",                // NetBotz
+		"476":   "Vertiv",             // Emerson Computer Power
+		"1916":  "Extreme Networks",   // Extreme Networks
+		"248":   "Hirschmann",         // Richard Hirschmann GmbH Co
+		"10704": "Barracuda",          // Barracuda AG (ex-phion)
+		"26866": "Gigamon",            // Gigamon Systems LLC
+		"116":   "HITACHI",            // Hitachi Ltd
+		"89":    "Radware",            // RND (Radware origin)
+		"4329":  "Siemens",            // Siemens AG
+		"15004": "RuggedCOM",          // RuggedCom Inc (Siemens-owned, distinct NDX manufacturer)
+		"7244":  "QCT",                // Quanta Computer Inc
+		"2":     "IBM",                // IBM
+		"31746": "Thales",             // Thales DIS (second PEN)
+		"3697":  "Quantum",            // Quantum Corporation (second PEN)
 	}
 	for pen, want := range cases {
 		got, err := resolver.GetManufacturer(pen)
@@ -766,7 +796,7 @@ func TestDeviceLookup_GetDeviceModel_Static(t *testing.T) {
 
 	got, err := deviceLookup.GetDeviceModel(".1.3.6.1.4.1.3375.2.1.3.4.113", nil)
 	require.NoError(t, err)
-	assert.Equal(t, "f5BIGIPi10800", got)
+	assert.Equal(t, "BIG-IP i10800", got)
 }
 
 func TestDeviceLookup_GetDeviceModel_DynamicRef(t *testing.T) {
@@ -864,7 +894,7 @@ func TestDeviceLookup_GetDevice_BackwardCompatibleLiteral(t *testing.T) {
 	require.NoError(t, err)
 	got, err := deviceLookup.GetDevice(".1.3.6.1.4.1.3375.2.1.3.4.113")
 	require.NoError(t, err)
-	assert.Equal(t, "f5BIGIPi10800", got)
+	assert.Equal(t, "BIG-IP i10800", got)
 }
 
 // Embedded YAML keys carry leading dots (e.g. ".1.3.6.1.4.1...") but
@@ -875,7 +905,7 @@ func TestDeviceLookup_GetDevice_NoLeadingDotMatches(t *testing.T) {
 	require.NoError(t, err)
 	got, err := deviceLookup.GetDevice("1.3.6.1.4.1.3375.2.1.3.4.113")
 	require.NoError(t, err, "GetDevice should accept the no-leading-dot spelling for a YAML key written with a leading dot")
-	assert.Equal(t, "f5BIGIPi10800", got)
+	assert.Equal(t, "BIG-IP i10800", got)
 }
 
 func TestDeviceLookup_GetDeviceModel_DeviceOIDNoLeadingDotMatches(t *testing.T) {

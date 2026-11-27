@@ -1,6 +1,8 @@
 # Force10 (Dell) — sysObjectID -> device model lookups for SNMP discovery.
 # Manufacturer (IANA PEN 6027) is canonicalized to Dell in _manufacturers_ndx.yaml.
 # Device chassis models under .1.3.6.1.4.1.6027 from F10-PRODUCTS-MIB.
+# A model NDX catalogs is named as its NDX device type, so the device binds to
+# the imported type; the others keep their existing name.
 devices:
   .1.3.6.1.4.1.6027.1.1.1: e1200
   .1.3.6.1.4.1.6027.1.1.2: e600
@@ -29,8 +31,8 @@ devices:
   .1.3.6.1.4.1.6027.1.3.19: s5000
   .1.3.6.1.4.1.6027.1.3.20: s4810on
   .1.3.6.1.4.1.6027.1.3.21: s6000on
-  .1.3.6.1.4.1.6027.1.3.22: s4048on
-  .1.3.6.1.4.1.6027.1.3.23: s3048on
+  .1.3.6.1.4.1.6027.1.3.22: PowerSwitch S4048-ON
+  .1.3.6.1.4.1.6027.1.3.23: PowerSwitch S3048-ON (OS9)
   .1.3.6.1.4.1.6027.1.4.1: m-MXL
   .1.3.6.1.4.1.6027.1.4.2: m-IOA
   .1.3.6.1.4.1.6027.1.4.3: s-IOA

@@ -1,3 +1,5 @@
+# A model NDX catalogs is named as its NDX device type, so the device binds to
+# the imported type; the others keep their existing name.
 devices:
   .1.3.6.1.4.1.25461.1.1.4: panProductsMibsModule
   .1.3.6.1.4.1.25461.2.3.1: PA-4050
@@ -96,9 +98,9 @@ devices:
 
   # CloudGenix (Prisma SD-WAN) ION devices — acquired by Palo Alto Networks (enterprise 50114)
   .1.3.6.1.4.1.50114.11.1.10: cloudGenixION
-  .1.3.6.1.4.1.50114.11.1.10.1000: cloudGenixION1000
-  .1.3.6.1.4.1.50114.11.1.10.2000: cloudGenixION2000
-  .1.3.6.1.4.1.50114.11.1.10.3000: cloudGenixION3000
-  .1.3.6.1.4.1.50114.11.1.10.7000: cloudGenixION7000
-  .1.3.6.1.4.1.50114.11.1.10.9000: cloudGenixION9000
-  .1.3.6.1.4.1.50114.11.1.10.9200: cloudGenixION9200
+  .1.3.6.1.4.1.50114.11.1.10.1000: ION 1000
+  .1.3.6.1.4.1.50114.11.1.10.2000: ION 2000
+  .1.3.6.1.4.1.50114.11.1.10.3000: ION 3000
+  .1.3.6.1.4.1.50114.11.1.10.7000: ION 7000
+  .1.3.6.1.4.1.50114.11.1.10.9000: ION 9000
+  .1.3.6.1.4.1.50114.11.1.10.9200: ION 9200

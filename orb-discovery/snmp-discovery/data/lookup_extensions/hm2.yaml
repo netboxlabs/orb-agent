@@ -3,7 +3,9 @@
 #  - HiOS switches/firewalls (RSP/RSPE/MSP/GRS/EES/EAGLE/...) under .248.11.2 from
 #    HM2-PRODUCTS-MIB
 #  - OWL industrial cellular routers under .248.40 from HIRSCHMANN-WAN-PRODUCTS-MIB
-# kept as their MIB symbols. The bare hm2ProductsMib module anchor is excluded.
+# The bare hm2ProductsMib module anchor is excluded.
+# A model NDX catalogs is named as its NDX device type, so the device binds to
+# the imported type; the others keep their existing name.
 devices:
   .1.3.6.1.4.1.248.11.2.1.1.1: ees20-0600
   .1.3.6.1.4.1.248.11.2.1.1.2: ees25-0600
@@ -178,8 +180,8 @@ devices:
   .1.3.6.1.4.1.248.11.2.1.11.122: os3-44-160016002400
   .1.3.6.1.4.1.248.11.2.1.11.123: os3-44-240024002400
   .1.3.6.1.4.1.248.11.2.1.11.200: octopus-8tx-eec-m
-  .1.3.6.1.4.1.248.11.2.1.12.1: red25-04002t1tt
-  .1.3.6.1.4.1.248.11.2.1.12.2: red25-04002z6tt
+  .1.3.6.1.4.1.248.11.2.1.12.1: RED25-04002T1TT
+  .1.3.6.1.4.1.248.11.2.1.12.2: RED25-04002Z6TT
   .1.3.6.1.4.1.248.11.2.1.13.1: raildatadiodeinput
   .1.3.6.1.4.1.248.11.2.1.13.2: raildatadiodeoutput
   .1.3.6.1.4.1.248.11.2.1.14.1: dragon-00484
@@ -280,4 +282,4 @@ devices:
   .1.3.6.1.4.1.248.11.2.2.99.4: m1-8sfp
   .1.3.6.1.4.1.248.40.1.1.1: owl-3g
   .1.3.6.1.4.1.248.40.1.1.2: owl-LTE
-  .1.3.6.1.4.1.248.40.1.1.3: owl-LTE-M12
+  .1.3.6.1.4.1.248.40.1.1.3: OWL LTE M12
