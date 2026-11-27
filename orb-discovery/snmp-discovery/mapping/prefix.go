@@ -18,10 +18,12 @@ import (
 //
 // Host prefixes (/32, /128) and IPv6 link-locals (fe80::/10) are skipped:
 // the former only restates an address that is already emitted as an
-// IPAddress, and the latter is per-link and not globally meaningful. The
-// IPAddress entities themselves are untouched, so the addresses stay
-// documented — only the derived Prefix is dropped. Host prefixes can be
-// opted back in with emit_host_prefixes; link-locals cannot, by design.
+// IPAddress, and the latter is per-link and not globally meaningful. A host
+// address's IPAddress entity is untouched, so it stays documented — only the
+// derived Prefix is dropped. An IPv6 link-local reaches this pass only with
+// emit_ipv6_link_local_addresses, as the IP address mapper drops it
+// otherwise. Host prefixes can be opted back in with emit_host_prefixes;
+// link-local prefixes cannot, by design.
 //
 // The prefix VRF follows device-discovery's precedence: an IP whose
 // address was attached to a DISCOVERED VRF (vrfByAddress, produced by

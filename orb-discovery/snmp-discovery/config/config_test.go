@@ -461,6 +461,12 @@ func TestTargetNetboxID_optional(t *testing.T) {
 	assert.Nil(t, target.NetboxID)
 }
 
+func TestOptions_EmitIPv6LinkLocalAddresses_Parsed(t *testing.T) {
+	var opts Options
+	require.NoError(t, yaml.Unmarshal([]byte(`emit_ipv6_link_local_addresses: true`), &opts))
+	assert.True(t, opts.IPv6LinkLocalAddressEmissionEnabled())
+}
+
 func TestAuthentication_ContextName_ParsesFromScopeAndTarget(t *testing.T) {
 	input := `
 targets:
