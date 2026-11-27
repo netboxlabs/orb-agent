@@ -2,6 +2,7 @@ package mapping
 
 import (
 	"net"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strings"
@@ -76,10 +77,12 @@ func parseIPAddressPath(path, ifaceListPath string) (iface, index, family, ip, l
 // isIPv6LinkLocal reports whether the address of cidr is in fe80::/10. It is
 // judged on the address, so a mask wider than /10 does not change it, and an
 // IPv4 link-local (169.254.0.0/16), written as IPv4 or IPv4-mapped, is not
-// one.
+// one. netip rather than net parses it, because an OpenConfig ipv6-address
+// may carry a zone (fe80::1%Ethernet1).
 func isIPv6LinkLocal(cidr string) bool {
-	ip, _, err := net.ParseCIDR(cidr)
-	return err == nil && ip.To4() == nil && ip.IsLinkLocalUnicast()
+	addr, _, _ := strings.Cut(cidr, "/")
+	a, err := netip.ParseAddr(addr)
+	return err == nil && a.Is6() && !a.Is4In6() && a.IsLinkLocalUnicast()
 }
 
 // translateIPs emits an IPAddress per (interface, subinterface index, family, ip)

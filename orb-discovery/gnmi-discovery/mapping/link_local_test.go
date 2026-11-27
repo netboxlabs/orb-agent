@@ -91,19 +91,53 @@ func TestTranslateWithOptions_NoIPv6LinkLocalPrefix(t *testing.T) {
 	}
 }
 
+// With emit_ip_addresses off no address is sent, link-local or not, and the
+// rest of the run is as with addresses off alone.
+func TestTranslateWithOptions_EmitIPAddressesOffOverridesTheLinkLocalOptIn(t *testing.T) {
+	on, off := true, false
+	ents, addrs, prefixes, names := translatedIPs(t, &config.Options{EmitIPAddresses: &off, EmitIPv6LinkLocalAddresses: &on})
+	assert.Empty(t, addrs)
+	assert.Contains(t, names, "Ethernet1.20")
+	assert.ElementsMatch(t, []string{"2001:db8::/64", "fe7f:ffff::/64", "fec0::/64", "169.254.0.0/16"}, prefixes)
+	assert.Nil(t, AssignPrimaryIP(ents, "2001:db8::1"))
+}
+
+// The OpenConfig ipv6-address type allows a zone, which a link-local can carry.
+func TestTranslateWithOptions_ZonedIPv6LinkLocalNotSent(t *testing.T) {
+	store, err := LoadProfiles("")
+	require.NoError(t, err)
+	base, ok := store.Get("_base")
+	require.True(t, ok)
+	snap := map[string]any{
+		"/system/state/hostname": "r1",
+		"/interfaces/interface[name=Ethernet1]/subinterfaces/subinterface[index=0]/ipv6/addresses/address[ip=fe80::1%Ethernet1]/state/prefix-length": 64,
+		"/interfaces/interface[name=Ethernet1]/subinterfaces/subinterface[index=0]/ipv6/addresses/address[ip=2001:db8::1]/state/prefix-length":       64,
+	}
+	var addrs []string
+	for _, e := range TranslateWithOptions(base, snap, &config.Defaults{}, "", nil, nil, nil) {
+		if ip, ok := e.(*diode.IPAddress); ok {
+			addrs = append(addrs, ip.GetAddress())
+		}
+	}
+	assert.Equal(t, []string{"2001:db8::1/64"}, addrs)
+}
+
 // Judged on the address: a mask wider than /10 moves the network out of
 // fe80::/10 but not the address.
 func TestIsIPv6LinkLocal(t *testing.T) {
 	for cidr, want := range map[string]bool{
-		"fe80::1/64":              true,
-		"fe80::1/8":               true,
-		"febf:ffff::1/64":         true,
-		"fe7f:ffff::1/64":         false,
-		"fec0::1/64":              false,
-		"169.254.10.5/16":         false,
-		"::ffff:169.254.10.5/128": false,
-		"2001:db8::1/64":          false,
-		"not-an-address":          false,
+		"fe80::1/64":               true,
+		"fe80::1/8":                true,
+		"febf:ffff::1/64":          true,
+		"FE80::1/64":               true,
+		"fe80::1%Ethernet1/64":     true,
+		"fe7f:ffff::1/64":          false,
+		"fec0::1/64":               false,
+		"169.254.10.5/16":          false,
+		"::ffff:169.254.10.5/128":  false,
+		"2001:db8::1/64":           false,
+		"2001:db8::1%Ethernet1/64": false,
+		"not-an-address":           false,
 	} {
 		assert.Equal(t, want, isIPv6LinkLocal(cidr), cidr)
 	}

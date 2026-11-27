@@ -435,8 +435,8 @@ type Options struct {
 	// ethernet/state/aggregate-id. nil → on (default), as in snmp-discovery.
 	EmitLagMembership *bool `yaml:"emit_lag_membership,omitempty"`
 
-	// EmitPrefixes derives a Prefix from each discovered IP address. nil → on
-	// (default), as in snmp-discovery.
+	// EmitPrefixes derives a Prefix from each discovered IP address except an
+	// IPv6 link-local. nil → on (default), as in snmp-discovery.
 	EmitPrefixes *bool `yaml:"emit_prefixes,omitempty"`
 
 	// EmitIPAddresses sends the discovered IP addresses. nil → on (default).

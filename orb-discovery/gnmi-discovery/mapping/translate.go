@@ -276,7 +276,13 @@ func TranslateWithOptions(profile *Profile, snap map[string]any, defaults *confi
 		// Only unique on its own link, while Diode matches an IP address by
 		// address and VRF.
 		entities = withoutIPAddresses(entities, func(ip *diode.IPAddress) bool {
-			return isIPv6LinkLocal(ip.GetAddress())
+			if !isIPv6LinkLocal(ip.GetAddress()) {
+				return false
+			}
+			if logger != nil {
+				logger.Debug("not sending the IPv6 link-local address", "address", ip.GetAddress())
+			}
+			return true
 		})
 	}
 	return entities
