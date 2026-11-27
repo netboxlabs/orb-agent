@@ -555,7 +555,8 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 	vlanMapper := NewVlanMapper(logger, options)
 	entityMappers := map[string]orbToEntityMapper{
 		"ipAddress": &IPAddressMapper{
-			logger: logger,
+			logger:            logger,
+			emitIPv6LinkLocal: options.IPv6LinkLocalAddressEmissionEnabled(),
 		},
 		"interface": interfaceMapper,
 		"device": &DeviceMapper{

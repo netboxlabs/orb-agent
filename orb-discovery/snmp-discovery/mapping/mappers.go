@@ -46,6 +46,10 @@ type IPAddressMapper struct {
 	// discovered IP address, so without rate-limiting a misconfigured
 	// policy would flood the logs with one identical line per row.
 	vrfMisconfigWarnOnce sync.Once
+	// emitIPv6LinkLocal is emit_ipv6_link_local_addresses. While false, an
+	// IPv6 link-local address is dropped like any other row that is not
+	// sent.
+	emitIPv6LinkLocal bool
 }
 
 // NewIPAddressMapper creates a new IPAddressMapper
@@ -522,6 +526,14 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 		}
 	}
 
+	// An IPv6 link-local address is only unique on its own link, while Diode
+	// matches an IP address by address and VRF, so it is sent only when the
+	// policy opts in.
+	if ipAddress.Address != nil && !m.emitIPv6LinkLocal && isIPv6LinkLocal(*ipAddress.Address) {
+		m.logger.Debug("dropping IPv6 link-local address", "address", *ipAddress.Address)
+		return nil
+	}
+
 	// 0.0.0.0/8 is reserved as "this network" (RFC 1122, RFC 6890) and is
 	// not a usable interface address, but some agents publish one, such as
 	// a VLAN interface's ifIndex written as IPv4 (100000 is 0.1.134.160).
@@ -818,6 +830,15 @@ var thisNetwork = &net.IPNet{IP: net.IPv4zero.To4(), Mask: net.CIDRMask(8, 32)}
 func inThisNetwork(cidr string) bool {
 	ip, _, err := net.ParseCIDR(cidr)
 	return err == nil && thisNetwork.Contains(ip)
+}
+
+// isIPv6LinkLocal reports whether the address of cidr is in fe80::/10. It is
+// judged on the address, so a mask wider than /10 does not change it, and an
+// IPv4 link-local (169.254.0.0/16), written as IPv4 or IPv4-mapped, is not
+// one.
+func isIPv6LinkLocal(cidr string) bool {
+	ip, _, err := net.ParseCIDR(cidr)
+	return err == nil && ip.To4() == nil && ip.IsLinkLocalUnicast()
 }
 
 // ValidateIPCIDR validates an IPv4 or IPv6 address in CIDR notation

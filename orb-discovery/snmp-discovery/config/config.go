@@ -751,6 +751,13 @@ type Options struct {
 	// option does not affect them.
 	EmitHostPrefixes *bool `yaml:"emit_host_prefixes,omitempty"`
 
+	// Tri-state pointer; unset defaults to FALSE: an IPv6 link-local
+	// address (fe80::/10) is not sent, because it is only unique on its own
+	// link while Diode matches an IP address by address and VRF. Set true to
+	// send them. No prefix is derived from them either way, and
+	// emit_ip_addresses false still sends no address.
+	EmitIPv6LinkLocalAddresses *bool `yaml:"emit_ipv6_link_local_addresses,omitempty"`
+
 	// Tri-state pointer; unset defaults to TRUE — link-aggregation
 	// membership is read from IEEE8023-LAG-MIB dot3adAggPortTable and each
 	// member port's Interface.lag is set to its aggregate interface. Set
@@ -809,6 +816,12 @@ func (o *Options) IPAddressEmissionEnabled() bool {
 // as an IPAddress entity (unless emit_ip_addresses is false).
 func (o *Options) HostPrefixEmissionEnabled() bool {
 	return o != nil && o.EmitHostPrefixes != nil && *o.EmitHostPrefixes
+}
+
+// IPv6LinkLocalAddressEmissionEnabled returns the effective
+// emit_ipv6_link_local_addresses toggle, defaulting to FALSE.
+func (o *Options) IPv6LinkLocalAddressEmissionEnabled() bool {
+	return o != nil && o.EmitIPv6LinkLocalAddresses != nil && *o.EmitIPv6LinkLocalAddresses
 }
 
 // LagMembershipEnabled returns the effective emit_lag_membership toggle,
