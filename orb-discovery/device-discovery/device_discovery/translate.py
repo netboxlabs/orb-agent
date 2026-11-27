@@ -801,11 +801,12 @@ def _platform(name: str | None, manufacturer: str | None, defaults: Defaults) ->
     """
     Build the device's Platform, under ``defaults.device.platform_parent`` when set.
 
-    The parent gets the device's manufacturer too (NetBox platform names are unique
-    per manufacturer). A parent with the platform's own name is ignored.
+    The parent gets the device's manufacturer too (NetBox platform names and slugs
+    are unique per manufacturer). A parent with the platform's own slug (``IOS``
+    for the platform ``ios``) is ignored: it would be the platform itself.
     """
     parent_name = defaults.device.platform_parent if defaults.device else None
-    if not parent_name or parent_name == name:
+    if not parent_name or slug(parent_name) == slug(name or ""):
         return Platform(name=name, manufacturer=manufacturer)
     return Platform(
         name=name,

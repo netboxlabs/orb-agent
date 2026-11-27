@@ -12,6 +12,8 @@ and cannot raise at render time.
 
 import re
 
+from device_discovery.slug import slug
+
 _PLACEHOLDER = "{os_version}"
 _PLACEHOLDER_RE = re.compile(r"\{([^{}]*)\}")
 
@@ -29,7 +31,8 @@ def platform_template_problem(template: str) -> str | None:
     (including attribute access / format specs); a missing ``{os_version}``
     (without it the template is a fixed name, which ``defaults.device.platform``
     covers); stray or unbalanced braces; and a template that is nothing but
-    ``{os_version}``. NetBox identifies a platform by its name (or slug)
+    ``{os_version}`` or whose other text vanishes from the slug (``--- {os_version}``,
+    an OS name without ASCII letters or digits). NetBox identifies a platform by its name and by its slug
     within its manufacturer, not by its parent, so a bare release such as
     ``9.4.0.0`` discovered from two OS families of one manufacturer would be a
     single platform whose parent follows whichever policy ran last.
@@ -47,6 +50,6 @@ def platform_template_problem(template: str) -> str | None:
     residual = template.replace(_PLACEHOLDER, "")
     if "{" in residual or "}" in residual:
         return "template has stray or unbalanced braces"
-    if not residual.strip():
-        return "template must include text besides {os_version}, e.g. the OS name"
+    if not slug(residual):
+        return "template must include text besides {os_version} that is kept in a slug (ASCII letters or digits), e.g. the OS name"
     return None

@@ -807,6 +807,9 @@ def test_platform_name_template_missing_os_version(sample_device_info, sample_de
         # nothing but {os_version}: one platform for releases of different OS families
         ("{os_version}", "text besides {os_version}"),
         ("  {os_version} ", "text besides {os_version}"),
+        # other text that vanishes from the slug: the slug is only the version
+        ("--- {os_version}", "text besides {os_version}"),
+        ("网络 {os_version}", "text besides {os_version}"),
         ("{driver} {os_version}", "unknown placeholder {driver}"),
         ("{DRIVER} {os_version}", "unknown placeholder {DRIVER}"),
         ("{version}", "unknown placeholder {version}"),
@@ -828,6 +831,12 @@ def test_platform_name_template_rejected_at_load(bad, reason):
     assert reason in str(exc.value)
 
 
+@pytest.mark.parametrize("template", ["Fabric Engine {os_version}", "网络 OS {os_version}", "_{os_version}x"])
+def test_platform_name_template_accepted(template):
+    """Other text with ASCII letters or digits in its slug is enough."""
+    assert DeviceParameters(platform_name_template=template).platform_name_template == template
+
+
 def test_render_platform_name_inserts_values_as_they_are():
     """Braces inside the os_version are not interpreted."""
     from device_discovery.platform_naming import render_platform_name
@@ -846,6 +855,17 @@ def test_platform_parent(sample_device_info, sample_defaults):
     assert platform.parent.name == "IOS"
     assert platform.parent.manufacturer.name == "Cisco"
     assert not platform.parent.HasField("parent")
+
+
+@pytest.mark.parametrize("parent", ["IOS", "ios", " IOS ", "Ios."])
+def test_platform_parent_same_slug_as_platform(sample_device_info, sample_defaults, parent):
+    """A parent with the platform's slug is the platform itself: no parent is sent."""
+    sample_defaults.device.platform_parent = parent
+    data = _platform_data(sample_device_info, sample_defaults)
+    data["options"] = Options(platform_omit_version=True)
+    entities = list(translate_data(data))
+    assert entities[0].device.platform.name == "ios"
+    assert not entities[0].device.platform.HasField("parent")
 
 
 def test_platform_parent_unset_or_same_name(sample_device_info, sample_defaults):
