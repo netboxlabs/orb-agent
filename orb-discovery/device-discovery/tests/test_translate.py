@@ -746,6 +746,85 @@ def test_translate_data_handles_missing_os_version(sample_device_info, sample_de
     assert entities[0].device.platform.name == "IOS"
 
 
+def _platform_data(device_info, defaults, driver="ios"):
+    return {
+        "device": device_info.copy(),
+        "interface": {},
+        "interface_ip": {},
+        "driver": driver,
+        "defaults": defaults,
+    }
+
+
+def test_platform_format(sample_device_info, sample_defaults):
+    """platform_format names the platform; the default keeps "<DRIVER> <os_version>"."""
+    sample_defaults.device.platform_format = "{os_version}"
+    entities = list(translate_data(_platform_data(sample_device_info, sample_defaults)))
+    assert entities[0].device.platform.name == "v15.2"
+
+    sample_defaults.device.platform_format = "Cisco {DRIVER} ({driver}) {os_version}"
+    entities = list(translate_data(_platform_data(sample_device_info, sample_defaults)))
+    assert entities[0].device.platform.name == "Cisco IOS (ios) v15.2"
+
+    sample_defaults.device.platform_format = None
+    entities = list(translate_data(_platform_data(sample_device_info, sample_defaults)))
+    assert entities[0].device.platform.name == "IOS v15.2"
+
+
+def test_platform_format_precedence(sample_device_info, sample_defaults):
+    """A fixed platform wins over platform_format; platform_omit_version still applies."""
+    sample_defaults.device.platform_format = "{os_version}"
+    sample_defaults.device.platform = "custom"
+    entities = list(translate_data(_platform_data(sample_device_info, sample_defaults)))
+    assert entities[0].device.platform.name == "custom"
+
+    sample_defaults.device.platform = None
+    data = _platform_data(sample_device_info, sample_defaults)
+    data["options"] = Options(platform_omit_version=True)
+    entities = list(translate_data(data))
+    assert entities[0].device.platform.name == "ios"
+
+
+def test_platform_format_truncated(sample_device_info, sample_defaults):
+    """A formatted platform longer than 100 characters is truncated like the default."""
+    sample_defaults.device.platform_format = "{os_version}"
+    device_info = {**sample_device_info, "os_version": "v" * 150}
+    entities = list(translate_data(_platform_data(device_info, sample_defaults)))
+    assert entities[0].device.platform.name == "v" * 100
+
+
+@pytest.mark.parametrize("bad", ["{version}", "{0}", "{os_version", "{driver.upper}x{"])
+def test_platform_format_rejects_unknown_placeholders(bad):
+    """An unknown placeholder is a policy error, not a failure during discovery."""
+    with pytest.raises(ValueError, match="platform_format"):
+        DeviceParameters(platform_format=bad)
+
+
+def test_platform_parent(sample_device_info, sample_defaults):
+    """platform_parent puts the platform under a parent with the device's manufacturer."""
+    sample_defaults.device.platform_format = "{os_version}"
+    sample_defaults.device.platform_parent = "IOS"
+    entities = list(translate_data(_platform_data(sample_device_info, sample_defaults)))
+    platform = entities[0].device.platform
+    assert platform.name == "v15.2"
+    assert platform.manufacturer.name == "Cisco"
+    assert platform.parent.name == "IOS"
+    assert platform.parent.manufacturer.name == "Cisco"
+    assert not platform.parent.HasField("parent")
+
+
+def test_platform_parent_unset_or_same_name(sample_device_info, sample_defaults):
+    """No parent without platform_parent, nor when it equals the platform's name."""
+    entities = list(translate_data(_platform_data(sample_device_info, sample_defaults)))
+    assert not entities[0].device.platform.HasField("parent")
+
+    sample_defaults.device.platform = "IOS"
+    sample_defaults.device.platform_parent = "IOS"
+    entities = list(translate_data(_platform_data(sample_device_info, sample_defaults)))
+    assert entities[0].device.platform.name == "IOS"
+    assert not entities[0].device.platform.HasField("parent")
+
+
 def test_translate_data_creates_missing_interface(sample_device_info, sample_defaults):
     """Ensure translate_data creates interfaces referenced only by IP data."""
     interfaces = {

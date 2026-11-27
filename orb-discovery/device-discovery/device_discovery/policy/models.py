@@ -91,7 +91,33 @@ class DeviceParameters(ObjectParameters):
     platform: str | None = Field(
         default=None, description="Device platform override, optional"
     )
+    platform_parent: str | None = Field(
+        default=None,
+        description="Parent platform of the device platform (NetBox platform hierarchy), optional",
+    )
+    platform_format: str | None = Field(
+        default=None,
+        description=(
+            "Name format of the discovered platform with {driver}, {DRIVER} and "
+            '{os_version}, optional (default "{DRIVER} {os_version}")'
+        ),
+    )
     asset_tag: str | None = Field(default=None, description="Asset tag, optional")
+
+    @field_validator("platform_format")
+    @classmethod
+    def validate_platform_format(cls, value: str | None) -> str | None:
+        """Reject a format with placeholders other than driver, DRIVER and os_version."""
+        if value is None:
+            return value
+        try:
+            value.format(driver="", DRIVER="", os_version="")
+        except (KeyError, IndexError, ValueError) as exc:
+            raise ValueError(
+                f"platform_format {value!r} is invalid ({exc!r}); "
+                "use {driver}, {DRIVER} and {os_version}"
+            ) from exc
+        return value
 
 
 class TenantParameters(ObjectParameters):

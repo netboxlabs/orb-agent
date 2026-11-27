@@ -210,6 +210,8 @@ Current supported defaults:
 | ├─ model | str  | Device type model (overrides the model automatically retrieved from NAPALM)   |
 | ├─ manufacturer | str  | Device manufacturer (overrides the vendor automatically retrieved from NAPALM) |
 | ├─ platform | str  | Device platform (overrides the defined/discovered NAPALM driver name and OS version) |
+| ├─ platform_format | str  | Name format of the discovered platform: `{driver}`, `{DRIVER}` (upper case) and `{os_version}`, default `"{DRIVER} {os_version}"`. Ignored when `platform` is set or `platform_omit_version` is true |
+| ├─ platform_parent | str  | Parent of the device's platform (NetBox platform hierarchy, NetBox 4.3+), created with the device's manufacturer if missing, e.g. `Cisco IOS` with `platform_format: "{os_version}"` |
 | ├─ description | str  | Device description           |
 | ├─ comments   | str  | Device comments               |
 | ├─ tags       | list | Device tags                   |
@@ -639,7 +641,7 @@ The tables below show which fields are populated automatically from the device v
 | Name | `get_facts()` → `hostname` | Auto-collected |
 | Model | `get_facts()` → `model` | Auto-collected; overridable via `defaults.device.model` |
 | Manufacturer | `get_facts()` → `vendor` | Auto-collected; overridable via `defaults.device.manufacturer` |
-| Platform | `get_facts()` → `os_version` + driver name | Format: `"<DRIVER> <os_version>"`. Overridable via `defaults.device.platform`. Use `platform_omit_version: true` to use only the driver name |
+| Platform | `get_facts()` → `os_version` + driver name | Format: `"<DRIVER> <os_version>"`, or `defaults.device.platform_format`. Overridable via `defaults.device.platform`. Use `platform_omit_version: true` to use only the driver name. `defaults.device.platform_parent` puts it under a parent platform |
 | Serial number | `get_facts()` → `serial_number` | Auto-collected |
 | Status | — | Always set to `"active"` |
 | Site | **Not collected** | Must be set via `defaults.site` |
