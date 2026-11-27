@@ -1,0 +1,10 @@
+Switch          : 800614-00-20 1234G-00001 Rev 20 BootROM: 1.0.1.8    IMG: 31.7.1.4  
+PSU-1       : Internal Power Supply  
+PSU-2       :
+
+Image   : ExtremeXOS version 31.7.1.4 31.7.1.4-patch1-56 by release-manager
+          on Mon Sep 19 09:30:16 EDT 2022
+BootROM : Default 1.0.1.8  Alternate 1.0.1.8
+Diagnostics : 5.13
+Certified Version : EXOS Linux 4.14.253, Extreme Networks FIPS Object Module 2.0.16m
+Build Tools Version : exos-mips-sdk-3.1.10.1.0

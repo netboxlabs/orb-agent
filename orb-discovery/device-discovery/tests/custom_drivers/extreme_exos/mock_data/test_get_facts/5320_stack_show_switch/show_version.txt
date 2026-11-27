@@ -1,0 +1,15 @@
+Slot-1          : 801106-00-AD TB0000000-00001 Rev AD BootROM: 3.4.2.11   IMG: 32.7.1.9  
+Slot-2          : 801106-00-AL TB0000000-00002 Rev AL BootROM: 3.4.2.11   IMG: 32.7.1.9  
+Slot-3          : 801106-00-AL TB0000000-00003 Rev AL BootROM: 3.4.2.11   IMG: 32.7.1.9  
+Slot-4          :
+Slot-5          :
+Slot-6          :
+Slot-7          :
+Slot-8          :
+
+Image   : Extreme Networks Switch Engine version 32.7.1.9 32.7.1.9-patch1-68 by release-manager
+          on Tue Nov 19 18:18:54 EST 2024
+BootROM : Default 3.4.2.11  Alternate 3.4.2.11
+Diagnostics : 3.0.1.17
+Certified Version : EXOS Linux 5.10.177, Extreme Networks FIPS Object Module 2.0.16a
+Build Tools Version : exos-arm64-sdk-3.1.19.1.0

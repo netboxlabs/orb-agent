@@ -1,0 +1,7 @@
+Switch          : 801122-00-AF SM0000000-00001 Rev AF BootROM: N/A        IMG: 33.1.1.31       
+
+Image   : Extreme Networks Switch Engine version 33.1.1.31 by release-manager
+          on Wed 11 Sep 2024 07:54:17 PM UTC
+Diagnostics : 1.1.5.0
+Certified Version : EXOS Linux 5.10.177, Extreme Networks FIPS Object Module 2.0.16i
+Build Tools Version : exos-x86_64-sdk-3.1.19.1.0

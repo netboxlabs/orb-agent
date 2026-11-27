@@ -1,0 +1,38 @@
+
+SysName:          exos-core-02
+SysLocation:      
+SysContact:       https://www.extremenetworks.com/support/
+System MAC:       00:04:96:00:00:31
+System Type:      7520-48Y-8C-SwitchEngine
+
+SysHealth check:  Enabled (Normal)
+Recovery Mode:    All
+System Watchdog:  Enabled
+Trusted Delivery: Boot Image Verified
+
+Current Time:     Wed Nov 25 16:34:23 2026
+Timezone:         [Auto DST Enabled] GMT Offset: -360 minutes, name is not set.
+                  DST of 60 minutes is currently not in effect, name is not set.
+                  DST begins every second Sunday March at 2:00
+                  DST ends every first Sunday November at 2:00
+
+Boot Time:        Wed Mar 12 16:26:22 2025
+Boot Count:       2
+Next Reboot:      None scheduled
+System UpTime:    623 days 1 hour 8 minutes 
+
+Current State:    OPERATIONAL             
+Image Selected:   secondary               
+Image Booted:     secondary               
+Primary ver:      32.6.3.127              
+Secondary ver:    33.1.1.31   
+
+Config Selected:  primary.cfg                                          
+Config Booted:    primary.cfg                                          
+Config Automatic: NONE (Disabled)
+
+primary.cfg       Created by Extreme Networks Switch Engine version 33.1.1.31
+                  933971 bytes saved on Wed Nov 11 08:46:10 2026
+
+
+LAA MAC:          Locally Administered MAC Address Disabled

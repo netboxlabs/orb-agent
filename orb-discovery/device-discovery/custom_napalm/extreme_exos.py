@@ -216,6 +216,74 @@ _WEEK_SECONDS = 7 * _DAY_SECONDS
 _YEAR_SECONDS = 365 * _DAY_SECONDS
 
 
+# ``Switch : 800614-00-20 1234G-00001 Rev 20 BootROM: ...`` -> group(1) = "1234G-00001".
+# The token after the part number is the unit serial; ``Rev`` would mean it is absent.
+# The part number's last group is its revision, which can carry letters
+# (``801106-00-AD`` on a 5320), so it is matched as ``\w+``.
+_EXOS_SWITCH_LINE_SERIAL_RE = re.compile(
+    r"^Switch\s*:\s*\d{6}-\d{2}-\w+\s+(?!Rev\b)(\S+)", re.M
+)
+
+
+# A stack member's line in ``show version``: ``Slot-1 : 800618-00-04 ...``.
+_EXOS_SLOT_LINE_RE = re.compile(r"^Slot-\d+\s*:\s*\S", re.M)
+
+
+def _parse_version_serial(text: str) -> str | None:
+    r"""
+    Return the unit serial from EXOS ``show version`` output, or ``None``.
+
+    Prefer the dedicated ``SysSerial`` field. Real EXOS ``show version`` (e.g.
+    X440-G2 on 31.7) has no ``SysSerial``; its ``Switch`` line is
+    ``Switch : <part-number> <serial> Rev <n> ...``, so the token after the part
+    number is the unit serial. The ``\d{6}-\d{2}-\d+`` part number itself is
+    shared across all units of the same model and is kept only as a last resort
+    for output that carries neither.
+
+    A stack's ``show version`` has a ``Slot-<n> : <part-number> <serial> ...``
+    line per member and no ``Switch`` line, so it has no single unit serial:
+    ``None`` is returned rather than a member's part number.
+    """
+    if _EXOS_SLOT_LINE_RE.search(text):
+        m = re.search(r"^SysSerial\s*:\s*(\S+)", text, re.M)
+        return m.group(1) if m else None
+    for pattern in (
+        re.compile(r"^SysSerial\s*:\s*(\S+)", re.M),
+        _EXOS_SWITCH_LINE_SERIAL_RE,
+        re.compile(r"\((\d{6}-\d{2}-\d+)\)"),
+        re.compile(r"\b(\d{6}-\d{2}-\d+)\b"),
+    ):
+        m = pattern.search(text)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _parse_show_switch(text: str) -> dict:
+    """
+    Extract hostname, model and uptime from EXOS ``show switch`` output.
+
+    Real EXOS prints ``SysName``, ``System Type`` and ``System UpTime`` here,
+    not in ``show version``. Returns only the keys that were found, so the
+    caller can keep its ``show version`` fallbacks for the rest.
+    """
+    facts: dict = {}
+    if not text:
+        return facts
+    m = re.search(r"^SysName\s*:\s*(\S+)", text, re.M)
+    if m:
+        facts["hostname"] = m.group(1)
+    m = re.search(r"^System Type\s*:\s*(.+?)\s*$", text, re.M)
+    if m:
+        facts["model"] = m.group(1)
+    m = re.search(r"^System UpTime\s*:\s*(.+?)\s*$", text, re.M)
+    if m:
+        uptime = _parse_uptime(m.group(1))
+        if uptime >= 0:
+            facts["uptime"] = uptime
+    return facts
+
+
 def _parse_uptime(uptime_str: str) -> float:
     """Convert an EXOS uptime string like '3 days 4 hours 22 minutes' to seconds."""
     seconds = 0.0
@@ -473,22 +541,20 @@ class ExosDriver(_napalm_base.NetworkDriver):
             if m:
                 os_version = m.group(1)
 
-            # Prefer the dedicated SysSerial field, which holds the unique device serial.
-            # The \d{6}-\d{2}-\d+ pattern in the Switch line is the hardware part number
-            # (shared across all units of the same model) and should not be used as a
-            # serial; it is kept as a last resort for output that lacks SysSerial.
-            m = re.search(r"^SysSerial\s*:\s*(\S+)", ver_output, re.M)
-            if not m:
-                m = re.search(r"\((\d{6}-\d{2}-\d+)\)", ver_output)
-            if not m:
-                m = re.search(r"\b(\d{6}-\d{2}-\d+)\b", ver_output)
-            if m:
-                serial_number = m.group(1)
+            serial_number = _parse_version_serial(ver_output) or serial_number
 
             # Uptime: "Up 3 days 4 hours 22 minutes ago"
             m = re.search(r"\bUp\s+(.*?)\s+ago\b", ver_output)
             if m:
                 uptime = _parse_uptime(m.group(1))
+
+        # Real EXOS prints SysName, System Type and System UpTime in ``show switch``,
+        # not ``show version``. Values found there take precedence; the ``show version``
+        # matches above remain as a fallback for output that carries them inline.
+        switch_facts = _parse_show_switch(self.device.send_command("show switch"))
+        hostname = switch_facts.get("hostname", hostname)
+        model = switch_facts.get("model", model)
+        uptime = switch_facts.get("uptime", uptime)
 
         # Fetch interface list separately; this command succeeds even when
         # `show version` returns nothing (e.g. on devices where the template
