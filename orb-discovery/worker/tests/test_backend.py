@@ -2,6 +2,7 @@
 # Copyright 2025 NetBox Labs Inc
 """NetBox Labs - Backend Unit Tests."""
 
+import sys
 import warnings
 from unittest.mock import MagicMock, patch
 
@@ -59,6 +60,91 @@ def test_load_class_valid_backend_class(mock_import_module):
     result = load_class(mock_module_name)
     assert result == MockBackend
     mock_import_module.assert_called_once_with(mock_module_name)
+
+
+@pytest.fixture
+def worker_module(tmp_path, monkeypatch):
+    """Write a single-file worker module onto sys.path; drop it from sys.modules after."""
+    names = []
+
+    def write(name, source):
+        (tmp_path / f"{name}.py").write_text(source)
+        names.append(name)
+        return name
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    yield write
+    for name in names:
+        sys.modules.pop(name, None)
+
+
+_DESCRIBE = (
+    "    @classmethod\n"
+    "    def describe(cls):\n"
+    "        return Metadata(name=cls.__name__, app_name='w', app_version='0.0.1')\n"
+)
+
+
+def test_load_class_skips_the_imported_base_class(worker_module):
+    """A module that imports Backend by name loads its own subclass, not Backend."""
+    name = worker_module(
+        "single_file_worker",
+        "from worker.backend import Backend\n"
+        "from worker.models import Metadata\n"
+        "\n"
+        "\n"
+        "class SingleFileBackend(Backend):\n" + _DESCRIBE,
+    )
+
+    assert load_class(name).__name__ == "SingleFileBackend"
+
+
+def test_load_class_prefers_the_most_derived_class(worker_module):
+    """A worker built on its own base class loads the subclass, not the base."""
+    name = worker_module(
+        "layered_worker",
+        "from worker.backend import Backend\n"
+        "from worker.models import Metadata\n"
+        "\n"
+        "\n"
+        "class BaseCollector(Backend):\n"
+        "    pass\n"
+        "\n"
+        "\n"
+        "class SwitchCollector(BaseCollector):\n" + _DESCRIBE,
+    )
+
+    assert load_class(name).__name__ == "SwitchCollector"
+
+
+def test_load_class_prefers_a_subclass_of_an_imported_worker(worker_module):
+    """A worker that extends another worker's class loads its own class."""
+    worker_module(
+        "upstream_worker",
+        "from worker.backend import Backend\n"
+        "from worker.models import Metadata\n"
+        "\n"
+        "\n"
+        "class AlphaBackend(Backend):\n" + _DESCRIBE,
+    )
+    name = worker_module(
+        "tweaked_worker",
+        "from upstream_worker import AlphaBackend\n"
+        "\n"
+        "\n"
+        "class TweakedBackend(AlphaBackend):\n"
+        "    pass\n",
+    )
+
+    assert load_class(name).__name__ == "TweakedBackend"
+
+
+def test_load_class_base_class_alone_is_not_a_backend(worker_module):
+    """A module whose only Backend is the imported base class has no backend."""
+    name = worker_module("base_only_worker", "from worker.backend import Backend\n")
+
+    with pytest.raises(RuntimeError, match="No class inheriting 'Backend'"):
+        load_class(name)
 
 
 def test_load_class_no_backend_class(mock_import_module):
