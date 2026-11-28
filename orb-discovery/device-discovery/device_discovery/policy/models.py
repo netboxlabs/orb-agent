@@ -14,6 +14,7 @@ from typing import Any, Literal
 from croniter import CroniterBadCronError, croniter
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from device_discovery.platform_naming import platform_parent_problem, platform_template_problem
 from device_discovery.policy.portscan import (
     MAX_EXPANDED_HOSTS as _MAX_EXPANDED_HOSTS,
 )
@@ -91,7 +92,44 @@ class DeviceParameters(ObjectParameters):
     platform: str | None = Field(
         default=None, description="Device platform override, optional"
     )
+    platform_parent: str | None = Field(
+        default=None,
+        description=(
+            "Parent platform of the device platform (NetBox platform hierarchy), optional; "
+            "trimmed, must include ASCII letters or digits, at most 100 characters"
+        ),
+    )
+    platform_name_template: str | None = Field(
+        default=None,
+        description=(
+            "Template for the discovered platform name, optional. Placeholder: "
+            "{os_version}, required together with other text, e.g. "
+            "'Fabric Engine {os_version}'. Unset keeps '<DRIVER> <os_version>'."
+        ),
+    )
     asset_tag: str | None = Field(default=None, description="Asset tag, optional")
+
+    @field_validator("platform_parent")
+    @classmethod
+    def _validate_platform_parent(cls, v: str | None) -> str | None:
+        """Trim the parent platform name and refuse an unusable one when the policy is loaded."""
+        if v is None:
+            return v
+        parent = v.strip()
+        problem = platform_parent_problem(parent)
+        if problem is not None:
+            raise ValueError(f"platform_parent {v!r}: {problem}")
+        return parent
+
+    @field_validator("platform_name_template")
+    @classmethod
+    def _validate_platform_name_template(cls, v: str | None) -> str | None:
+        """Refuse an unusable template when the policy is loaded."""
+        if v is not None:
+            problem = platform_template_problem(v)
+            if problem is not None:
+                raise ValueError(f"platform_name_template {v!r}: {problem}")
+        return v
 
 
 class TenantParameters(ObjectParameters):

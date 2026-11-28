@@ -746,6 +746,179 @@ def test_translate_data_handles_missing_os_version(sample_device_info, sample_de
     assert entities[0].device.platform.name == "IOS"
 
 
+def _platform_data(device_info, defaults, driver="ios"):
+    return {
+        "device": device_info.copy(),
+        "interface": {},
+        "interface_ip": {},
+        "driver": driver,
+        "defaults": defaults,
+    }
+
+
+def test_platform_name_template(sample_device_info, sample_defaults):
+    """platform_name_template names the platform; unset keeps "<DRIVER> <os_version>"."""
+    sample_defaults.device.platform_name_template = "Cisco IOS {os_version}"
+    entities = list(translate_data(_platform_data(sample_device_info, sample_defaults)))
+    assert entities[0].device.platform.name == "Cisco IOS v15.2"
+
+    sample_defaults.device.platform_name_template = None
+    entities = list(translate_data(_platform_data(sample_device_info, sample_defaults)))
+    assert entities[0].device.platform.name == "IOS v15.2"
+
+
+def test_platform_name_template_precedence(sample_device_info, sample_defaults):
+    """A fixed platform wins over the template; platform_omit_version still applies."""
+    sample_defaults.device.platform_name_template = "Cisco IOS {os_version}"
+    sample_defaults.device.platform = "custom"
+    entities = list(translate_data(_platform_data(sample_device_info, sample_defaults)))
+    assert entities[0].device.platform.name == "custom"
+
+    sample_defaults.device.platform = None
+    data = _platform_data(sample_device_info, sample_defaults)
+    data["options"] = Options(platform_omit_version=True)
+    entities = list(translate_data(data))
+    assert entities[0].device.platform.name == "ios"
+
+
+def test_platform_name_template_truncated(sample_device_info, sample_defaults):
+    """A rendered platform longer than 100 characters is truncated like the default."""
+    sample_defaults.device.platform_name_template = "OS {os_version}"
+    device_info = {**sample_device_info, "os_version": "v" * 150}
+    entities = list(translate_data(_platform_data(device_info, sample_defaults)))
+    assert entities[0].device.platform.name == ("OS " + "v" * 150)[:100]
+
+
+def test_platform_name_template_missing_os_version(sample_device_info, sample_defaults):
+    """Without an os_version fact the template's text alone is the name."""
+    sample_defaults.device.platform_name_template = "Fabric Engine {os_version}"
+    device_info = {**sample_device_info, "os_version": None}
+    entities = list(translate_data(_platform_data(device_info, sample_defaults)))
+    assert entities[0].device.platform.name == "Fabric Engine"
+
+
+@pytest.mark.parametrize(
+    "bad, reason",
+    [
+        ("", "empty"),
+        ("   ", "empty"),
+        # no {os_version}: a fixed name, which defaults.device.platform covers
+        ("Fabric Engine", "must include the {os_version}"),
+        # nothing but {os_version}: one platform for releases of different OS families
+        ("{os_version}", "text besides {os_version}"),
+        ("  {os_version} ", "text besides {os_version}"),
+        # other text that vanishes from the slug: the slug is only the version
+        ("--- {os_version}", "text besides {os_version}"),
+        ("网络 {os_version}", "text besides {os_version}"),
+        ("{driver} {os_version}", "unknown placeholder {driver}"),
+        ("{DRIVER} {os_version}", "unknown placeholder {DRIVER}"),
+        ("{version}", "unknown placeholder {version}"),
+        ("OS {0}", "unknown placeholder {0}"),
+        ("OS {} {os_version}", "unknown placeholder {}"),
+        ("OS {os_version", "must include the {os_version}"),
+        ("OS {os_version}}", "stray or unbalanced braces"),
+        # attribute / item access, conversions and format specs (str.format injection)
+        ("OS {os_version.__class__}", "disallowed placeholder"),
+        ("OS {os_version[0]}", "disallowed placeholder"),
+        ("OS {os_version!r}", "disallowed placeholder"),
+        ("OS {os_version:>20}", "disallowed placeholder"),
+    ],
+)
+def test_platform_name_template_rejected_at_load(bad, reason):
+    """An unusable template is a policy error, not a failure during discovery."""
+    with pytest.raises(ValueError, match="platform_name_template") as exc:
+        DeviceParameters(platform_name_template=bad)
+    assert reason in str(exc.value)
+
+
+@pytest.mark.parametrize("template", ["Fabric Engine {os_version}", "{os_version} Fabric Engine"])
+def test_platform_name_template_long_os_version_keeps_text(sample_device_info, sample_defaults, template):
+    """A long os_version is shortened, not the template's text, so OS families stay apart."""
+    sample_defaults.device.platform_name_template = template
+    device_info = {**sample_device_info, "os_version": "9" * 150}
+    name = list(translate_data(_platform_data(device_info, sample_defaults)))[0].device.platform.name
+    assert len(name) == 100
+    assert "Fabric Engine" in name
+    assert name.replace("Fabric Engine", "").strip() == "9" * 86
+
+
+def test_render_platform_name_shares_room_between_placeholders():
+    """With {os_version} twice, each copy gets an equal share of the room left."""
+    from device_discovery.platform_naming import render_platform_name
+
+    name = render_platform_name("{os_version} OS {os_version}", "9" * 150)
+    assert name == "9" * 48 + " OS " + "9" * 48
+
+
+def test_platform_name_template_text_must_leave_room():
+    """Template text of 100 characters or more leaves no room for the version."""
+    assert DeviceParameters(platform_name_template="x" * 99 + "{os_version}")
+    with pytest.raises(ValueError, match="shorter than 100 characters"):
+        DeviceParameters(platform_name_template="x" * 100 + "{os_version}")
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "---", "网络", "x" * 101])
+def test_platform_parent_rejected_at_load(bad):
+    """A blank, slug-less or over-long parent is a policy error, not a blank parent in NetBox."""
+    with pytest.raises(ValueError, match="platform_parent"):
+        DeviceParameters(platform_parent=bad)
+
+
+def test_platform_parent_trimmed(sample_device_info, sample_defaults):
+    """The parent name is trimmed when the policy is loaded."""
+    assert DeviceParameters(platform_parent="  Fabric Engine ").platform_parent == "Fabric Engine"
+    assert DeviceParameters(platform_parent="x" * 100).platform_parent == "x" * 100
+
+
+@pytest.mark.parametrize("template", ["Fabric Engine {os_version}", "网络 OS {os_version}", "_{os_version}x"])
+def test_platform_name_template_accepted(template):
+    """Other text with ASCII letters or digits in its slug is enough."""
+    assert DeviceParameters(platform_name_template=template).platform_name_template == template
+
+
+def test_render_platform_name_inserts_values_as_they_are():
+    """Braces inside the os_version are not interpreted."""
+    from device_discovery.platform_naming import render_platform_name
+
+    assert render_platform_name("OS {os_version}", "{driver}") == "OS {driver}"
+
+
+def test_platform_parent(sample_device_info, sample_defaults):
+    """platform_parent puts the platform under a parent with the device's manufacturer."""
+    sample_defaults.device.platform_name_template = "IOS {os_version}"
+    sample_defaults.device.platform_parent = "IOS"
+    entities = list(translate_data(_platform_data(sample_device_info, sample_defaults)))
+    platform = entities[0].device.platform
+    assert platform.name == "IOS v15.2"
+    assert platform.manufacturer.name == "Cisco"
+    assert platform.parent.name == "IOS"
+    assert platform.parent.manufacturer.name == "Cisco"
+    assert not platform.parent.HasField("parent")
+
+
+@pytest.mark.parametrize("parent", ["IOS", "ios", " IOS ", "Ios."])
+def test_platform_parent_same_slug_as_platform(sample_device_info, sample_defaults, parent):
+    """A parent with the platform's slug is the platform itself: no parent is sent."""
+    sample_defaults.device.platform_parent = parent
+    data = _platform_data(sample_device_info, sample_defaults)
+    data["options"] = Options(platform_omit_version=True)
+    entities = list(translate_data(data))
+    assert entities[0].device.platform.name == "ios"
+    assert not entities[0].device.platform.HasField("parent")
+
+
+def test_platform_parent_unset_or_same_name(sample_device_info, sample_defaults):
+    """No parent without platform_parent, nor when it equals the platform's name."""
+    entities = list(translate_data(_platform_data(sample_device_info, sample_defaults)))
+    assert not entities[0].device.platform.HasField("parent")
+
+    sample_defaults.device.platform = "IOS"
+    sample_defaults.device.platform_parent = "IOS"
+    entities = list(translate_data(_platform_data(sample_device_info, sample_defaults)))
+    assert entities[0].device.platform.name == "IOS"
+    assert not entities[0].device.platform.HasField("parent")
+
+
 def test_translate_data_creates_missing_interface(sample_device_info, sample_defaults):
     """Ensure translate_data creates interfaces referenced only by IP data."""
     interfaces = {

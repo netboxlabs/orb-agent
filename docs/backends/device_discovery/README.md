@@ -210,6 +210,8 @@ Current supported defaults:
 | ├─ model | str  | Device type model (overrides the model automatically retrieved from NAPALM)   |
 | ├─ manufacturer | str  | Device manufacturer (overrides the vendor automatically retrieved from NAPALM) |
 | ├─ platform | str  | Device platform (overrides the defined/discovered NAPALM driver name and OS version) |
+| ├─ platform_name_template | str  | Template for the discovered platform name. Placeholder: `{os_version}`, required, together with other text such as the OS name, e.g. `"Fabric Engine {os_version}"` → `Fabric Engine 9.4.0.0`. A long `os_version` is shortened so the name fits NetBox's 100 characters with the template's text intact. Unset keeps `"<DRIVER> <os_version>"`. Ignored when `platform` is set or `platform_omit_version` is true. A template without `{os_version}`, with nothing but `{os_version}` (other text must keep ASCII letters or digits in the slug) or with any other placeholder is refused when the policy is loaded: NetBox identifies a platform by its name and slug within its manufacturer, not by its parent |
+| ├─ platform_parent | str  | Parent of the device's platform (NetBox platform hierarchy, NetBox 4.3+), created with the device's manufacturer if missing; trimmed, must include ASCII letters or digits and be at most 100 characters; ignored when its slug equals the platform's (`IOS` for `ios`), e.g. `Fabric Engine` above `Fabric Engine 9.4.0.0`. A config context assigned to the parent platform reaches devices on child platforms only from NetBox 4.5; on 4.3 and 4.4 assign it to the device's own platform |
 | ├─ description | str  | Device description           |
 | ├─ comments   | str  | Device comments               |
 | ├─ tags       | list | Device tags                   |
@@ -639,7 +641,7 @@ The tables below show which fields are populated automatically from the device v
 | Name | `get_facts()` → `hostname` | Auto-collected |
 | Model | `get_facts()` → `model` | Auto-collected; overridable via `defaults.device.model` |
 | Manufacturer | `get_facts()` → `vendor` | Auto-collected; overridable via `defaults.device.manufacturer` |
-| Platform | `get_facts()` → `os_version` + driver name | Format: `"<DRIVER> <os_version>"`. Overridable via `defaults.device.platform`. Use `platform_omit_version: true` to use only the driver name |
+| Platform | `get_facts()` → `os_version` + driver name | Format: `"<DRIVER> <os_version>"`, or `defaults.device.platform_name_template`. Overridable via `defaults.device.platform`. Use `platform_omit_version: true` to use only the driver name. `defaults.device.platform_parent` puts it under a parent platform |
 | Serial number | `get_facts()` → `serial_number` | Auto-collected |
 | Status | — | Always set to `"active"` |
 | Site | **Not collected** | Must be set via `defaults.site` |

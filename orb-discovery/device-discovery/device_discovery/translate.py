@@ -30,6 +30,7 @@ from netboxlabs.diode.sdk.ingester import (
 from device_discovery.device_name import apply_device_name_emission
 from device_discovery.interface import build_interface_entities
 from device_discovery.lag import apply_interface_lags
+from device_discovery.platform_naming import render_platform_name
 from device_discovery.policy.models import (
     UNDEFINED_PLACEHOLDER,
     Defaults,
@@ -231,7 +232,7 @@ def translate_device(
         # live in _resolve_device_name.
         "name": _resolve_device_name(device_info, options),
         "device_type": DeviceType(model=model, manufacturer=manufacturer),
-        "platform": Platform(name=platform, manufacturer=manufacturer),
+        "platform": _platform(platform, manufacturer, defaults),
         "role": role,
         "serial": serial_number,
         # asset_tag is the highest-precedence dcim.device matcher and comes straight
@@ -772,8 +773,9 @@ def _resolve_platform(data: dict, options: Options) -> None:
     """
     Mutate data['device']['platform'] to the resolved platform string.
 
-    Format is ``"<DRIVER> <os_version>"`` (or just ``<driver>`` when
-    ``platform_omit_version`` is set). Long platform strings are truncated to 100 chars
+    Format is ``"<DRIVER> <os_version>"``, or ``defaults.device.platform_name_template``
+    rendered with ``{os_version}``, or just ``<driver>`` when
+    ``platform_omit_version`` is set. Long platform strings are truncated to 100 chars
     while preserving the format — the previous behaviour replaced the whole string
     with ``os_version[:100]`` on overflow, which dropped the driver prefix and
     crashed when ``os_version`` was ``None``.
@@ -784,10 +786,33 @@ def _resolve_platform(data: dict, options: Options) -> None:
     if options.platform_omit_version:
         device_info["platform"] = data.get("driver")
         return
-    driver = (data.get("driver") or "").upper()
     os_version = device_info.get("os_version") or ""
-    platform = f"{driver} {os_version}".strip()
+    device_defaults = getattr(data.get("defaults"), "device", None)
+    template = getattr(device_defaults, "platform_name_template", None)
+    if template:
+        platform = render_platform_name(template, os_version).strip()
+    else:
+        driver = (data.get("driver") or "").upper()
+        platform = f"{driver} {os_version}".strip()
     device_info["platform"] = platform[:100]
+
+
+def _platform(name: str | None, manufacturer: str | None, defaults: Defaults) -> Platform:
+    """
+    Build the device's Platform, under ``defaults.device.platform_parent`` when set.
+
+    The parent gets the device's manufacturer too (NetBox platform names and slugs
+    are unique per manufacturer). A parent with the platform's own slug (``IOS``
+    for the platform ``ios``) is ignored: it would be the platform itself.
+    """
+    parent_name = defaults.device.platform_parent if defaults.device else None
+    if not parent_name or slug(parent_name) == slug(name or ""):
+        return Platform(name=name, manufacturer=manufacturer)
+    return Platform(
+        name=name,
+        manufacturer=manufacturer,
+        parent=Platform(name=parent_name, manufacturer=manufacturer),
+    )
 
 
 def _emit_vlans_and_stubs(
