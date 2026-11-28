@@ -181,3 +181,121 @@ func TestMaskLogins_MasksALoginEscapedAsASCII(t *testing.T) {
 		}
 	}
 }
+
+// A password can hold an unescaped /, ? or #, which a URL parser reads as
+// the end of the authority. The Diode SDK makes its token URL from the short
+// authority Python's urlparse gives it, and urllib3 refuses that URL quoting
+// the user and the start of the password, with no @ after them: the first
+// line below is the one the worker printed for each of the three, as the SDK
+// raised it. With a /, the SDK also logs the path, which starts with the rest
+// of the password.
+func TestMaskLogins_MasksTheLoginAURLParserReadsShort(t *testing.T) {
+	refused := "ERROR: Unable to connect to Diode Server: Failed to obtain access token: Failed to parse:" +
+		" 'canary-user:canary' is not a valid host or port"
+	masked := "ERROR: Unable to connect to Diode Server: Failed to obtain access token: Failed to parse:" +
+		" '********' is not a valid host or port"
+	for _, tc := range []struct{ target, line, want string }{
+		{"grpc://canary-user:canary/pass@127.0.0.1:8080/diode", refused, masked},
+		{"grpc://canary-user:canary?pass@127.0.0.1:8080/diode", refused, masked},
+		{"grpc://canary-user:canary#pass@127.0.0.1:8080/diode", refused, masked},
+		{
+			"grpc://canary-user:canary/pass@127.0.0.1:8080/diode",
+			"DEBUG: netboxlabs.diode.sdk.client: Setting up gRPC interceptor for path: /pass@127.0.0.1:8080/diode",
+			"DEBUG: netboxlabs.diode.sdk.client: Setting up gRPC interceptor for path: /********@127.0.0.1:8080/diode",
+		},
+		{
+			"grpc://canary-user:canary/pass@127.0.0.1:8080/diode",
+			"target grpc://canary-user:canary/pass@127.0.0.1:8080/diode",
+			"target grpc://********@127.0.0.1:8080/diode",
+		},
+	} {
+		if got := MaskLogins(tc.line, Logins([]string{"--diode-target", tc.target})); got != tc.want {
+			t.Errorf("for %q, MaskLogins(%q) = %q, want %q", tc.target, tc.line, got, tc.want)
+		}
+	}
+}
+
+// A password that starts with a /, ? or # leaves only the user and its : in
+// the authority a URL parser reads short, and one with only a port number
+// before it the user and that port. urllib3 reads the user as the host,
+// with an empty port, and writes it as a host: the lines below are the ones
+// the worker printed for each of the three, with --debug for the last, as the
+// SDK raised them. With a /, the URL it quotes holds the password before its
+// @ too.
+func TestMaskLogins_MasksTheUserAURLParserReadsAsAHost(t *testing.T) {
+	refused := func(host, url string) string {
+		return "ERROR: Unable to connect to Diode Server: Failed to obtain access token: HTTPConnectionPool(host='" + host +
+			"', port=80): Max retries exceeded with url: " + url + " (Caused by NameResolutionError(\"HTTPConnection(host='" + host +
+			"', port=80): Failed to resolve '" + host + "' ([Errno -2] Name or service not known)\"))"
+	}
+	for _, tc := range []struct{ target, line, want string }{
+		{
+			"grpc://canary-user:/canary@127.0.0.1:8080/diode",
+			refused("canary-user", "/canary@127.0.0.1:8080/diode/auth/token"),
+			refused("********", "/********@127.0.0.1:8080/diode/auth/token"),
+		},
+		{"grpc://canary-user:?canary@127.0.0.1:8080/diode", refused("canary-user", "/auth/token"), refused("********", "/auth/token")},
+		{"grpc://canary-user:#canary@127.0.0.1:8080/diode", refused("canary-user", "/auth/token"), refused("********", "/auth/token")},
+		// urllib3 writes the host lowercased, so a user with capitals too.
+		{
+			"grpc://Canary-User:/canary@127.0.0.1:8080/diode",
+			refused("canary-user", "/canary@127.0.0.1:8080/diode/auth/token"),
+			refused("********", "/********@127.0.0.1:8080/diode/auth/token"),
+		},
+		// A password whose start before the separator is a port number: the
+		// parser reads the user as the host and that number as its port,
+		// which is not masked.
+		{
+			"grpc://Canary-User:80/canary@127.0.0.1:8080/diode",
+			refused("canary-user", "/canary@127.0.0.1:8080/diode/auth/token"),
+			refused("********", "/********@127.0.0.1:8080/diode/auth/token"),
+		},
+		{"grpc://canary-user:0080?canary@127.0.0.1:8080/diode", refused("canary-user", "/auth/token"), refused("********", "/auth/token")},
+		{
+			"grpc://canary-user:/canary@127.0.0.1:8080/diode",
+			"DEBUG: urllib3.connectionpool: Starting new HTTP connection (1): canary-user:80",
+			"DEBUG: urllib3.connectionpool: Starting new HTTP connection (1): ********:80",
+		},
+	} {
+		if got := MaskLogins(tc.line, Logins([]string{"--diode-target", tc.target})); got != tc.want {
+			t.Errorf("for %q, MaskLogins(%q) = %q, want %q", tc.target, tc.line, got, tc.want)
+		}
+	}
+	logins := Logins([]string{"--diode-target", "grpc://canary-user:/canary@127.0.0.1:8080/diode"})
+	if got := MaskLogins("hosts canary-user-2, canary-user.example and xcanary-user", logins); got != "hosts canary-user-2, canary-user.example and xcanary-user" {
+		t.Errorf("MaskLogins() masked the user inside a longer host: %q", got)
+	}
+	if got := MaskLogins("user canary-user", Logins([]string{"--diode-target", "grpc://canary-user:canary@127.0.0.1:8080/diode"})); got != "user canary-user" {
+		t.Errorf("MaskLogins() masked as a host a user whose password does not start with a /, ? or #: %q", got)
+	}
+}
+
+func TestMaskLogins_MasksCompleteLoginsBeforeHostUsers(t *testing.T) {
+	args := []string{
+		"--diode-target", "grpc://bob:123456/pass@diode",
+		"--otel-endpoint", "grpc://bob:" + "pw@collector:4317",
+	}
+	line := "dial bob:pw@collector:4317"
+	want := "dial ********@collector:4317"
+	if got := MaskLogins(line, Logins(args)); got != want {
+		t.Errorf("MaskLogins() = %q, want %q", got, want)
+	}
+}
+
+// A user and a password are masked with no @ after them too, where they
+// start a word and end one, as before a port or at the end of a sentence,
+// but not inside a longer word, at its start or past it; a user alone still
+// needs its @.
+func TestMaskLogins_MasksAUserAndAPasswordWithNoAtWhereTheyStartAWord(t *testing.T) {
+	logins := Logins([]string{"--otel-endpoint", "grpc://user:pass@h:4317"})
+	line := "authority user:pass, host 'user:pass', \"user:pass\", =user:pass, /user:pass and xuser:pass;" +
+		" user:pass:443, user:pass. user:passage and user:pass1"
+	want := "authority ********, host '********', \"********\", =********, /******** and xuser:pass;" +
+		" ********:443, ********. user:passage and user:pass1"
+	if got := MaskLogins(line, logins); got != want {
+		t.Errorf("MaskLogins() = %q, want %q", got, want)
+	}
+	if got := MaskLogins("user ops, host ops", Logins([]string{"--otel-endpoint", "grpc://ops@h:4317"})); got != "user ops, host ops" {
+		t.Errorf("MaskLogins() masked a user alone with no @: %q", got)
+	}
+}

@@ -35,6 +35,12 @@ func Logins(args []string) []string {
 // first, or nil when it carries none (see login). The forms are:
 //   - the login as written, and without a gRPC resolver's scheme written
 //     before it without //, as dns:user:password@host, which gRPC strips;
+//   - for a login that holds an unescaped /, ? or #, as a password can, the
+//     two parts a URL parser reads it as: the part before the first of them,
+//     which it takes for the whole authority and writes with no @ after it,
+//     as Python's urllib3 quotes it in "Failed to parse: 'user:pass' is not
+//     a valid host or port", and the part after, which starts the path,
+//     query or fragment it reads;
 //   - each of those percent-decoded, whole and its user and password each:
 //     as a path and as a query, and leniently, keeping an invalid %XX, as a
 //     gRPC client decodes the address before it writes it in an error;
@@ -46,7 +52,7 @@ func Logins(args []string) []string {
 //     escaped, as Python's json.dumps writes it.
 func LoginForms(s string) []string {
 	var plain []string
-	for _, written := range writtenLogins(s) {
+	for _, written := range withURLParts(writtenLogins(s)) {
 		plain = append(plain, written)
 		user, password, hasPassword := strings.Cut(written, ":")
 		for _, unescape := range []func(string) (string, error){url.PathUnescape, url.QueryUnescape, lenientUnescape} {
@@ -78,39 +84,77 @@ func LoginForms(s string) []string {
 // :, a digit or an ANSI colour code too. A user alone, as a token, is masked
 // only where it starts a word: after the start of the text, a space, a
 // quote, a bracket, a ,, a =, a / or an escaped line break, so it is not
-// masked inside a longer user, as ops is in noc-ops@host. The longest are
-// masked first, so no part of one that holds a shorter one is left.
+// masked inside a longer user, as ops is in noc-ops@host. A user and a
+// password are also masked where they start a word and end one with no @
+// after them, as a URL parser writes the authority it read short (see
+// LoginForms). The longest are masked first, so no part of one that holds a
+// shorter one is left.
 func MaskLogins(text string, logins []string) string {
-	for _, l := range longestFirst(logins) {
+	logins = longestFirst(logins)
+	for _, l := range logins {
 		text = maskLogin(text, l)
+	}
+	for _, l := range logins {
+		text = maskLoginHost(text, l)
 	}
 	return text
 }
 
 // maskLogin returns text with login masked where it comes before an @, and,
-// for a user alone, where it also starts a word.
+// for a user alone, where it also starts a word. A login that holds a
+// password is also masked where it starts a word and ends one, with no @
+// after it, so not at the start of a longer word, as bob:secret is in
+// bob:secretary.
 func maskLogin(text, login string) string {
 	if login == "" {
 		return text
 	}
-	needle := login + "@"
-	anywhere := strings.Contains(login, ":")
+	_, password, hasColon := strings.Cut(login, ":")
+	hasPassword := password != ""
+	text = maskWhere(text, login, func(text string, start, end int) bool {
+		beforeAt := end < len(text) && text[end] == '@'
+		word := startsWord(text, start)
+		return beforeAt && (hasColon || word) || hasPassword && word && endsWord(text, end)
+	})
+	return text
+}
+
+// maskLoginHost masks the user of a login whose password starts with a /, ?
+// or #, or holds only a port number before one, where a URL parser reads it
+// as a host.
+func maskLoginHost(text, login string) string {
+	user, password, hasColon := strings.Cut(login, ":")
+	if !hasColon || user == "" || !isPort(password) {
+		return text
+	}
+	for _, hostUser := range []string{user, strings.ToLower(user)} {
+		text = maskWhere(text, hostUser, func(text string, start, end int) bool {
+			return startsWord(text, start) && (end == len(text) || !isHostByte(text[end]))
+		})
+	}
+	return text
+}
+
+// maskWhere returns text with s masked as ******** wherever masked, given
+// text and where s starts and ends in it, reports true.
+func maskWhere(text, s string, masked func(text string, start, end int) bool) string {
 	var b strings.Builder
 	last := 0
 	for i := 0; i < len(text); {
-		j := strings.Index(text[i:], needle)
+		j := strings.Index(text[i:], s)
 		if j < 0 {
 			break
 		}
 		j += i
-		if !anywhere && !startsWord(text, j) {
+		end := j + len(s)
+		if !masked(text, j, end) {
 			i = j + 1
 			continue
 		}
 		b.WriteString(text[last:j])
 		b.WriteString(MaskedSecret)
-		last = j + len(login)
-		i = j + len(needle)
+		last = end
+		i = end
 	}
 	if last == 0 {
 		return text
@@ -129,12 +173,32 @@ func startsWord(text string, i int) bool {
 	return i >= 2 && text[i-2] == '\\' && strings.IndexByte("nrt", text[i-1]) >= 0
 }
 
+// isPort reports whether s, the part of a login after its :, is what a URL
+// parser reads as a port: no character, or only digits.
+func isPort(s string) bool {
+	return strings.Trim(s, "0123456789") == ""
+}
+
+// endsWord reports whether a login found ending at end in text ends a word
+// there: no byte a login holds comes right after it, but for a : that can
+// start a port and a . that can end a sentence.
+func endsWord(text string, end int) bool {
+	return end == len(text) || text[end] == ':' || text[end] == '.' || !isLoginByte(text[end])
+}
+
 // isLoginByte reports whether c can be part of a user or a password as an
 // address writes it: a letter, a digit, a % that escapes a byte, or one of
 // - . _ ~ ! $ & * + ; :, which RFC 3986 lets a user info hold. The others it
 // lets one hold, ' ( ) , and =, also separate words in a text.
 func isLoginByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("%-._~!$&*+;:", c) >= 0
+}
+
+// isHostByte reports whether c can be part of a host name as an address
+// writes it: a letter, a digit, a % that escapes a byte, or one of - . _ ~.
+// A : that starts the port, a quote or a space ends the host.
+func isHostByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("%-._~", c) >= 0
 }
 
 // grpcResolvers are the schemes of the gRPC resolvers a target can name
@@ -159,6 +223,22 @@ func writtenLogins(s string) []string {
 		}
 	}
 	return logins
+}
+
+// withURLParts returns logins, followed, for each that holds an unescaped /,
+// ? or #, by the part before the first of them and the part after it. A URL
+// parser ends the authority there, so it reads only the part before as the
+// login and host, and the part after as the start of the path, query or
+// fragment: Python's urlparse does, so the Diode SDK makes its token URL
+// from that short authority, and urllib3 then refuses the URL quoting it.
+func withURLParts(logins []string) []string {
+	out := slices.Clone(logins)
+	for _, l := range logins {
+		if i := strings.IndexAny(l, "/?#"); i >= 0 {
+			out = append(out, l[:i], l[i+1:])
+		}
+	}
+	return out
 }
 
 // login returns the user info s, a value its caller knows is a URL or a host

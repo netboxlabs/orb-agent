@@ -525,6 +525,26 @@ func TestVaultManager_ATokenALoginReplacedIsRenewedNoMore(t *testing.T) {
 	assert.True(t, vault.renewedSince("tok-2", replacedAt), "the token from the new login is")
 }
 
+// TestVaultManager_StopsAWatcherWhileItsRenewalWaitsForLogin has a renewal
+// wait on the login mutex when the watcher is stopped.
+func TestVaultManager_StopsAWatcherWhileItsRenewalWaitsForLogin(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.renewable(2, time.Hour)
+	vm, logs := startVaultManager(t, vault, appRole)
+
+	vm.loginMu.Lock()
+	defer vm.loginMu.Unlock()
+	renewals := strings.Count(logs.String(), "Token renewed")
+	require.Eventually(t, func() bool {
+		return strings.Count(logs.String(), "Token renewed") > renewals
+	}, 10*time.Second, 20*time.Millisecond, "a renewal waits for the login mutex")
+
+	vm.stopWatch()
+	stoppedAt := time.Now()
+	time.Sleep(3 * time.Second)
+	assert.False(t, vault.renewedSince("tok-1", stoppedAt), "the stopped watcher renews no more")
+}
+
 // TestVaultManager_ARevokeThatFailsOrHangsHoldsUpNoRead has Vault refuse the
 // revoke of the token a login replaced, as it does for a token that ended, or
 // not answer it: the read that logged in again returns the secret at once,
