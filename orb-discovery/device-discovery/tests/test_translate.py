@@ -831,6 +831,45 @@ def test_platform_name_template_rejected_at_load(bad, reason):
     assert reason in str(exc.value)
 
 
+@pytest.mark.parametrize("template", ["Fabric Engine {os_version}", "{os_version} Fabric Engine"])
+def test_platform_name_template_long_os_version_keeps_text(sample_device_info, sample_defaults, template):
+    """A long os_version is shortened, not the template's text, so OS families stay apart."""
+    sample_defaults.device.platform_name_template = template
+    device_info = {**sample_device_info, "os_version": "9" * 150}
+    name = list(translate_data(_platform_data(device_info, sample_defaults)))[0].device.platform.name
+    assert len(name) == 100
+    assert "Fabric Engine" in name
+    assert name.replace("Fabric Engine", "").strip() == "9" * 86
+
+
+def test_render_platform_name_shares_room_between_placeholders():
+    """With {os_version} twice, each copy gets an equal share of the room left."""
+    from device_discovery.platform_naming import render_platform_name
+
+    name = render_platform_name("{os_version} OS {os_version}", "9" * 150)
+    assert name == "9" * 48 + " OS " + "9" * 48
+
+
+def test_platform_name_template_text_must_leave_room():
+    """Template text of 100 characters or more leaves no room for the version."""
+    assert DeviceParameters(platform_name_template="x" * 99 + "{os_version}")
+    with pytest.raises(ValueError, match="shorter than 100 characters"):
+        DeviceParameters(platform_name_template="x" * 100 + "{os_version}")
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "---", "网络", "x" * 101])
+def test_platform_parent_rejected_at_load(bad):
+    """A blank, slug-less or over-long parent is a policy error, not a blank parent in NetBox."""
+    with pytest.raises(ValueError, match="platform_parent"):
+        DeviceParameters(platform_parent=bad)
+
+
+def test_platform_parent_trimmed(sample_device_info, sample_defaults):
+    """The parent name is trimmed when the policy is loaded."""
+    assert DeviceParameters(platform_parent="  Fabric Engine ").platform_parent == "Fabric Engine"
+    assert DeviceParameters(platform_parent="x" * 100).platform_parent == "x" * 100
+
+
 @pytest.mark.parametrize("template", ["Fabric Engine {os_version}", "网络 OS {os_version}", "_{os_version}x"])
 def test_platform_name_template_accepted(template):
     """Other text with ASCII letters or digits in its slug is enough."""
